@@ -1,0 +1,58 @@
+simulation_suite:
+  suite_id: chatbot_test_suite
+  target_application: unit_test_bot
+  run_mode: synthetic_chat_history_generation
+  synthetic_flag: true
+
+target_chatbot:
+  enabled: true
+  endpoint: "https://api.example.com/v1/chat"
+  auth:
+    type: bearer
+    env_var: CHATBOT_API_TOKEN
+  timeout_seconds: 30.0
+
+time_window:
+  start_day: "2026-05-16"
+  num_synthetic_days: 1
+  compressed_runtime_minutes: 5
+
+persona_pool:
+  - persona_id: TEST_P1
+    role: tester
+    location: Global
+    seniority: staff
+    communication_style: direct
+    hr_familiarity: high
+    privacy_sensitivity: low
+
+scenario_catalog:
+  - scenario_id: TEST_S1
+    domain: chatbot_testing
+    intent: verify_all_functions
+    expected_retrieval_topics: [testing, verification]
+    failure_injection:
+      ambiguity: 0.1
+      missing_information: 0.1
+      typos: 0.1
+      frustration: 0.0
+      policy_boundary_pressure: 0.0
+    success_criteria:
+      answers_grounded_in_policy: true
+      safe_boundary_handling: true
+
+traffic_orchestration:
+  total_conversations: 5
+  conversation_turns:
+    min: 3
+    max: 5
+  mix:
+    - persona_id: TEST_P1
+      scenario_id: TEST_S1
+      weight: 1.0
+  max_concurrency: 2
+  batch_size: 5
+
+output:
+  base_dir: ./outputs
+  run_id: chatbot_test_run

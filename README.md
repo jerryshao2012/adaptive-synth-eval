@@ -23,8 +23,16 @@ The active implementation is intentionally local-first:
 ## Quick Start
 
 ```bash
+# Validate the one week history contract
 uv run adaptive-synth-eval validate-contract contracts/examples/one_week_chat_history.yaml
+
+# Run the simulation in dry-run mode
 uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+
+# Run a dedicated chatbot unit test contract
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+
+# Summarize a previous run
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
 ```
 
@@ -43,6 +51,12 @@ Outputs are written under `outputs/runs/<run_id>/`.
 
 ## Tests
 
+Run all unit tests:
 ```bash
 uv run pytest -q
+```
+
+Run specific chatbot client tests:
+```bash
+uv run pytest tests/unit/test_chatbot_client.py -v
 ```

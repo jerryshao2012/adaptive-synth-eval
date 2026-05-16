@@ -15,13 +15,9 @@ load_dotenv()
 
 logger = setup_logger(__name__)
 
-# Configuration from environment variables
-RAG_ENDPOINT = os.getenv("RAG_ENDPOINT")
-RAG_TIMEOUT = os.getenv("RAG_TIMEOUT", "60.0")
-RAG_MODEL = os.getenv("RAG_MODEL")
-RAG_TEMPERATURE = os.getenv("RAG_TEMPERATURE")
-RAG_SOURCE_DOCUMENT_REFERENCE = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
-CHATBOT_API_TOKEN = os.getenv("CHATBOT_API_TOKEN")
+
+# Module-level defaults (still can be overridden)
+DEFAULT_TIMEOUT = "60.0"
 
 
 @dataclass(frozen=True)
@@ -71,34 +67,35 @@ class ChatbotClient:
             timeout_seconds: float | None = None,
     ):
         logger.info("Initializing ChatbotClient")
-        self.endpoint = endpoint or RAG_ENDPOINT
+        self.endpoint = endpoint or os.getenv("RAG_ENDPOINT")
         logger.debug(f"Chatbot endpoint: {self.endpoint or 'Not set'}")
 
         self.enabled = enabled
         logger.debug(f"Chatbot enabled: {self.enabled}")
 
         self.auth = auth or {}
-        if not self.auth and CHATBOT_API_TOKEN:
+        if not self.auth and os.getenv("CHATBOT_API_TOKEN"):
             self.auth = {"type": "bearer", "env_var": "CHATBOT_API_TOKEN"}
             logger.debug("Using CHATBOT_API_TOKEN for authentication")
 
         if timeout_seconds is not None:
             self.timeout_seconds = timeout_seconds
         else:
-            self.timeout_seconds = float(RAG_TIMEOUT)
+            self.timeout_seconds = float(os.getenv("RAG_TIMEOUT", DEFAULT_TIMEOUT))
         logger.debug(f"Request timeout: {self.timeout_seconds}s")
 
         # Optional RAG specific configs
-        self.rag_model = RAG_MODEL
+        self.rag_model = os.getenv("RAG_MODEL")
         if self.rag_model:
             self.rag_model = [m.strip() for m in self.rag_model.split(",")]
             logger.debug(f"RAG models configured: {self.rag_model}")
 
-        self.rag_temperature = float(RAG_TEMPERATURE) if RAG_TEMPERATURE else None
+        self.rag_temperature = os.getenv("RAG_TEMPERATURE")
         if self.rag_temperature is not None:
+            self.rag_temperature = float(self.rag_temperature)
             logger.debug(f"RAG temperature: {self.rag_temperature}")
 
-        self.source_doc_ref = RAG_SOURCE_DOCUMENT_REFERENCE
+        self.source_doc_ref = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
         if self.source_doc_ref:
             logger.debug(f"Source document reference: {self.source_doc_ref}")
 

@@ -410,7 +410,7 @@ Do not require:
 - [ ] Normalize defaults such as run ID, output path, random seed, batch size, and synthetic flag.
 - [ ] Run `uv run pytest tests/unit/test_contract.py -q`.
 
-### Task 3: Chatbot and LLM Clients
+### Task 3: Chatbot and LLM Clients [COMPLETED]
 
 **Files:**
 
@@ -419,12 +419,12 @@ Do not require:
 - Create: `tests/unit/test_chatbot_client.py`
 - Create: `tests/unit/test_llm_client.py`
 
-- [ ] Port useful HTTP behavior from `goldenQA/rag_client.py`.
-- [ ] Normalize bot response text extraction across `response`, `answer`, `message`, `content`, `text`, and existing `llm_response`.
-- [ ] Capture latency, HTTP status, raw response, and errors.
-- [ ] Add dry-run/mock response support.
-- [ ] Add tests with mocked HTTP responses.
-- [ ] Run `uv run pytest tests/unit/test_chatbot_client.py tests/unit/test_llm_client.py -q`.
+- [x] Port useful HTTP behavior from `goldenQA/rag_client.py`.
+- [x] Normalize bot response text extraction across `response`, `answer`, `message`, `content`, `text`, and existing `llm_response`.
+- [x] Capture latency, HTTP status, raw response, and errors.
+- [x] Add dry-run/mock response support.
+- [x] Add tests with mocked HTTP responses.
+- [x] Run `uv run pytest tests/unit/test_chatbot_client.py tests/unit/test_llm_client.py -q`.
 
 ### Task 4: Traffic and Synthetic Day Planner
 

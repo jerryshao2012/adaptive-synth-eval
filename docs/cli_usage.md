@@ -24,4 +24,10 @@ Summarize a run:
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
 ```
 
+Run a focused chatbot unit test:
+
+```bash
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+```
+
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.

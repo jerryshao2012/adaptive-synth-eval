@@ -8,6 +8,7 @@ dependencies = [
   "python-dotenv>=1.2.2",
   "PyYAML>=6.0",
   "requests>=2.31",
+  "rich>=15.0.0",
   "tiktoken>=0.13.0",
 ]
 
