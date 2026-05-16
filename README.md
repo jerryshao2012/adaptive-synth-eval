@@ -20,6 +20,13 @@ The active implementation is intentionally local-first:
 
 3. **Important**: Never commit `.env` files with real credentials to version control.
 
+4. If running the CLI directly from a local checkout and Python cannot find the package, set `PYTHONPATH` to include the `src` directory:
+   ```bash
+   export PYTHONPATH=src
+   ```
+
+   This is useful for local development because the project uses a `src/` layout, where the importable package lives under `src/adaptive_synth_eval`.
+
 ## Quick Start
 
 ```bash

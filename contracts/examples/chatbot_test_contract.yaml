@@ -54,5 +54,5 @@ traffic_orchestration:
   batch_size: 5
 
 output:
-  base_dir: ./outputs
+  base_dir: ../../outputs
   run_id: chatbot_test_run
