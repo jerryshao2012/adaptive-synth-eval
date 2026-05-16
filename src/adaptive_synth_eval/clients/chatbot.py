@@ -6,7 +6,22 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.retry_utils import retry_on_rate_limit
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+logger = setup_logger(__name__)
+
+# Configuration from environment variables
+RAG_ENDPOINT = os.getenv("RAG_ENDPOINT")
+RAG_TIMEOUT = os.getenv("RAG_TIMEOUT", "60.0")
+RAG_MODEL = os.getenv("RAG_MODEL")
+RAG_TEMPERATURE = os.getenv("RAG_TEMPERATURE")
+RAG_SOURCE_DOCUMENT_REFERENCE = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
+CHATBOT_API_TOKEN = os.getenv("CHATBOT_API_TOKEN")
 
 
 @dataclass(frozen=True)
@@ -55,25 +70,39 @@ class ChatbotClient:
             auth: dict[str, Any] | None = None,
             timeout_seconds: float | None = None,
     ):
-        self.endpoint = endpoint or os.getenv("RAG_ENDPOINT")
+        logger.info("Initializing ChatbotClient")
+        self.endpoint = endpoint or RAG_ENDPOINT
+        logger.debug(f"Chatbot endpoint: {self.endpoint or 'Not set'}")
+
         self.enabled = enabled
+        logger.debug(f"Chatbot enabled: {self.enabled}")
+
         self.auth = auth or {}
-        if not self.auth and os.getenv("CHATBOT_API_TOKEN"):
+        if not self.auth and CHATBOT_API_TOKEN:
             self.auth = {"type": "bearer", "env_var": "CHATBOT_API_TOKEN"}
+            logger.debug("Using CHATBOT_API_TOKEN for authentication")
 
         if timeout_seconds is not None:
             self.timeout_seconds = timeout_seconds
         else:
-            self.timeout_seconds = float(os.getenv("RAG_TIMEOUT", "60.0"))
+            self.timeout_seconds = float(RAG_TIMEOUT)
+        logger.debug(f"Request timeout: {self.timeout_seconds}s")
 
         # Optional RAG specific configs
-        self.rag_model = os.getenv("RAG_MODEL")
+        self.rag_model = RAG_MODEL
         if self.rag_model:
             self.rag_model = [m.strip() for m in self.rag_model.split(",")]
+            logger.debug(f"RAG models configured: {self.rag_model}")
 
-        temp_str = os.getenv("RAG_TEMPERATURE")
-        self.rag_temperature = float(temp_str) if temp_str else None
-        self.source_doc_ref = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
+        self.rag_temperature = float(RAG_TEMPERATURE) if RAG_TEMPERATURE else None
+        if self.rag_temperature is not None:
+            logger.debug(f"RAG temperature: {self.rag_temperature}")
+
+        self.source_doc_ref = RAG_SOURCE_DOCUMENT_REFERENCE
+        if self.source_doc_ref:
+            logger.debug(f"Source document reference: {self.source_doc_ref}")
+
+        logger.info("ChatbotClient initialized successfully")
 
     def send(
             self,
@@ -84,7 +113,12 @@ class ChatbotClient:
             user_message: str,
             metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
+        logger.info(
+            f"Sending message - conversation_id: {conversation_id}, session_id: {session_id}, turn_id: {turn_id}")
+        logger.debug(f"User message length: {len(user_message)} chars")
+
         if not self.enabled or not self.endpoint:
+            logger.warning("Chatbot is disabled or endpoint not configured, returning mock response")
             return ChatbotResponse.from_payload(
                 {
                     "mock": True,
@@ -97,14 +131,20 @@ class ChatbotClient:
             )
 
         try:
-            return self._send_with_retry(
+            logger.debug("Attempting to send request with retry logic")
+            result = self._send_with_retry(
                 conversation_id=conversation_id,
                 session_id=session_id,
                 turn_id=turn_id,
                 user_message=user_message,
                 metadata=metadata,
             )
+            logger.info(f"Request completed - status: {result.status_code}, latency: {result.latency_ms}ms")
+            if result.error:
+                logger.error(f"Request returned error: {result.error}")
+            return result
         except Exception as exc:
+            logger.exception(f"Exception occurred while sending message: {exc}")
             return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=str(exc))
 
     @retry_on_rate_limit(max_retries=3, initial_backoff=1.0, max_backoff=30.0)
@@ -117,11 +157,16 @@ class ChatbotClient:
             user_message: str,
             metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
+        logger.debug(f"Preparing request to endpoint: {self.endpoint}")
+
         headers = {"Content-Type": "application/json"}
         if self.auth.get("type") == "bearer" and self.auth.get("env_var"):
             token = os.getenv(str(self.auth["env_var"]))
             if token:
                 headers["Authorization"] = f"Bearer {token}"
+                logger.debug("Authorization header added")
+            else:
+                logger.warning(f"Auth token not found in environment variable: {self.auth['env_var']}")
 
         # Unified payload: support legacy params and config-driven parameters
         payload = {
@@ -142,22 +187,37 @@ class ChatbotClient:
             if self.source_doc_ref is not None:
                 butler_config["source_document_reference"] = self.source_doc_ref
             payload["butler_11m_config"] = butler_config
+            logger.debug(f"RAG config added: {butler_config}")
 
             # Default bmo_content if using RAG mode
             payload["bmo_content"] = ["Policies and Procedures"]
+            logger.debug("Default bmo_content set to Policies and Procedures")
 
         if metadata:
             payload["metadata"] = metadata
+            logger.debug(f"Metadata included in payload: {list(metadata.keys())}")
 
+        logger.debug(f"Sending POST request with payload keys: {list(payload.keys())}")
         start = time.perf_counter()
         response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_seconds)
         latency_ms = (time.perf_counter() - start) * 1000
         status_code = response.status_code
+
+        logger.debug(f"Response received - status: {status_code}, latency: {latency_ms:.2f}ms")
+
         try:
             body = response.json()
+            logger.debug(
+                f"Response body parsed successfully, keys: {list(body.keys()) if isinstance(body, dict) else 'N/A'}")
         except ValueError:
             body = {"text": response.text}
+            logger.warning(f"Failed to parse JSON response, using text fallback. Response length: {len(response.text)}")
+
         error = None if response.ok else f"HTTP {status_code}"
+        if error:
+            logger.error(f"Request failed with error: {error}")
+            logger.debug(f"Response content: {response.text[:500]}")
+
         return ChatbotResponse.from_payload(body, latency_ms=round(latency_ms, 2), status_code=status_code,
                                             error=error)
 
