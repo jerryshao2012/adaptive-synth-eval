@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
+from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.generation.variability import apply_typos, choose_failure_modes
 
@@ -16,14 +17,30 @@ class GeneratedTurn:
     generation_metadata: dict
 
 
-def generate_turns(persona: Persona, scenario: Scenario, *, turn_count: int, seed: int | None = None) -> list[
-    GeneratedTurn]:
-    rng = random.Random(seed)
-    planned = scenario.failure_injection.planned_modes()
-    turns = []
-    for turn_id in range(1, turn_count + 1):
-        applied = choose_failure_modes(scenario.failure_injection, rng) if turn_id == 1 else []
-        message = _base_message(persona, scenario, turn_id, turn_count)
+class UserSimulator:
+    def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None):
+        self.persona = persona
+        self.scenario = scenario
+        self.turn_count = turn_count
+        self.rng = random.Random(seed)
+        self.history = []
+        self.planned_failure_modes = scenario.failure_injection.planned_modes()
+        self.llm_client = LLMClient(enabled=False)  # Disabled by default until provider is configured
+
+    def generate_turn(self, turn_id: int, previous_bot_response: str | None = None) -> GeneratedTurn:
+        applied = choose_failure_modes(self.scenario.failure_injection, self.rng) if turn_id == 1 else []
+
+        if previous_bot_response:
+            self.history.append({"role": "agent", "content": previous_bot_response})
+
+        prompt = self._build_prompt(turn_id)
+        result = self.llm_client.complete(prompt)
+
+        if result.error == "llm_disabled":
+            message = self._fallback_message(turn_id)
+        else:
+            message = result.content
+
         if "ambiguity" in applied:
             message += " I am not totally sure what details matter."
         if "missing_information" in applied:
@@ -38,21 +55,40 @@ def generate_turns(persona: Persona, scenario: Scenario, *, turn_count: int, see
             message += " Can you ask me only the minimum clarifying question?"
         if "typos" in applied:
             message = apply_typos(message)
-        turns.append(
-            GeneratedTurn(
-                turn_id=turn_id,
-                user_message=message,
-                planned_failure_modes=planned,
-                applied_failure_modes=applied,
-                generation_metadata={"persona_role": persona.role, "scenario_intent": scenario.intent},
-            )
+
+        self.history.append({"role": "user", "content": message})
+
+        return GeneratedTurn(
+            turn_id=turn_id,
+            user_message=message,
+            planned_failure_modes=self.planned_failure_modes,
+            applied_failure_modes=applied,
+            generation_metadata={"persona_role": self.persona.role, "scenario_intent": self.scenario.intent,
+                                 "dynamic": result.error != "llm_disabled"},
         )
-    return turns
 
+    def _build_prompt(self, turn_id: int) -> str:
+        prompt = (
+            f"You are a user interacting with a customer support chatbot.\n"
+            f"Your Persona: Role {self.persona.role}, Location {self.persona.location}\n"
+            f"Your Goal: {self.scenario.intent} regarding {self.scenario.domain}\n\n"
+            "Conversation History:\n"
+        )
+        for msg in self.history:
+            prompt += f"{msg['role'].capitalize()}: {msg['content']}\n"
 
-def _base_message(persona: Persona, scenario: Scenario, turn_id: int, turn_count: int) -> str:
-    if turn_id == 1:
-        return f"Hi, I need help with {scenario.domain.replace('_', ' ')}. I want to {scenario.intent.replace('_', ' ')}."
-    if turn_id == turn_count:
-        return "Thanks. Can you summarize what I should do next?"
-    return f"Follow-up {turn_id}: can you clarify how this applies to someone in {persona.location}?"
+        if turn_id == 1:
+            prompt += "\nPlease provide your opening message to the agent."
+        elif turn_id == self.turn_count:
+            prompt += "\nThis is the final turn. Please ask the agent to summarize what you should do next."
+        else:
+            prompt += "\nPlease provide your next response as this user."
+
+        return prompt
+
+    def _fallback_message(self, turn_id: int) -> str:
+        if turn_id == 1:
+            return f"Hi, I need help with {self.scenario.domain.replace('_', ' ')}. I want to {self.scenario.intent.replace('_', ' ')}."
+        if turn_id == self.turn_count:
+            return "Thanks. Can you summarize what I should do next?"
+        return f"Follow-up {turn_id}: can you clarify how this applies to someone in {self.persona.location}?"

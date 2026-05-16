@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
@@ -8,7 +9,7 @@ from adaptive_synth_eval.clients.chatbot import ChatbotClient
 from adaptive_synth_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.generation.traffic import build_run_plan
-from adaptive_synth_eval.generation.turns import generate_turns
+from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.scoring.response_quality import score_response
 
@@ -31,22 +32,30 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> di
     turn_rows = []
     score_rows = []
     errors = 0
-    for planned in plan:
+
+    def process_conversation(planned):
+        local_records = []
+        local_turn_rows = []
+        local_score_rows = []
+        local_errors = 0
+
         persona = personas[planned.persona_id]
         scenario = scenarios[planned.scenario_id]
-        generated_turns = generate_turns(persona, scenario, turn_count=planned.turn_count,
-                                         seed=hash(planned.conversation_id) % 10_000)
-        conversation_rows.append(
-            {
-                "conversation_id": planned.conversation_id,
-                "session_id": planned.session_id,
-                "persona_id": planned.persona_id,
-                "scenario_id": planned.scenario_id,
-                "synthetic_day": planned.synthetic_day.isoformat(),
-                "turn_count": planned.turn_count,
-            }
-        )
-        for turn in generated_turns:
+        simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
+                                  seed=hash(planned.conversation_id) % 10_000)
+
+        local_conversation_row = {
+            "conversation_id": planned.conversation_id,
+            "session_id": planned.session_id,
+            "persona_id": planned.persona_id,
+            "scenario_id": planned.scenario_id,
+            "synthetic_day": planned.synthetic_day.isoformat(),
+            "turn_count": planned.turn_count,
+        }
+
+        previous_bot_response = None
+        for turn_id in range(1, planned.turn_count + 1):
+            turn = simulator.generate_turn(turn_id, previous_bot_response)
             response = client.send(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
@@ -55,7 +64,8 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> di
                 metadata={"persona_id": planned.persona_id, "scenario_id": planned.scenario_id, "synthetic": True},
             )
             if response.error:
-                errors += 1
+                local_errors += 1
+            previous_bot_response = response.bot_response
             score = score_response(
                 user_message=turn.user_message,
                 bot_response=response.bot_response,
@@ -87,9 +97,9 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> di
                 response_raw=response.raw,
                 generation_metadata=turn.generation_metadata,
             )
-            records.append(record)
-            turn_rows.append(record.to_dict())
-            score_rows.append(
+            local_records.append(record)
+            local_turn_rows.append(record.to_dict())
+            local_score_rows.append(
                 {
                     "conversation_id": planned.conversation_id,
                     "turn_id": turn.turn_id,
@@ -100,6 +110,16 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> di
                     "failure_mode": failure_mode,
                 }
             )
+
+        return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation, plan):
+            conversation_rows.append(conv_row)
+            records.extend(loc_recs)
+            turn_rows.extend(loc_turn_rows)
+            score_rows.extend(loc_score_rows)
+            errors += loc_errs
 
     summary = {
         "run_id": run_id,
