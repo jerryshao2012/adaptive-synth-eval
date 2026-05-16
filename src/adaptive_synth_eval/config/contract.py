@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -111,11 +113,61 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
     }
 
 
+def _resolve_env_vars(value: str) -> str:
+    """Resolve environment variable references in a string.
+    
+    Supports ${VAR_NAME} syntax with optional default values:
+    - ${VAR_NAME} - replaced with env var value or empty string if not set
+    - ${VAR_NAME:-default} - replaced with env var value or 'default' if not set
+    
+    Args:
+        value: String potentially containing ${VAR} references
+        
+    Returns:
+        String with environment variables resolved
+    """
+    def replace_env_var(match):
+        var_expr = match.group(1)
+        # Check for default value syntax: ${VAR:-default}
+        if ':-' in var_expr:
+            var_name, default_value = var_expr.split(':-', 1)
+            return os.getenv(var_name, default_value)
+        else:
+            return os.getenv(var_expr, '')
+    
+    # Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
+    pattern = r'\$\{([^}]+)\}'
+    return re.sub(pattern, replace_env_var, value)
+
+
+def _resolve_env_vars_in_dict(obj: Any) -> Any:
+    """Recursively resolve environment variables in a dictionary structure.
+    
+    Args:
+        obj: Dictionary, list, or primitive value
+        
+    Returns:
+        Same structure with all string values having env vars resolved
+    """
+    if isinstance(obj, dict):
+        return {key: _resolve_env_vars_in_dict(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_resolve_env_vars_in_dict(item) for item in obj]
+    elif isinstance(obj, str):
+        return _resolve_env_vars(obj)
+    else:
+        return obj
+
+
 def _load_payload(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".json":
-        return json.loads(text)
-    return yaml.safe_load(text)
+        payload = json.loads(text)
+    else:
+        payload = yaml.safe_load(text)
+    
+    # Resolve environment variables in the entire payload
+    return _resolve_env_vars_in_dict(payload)
 
 
 def _parse_persona(payload: dict[str, Any]) -> Persona:

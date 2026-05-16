@@ -6,6 +6,7 @@ simulation_suite:
 
 target_chatbot:
   enabled: false
+  endpoint: "${RAG_ENDPOINT:-}"
 
 time_window:
   start_day: "2026-05-01"
