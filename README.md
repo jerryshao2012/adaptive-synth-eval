@@ -9,6 +9,17 @@ The active implementation is intentionally local-first:
 - No chatbot tool-call requirement
 - Contract-driven personas, scenarios, traffic mix, synthetic days, and failure injection
 
+## Setup
+
+1. Copy the example environment file and configure your settings:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and fill in your actual values (especially API keys and endpoints).
+
+3. **Important**: Never commit `.env` files with real credentials to version control.
+
 ## Quick Start
 
 ```bash

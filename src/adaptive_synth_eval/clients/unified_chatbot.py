@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Any, Optional
 
 import requests
+from adaptive_synth_eval.clients.retry_utils import retry_on_rate_limit
 
 
 class ChatbotType(str, Enum):
@@ -141,7 +142,7 @@ class BaseChatbotStrategy(ABC):
         Main query method that orchestrates the full request-response cycle.
         """
         payload = self.build_payload(question, **kwargs)
-        raw_response, latency_ms, status_code, error = self.send_request(payload)
+        raw_response, latency_ms, status_code, error = self._send_request_with_retry(payload)
 
         if error:
             return ChatbotResponse(
@@ -162,6 +163,15 @@ class BaseChatbotStrategy(ABC):
             status_code=status_code,
             metadata=metadata
         )
+
+    @retry_on_rate_limit(max_retries=3, initial_backoff=1.0, max_backoff=30.0)
+    def _send_request_with_retry(self, payload: dict[str, Any]) -> tuple[dict[str, Any], float, int, Optional[str]]:
+        """
+        Send HTTP request with retry logic and return (response_data, latency_ms, status_code, error).
+        
+        This wraps the send_request method with rate limit retry logic.
+        """
+        return self.send_request(payload)
 
 
 class VanillaRAGStrategy(BaseChatbotStrategy):

@@ -6,12 +6,8 @@ with the new unified architecture.
 """
 
 from adaptive_synth_eval.clients.unified_chatbot import (
-    create_chatbot_client,
-    ChatbotConfig,
-    ChatbotType,
-    UnifiedChatbotClient
+    create_chatbot_client
 )
-
 
 # ============================================================================
 # Configuration - Define your RAG endpoints
@@ -30,7 +26,7 @@ def initialize_rag_clients():
     Create and cache RAG clients for reuse.
     In production, you might want to use dependency injection or a singleton pattern.
     """
-    
+
     # Vanilla RAG client
     vanilla_client = create_chatbot_client(
         chatbot_type="vanilla_rag",
@@ -42,14 +38,14 @@ def initialize_rag_clients():
             "source_document_reference": "true"
         }
     )
-    
+
     # Graph RAG client
     graph_client = create_chatbot_client(
         chatbot_type="graph_rag",
         endpoint=GRAPH_RAG_URL,
         timeout_seconds=3000
     )
-    
+
     return {
         "vanilla": vanilla_client,
         "graph": graph_client
@@ -74,10 +70,9 @@ def rag_query_endpoint_new(mode: str, question: str, clients: dict, output_dir: 
         Tuple of (response_dict, latency_ms, input_tokens, output_tokens)
     """
     import time
-    from datetime import datetime
-    
+
     start = time.time()
-    
+
     # Select appropriate client
     if mode == "vanilla":
         client = clients["vanilla"]
@@ -87,12 +82,12 @@ def rag_query_endpoint_new(mode: str, question: str, clients: dict, output_dir: 
         bmo_content = ["BMO Policy & Procedure"]
     else:
         raise ValueError(f"Unsupported mode: {mode}")
-    
+
     # Query using unified interface
     response = client.query(question, bmo_content=bmo_content)
-    
+
     latency = time.time() - start
-    
+
     # Log the event (if needed)
     if output_dir:
         log_pipeline_event(
@@ -101,7 +96,7 @@ def rag_query_endpoint_new(mode: str, question: str, clients: dict, output_dir: 
             extra_info=f"mode={mode}, question={str(question)[:40]}, success={response.success}",
             output_dir=output_dir
         )
-    
+
     # Build response dict compatible with existing code
     response_dict = {
         "llm_response": response.bot_response,
@@ -110,11 +105,11 @@ def rag_query_endpoint_new(mode: str, question: str, clients: dict, output_dir: 
         "error": response.error,
         **response.metadata  # Include type-specific metadata
     }
-    
+
     # Token counting (optional - you can keep your existing logic)
     input_tokens = len(str(response.raw)) // 4  # Approximate
     output_tokens = len(response.bot_response) // 4
-    
+
     return response_dict, latency, input_tokens, output_tokens
 
 
@@ -136,10 +131,10 @@ def batch_rag_queries(questions: list, mode: str, clients: dict, max_workers: in
         List of response dictionaries
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+
     client = clients[mode]
     results = []
-    
+
     def query_single(question):
         try:
             response = client.query(question)
@@ -158,14 +153,14 @@ def batch_rag_queries(questions: list, mode: str, clients: dict, max_workers: in
                 "latency_ms": None,
                 "error": str(e)
             }
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(query_single, q): i for i, q in enumerate(questions)}
-        
+
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
-    
+
     return results
 
 
@@ -180,10 +175,10 @@ def old_approach_example():
     """
     from rag_client import RagClient
     from rag_service import RagService
-    
+
     mode = "vanilla"
     question = "What is parental leave?"
-    
+
     if mode == "vanilla":
         url = VANILLA_RAG_URL
         bmo_content_list = ["Policies and Procedures"]
@@ -201,7 +196,7 @@ def old_approach_example():
         rag_client_instance = RagClient(url=url)
         rag_service = RagService(...)
         raw_dict, input_tokens, output_tokens = rag_service.call_graph_rag(question, bmo_content_list)
-    
+
     return raw_dict
 
 
@@ -212,13 +207,13 @@ def new_approach_example():
     """
     # Initialize once
     clients = initialize_rag_clients()
-    
+
     # Use anywhere with simple interface
     mode = "vanilla"
     question = "What is parental leave?"
-    
+
     response_dict, latency, _, _ = rag_query_endpoint_new(mode, question, clients)
-    
+
     return response_dict
 
 
@@ -236,30 +231,30 @@ def example_adding_custom_rag():
         ChatbotClientFactory,
         ChatbotType
     )
-    
+
     # Step 1: Define new strategy
     class CustomRAGStrategy(BaseChatbotStrategy):
         def build_payload(self, question: str, **kwargs):
             return {"custom_query": question}
-        
+
         def extract_bot_response(self, raw_response):
             return raw_response.get("answer", "")
-        
+
         def extract_metadata(self, raw_response):
             return {"custom_field": raw_response.get("custom")}
-    
+
     # Step 2: Register it
     ChatbotClientFactory.register_strategy(
         ChatbotType("custom_rag"),
         CustomRAGStrategy
     )
-    
+
     # Step 3: Use it immediately
     custom_client = create_chatbot_client(
         "custom_rag",
         "https://custom-rag.example.com/api"
     )
-    
+
     response = custom_client.query("Test question")
     print(response.bot_response)
 
@@ -272,24 +267,24 @@ if __name__ == "__main__":
     print("=" * 80)
     print("Unified Chatbot Client - Integration Example")
     print("=" * 80)
-    
+
     # Initialize clients
     print("\n1. Initializing RAG clients...")
     clients = initialize_rag_clients()
     print(f"   ✓ Vanilla RAG client created: {clients['vanilla'].endpoint[:50]}...")
     print(f"   ✓ Graph RAG client created: {clients['graph'].endpoint[:50]}...")
-    
+
     # Test single query
     print("\n2. Testing single query (Vanilla RAG)...")
     question = "What is the parental leave policy?"
     response_dict, latency, _, _ = rag_query_endpoint_new("vanilla", question, clients)
-    
+
     print(f"   Question: {question}")
     print(f"   Latency: {latency:.2f}s")
     print(f"   Success: {not response_dict.get('error')}")
     if not response_dict.get('error'):
         print(f"   Answer preview: {response_dict['llm_response'][:100]}...")
-    
+
     # Test batch processing
     print("\n3. Testing batch processing...")
     questions = [
@@ -297,15 +292,15 @@ if __name__ == "__main__":
         "How does benefits enrollment work?",
         "What are the vacation policies?"
     ]
-    
+
     results = batch_rag_queries(questions, "vanilla", clients, max_workers=3)
-    
+
     for i, result in enumerate(results, 1):
         status = "✓" if result["success"] else "✗"
         print(f"   {status} Q{i}: {result['question'][:40]}...")
         if result["success"]:
             print(f"      Answer: {result['answer'][:60]}...")
-    
+
     print("\n" + "=" * 80)
     print("Demo complete!")
     print("=" * 80)

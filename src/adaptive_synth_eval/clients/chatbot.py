@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+from adaptive_synth_eval.clients.retry_utils import retry_on_rate_limit
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,27 @@ class ChatbotClient:
                 status_code=0,
             )
 
+        try:
+            return self._send_with_retry(
+                conversation_id=conversation_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                user_message=user_message,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=str(exc))
+
+    @retry_on_rate_limit(max_retries=3, initial_backoff=1.0, max_backoff=30.0)
+    def _send_with_retry(
+            self,
+            *,
+            conversation_id: str,
+            session_id: str,
+            turn_id: int,
+            user_message: str,
+            metadata: dict[str, Any] | None = None,
+    ) -> ChatbotResponse:
         headers = {"Content-Type": "application/json"}
         if self.auth.get("type") == "bearer" and self.auth.get("env_var"):
             token = os.getenv(str(self.auth["env_var"]))
@@ -88,20 +110,17 @@ class ChatbotClient:
         if metadata:
             payload["metadata"] = metadata
 
+        start = time.perf_counter()
+        response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_seconds)
+        latency_ms = (time.perf_counter() - start) * 1000
+        status_code = response.status_code
         try:
-            start = time.perf_counter()
-            response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_seconds)
-            latency_ms = (time.perf_counter() - start) * 1000
-            status_code = response.status_code
-            try:
-                body = response.json()
-            except ValueError:
-                body = {"text": response.text}
-            error = None if response.ok else f"HTTP {status_code}"
-            return ChatbotResponse.from_payload(body, latency_ms=round(latency_ms, 2), status_code=status_code,
-                                                error=error)
-        except Exception as exc:
-            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=str(exc))
+            body = response.json()
+        except ValueError:
+            body = {"text": response.text}
+        error = None if response.ok else f"HTTP {status_code}"
+        return ChatbotResponse.from_payload(body, latency_ms=round(latency_ms, 2), status_code=status_code,
+                                            error=error)
 
 
 def extract_bot_text(payload: dict[str, Any]) -> str:

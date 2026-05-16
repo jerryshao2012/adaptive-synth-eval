@@ -3,7 +3,6 @@
 from unittest.mock import Mock, patch
 
 import pytest
-
 from adaptive_synth_eval.clients.unified_chatbot import (
     ChatbotType,
     ChatbotConfig,
@@ -232,14 +231,14 @@ class TestChatbotClientFactory:
 
     def test_register_custom_strategy(self):
         from adaptive_synth_eval.clients.unified_chatbot import BaseChatbotStrategy
-        
+
         class CustomStrategy(BaseChatbotStrategy):
             def build_payload(self, question: str, **kwargs):
                 return {"custom_query": question}
-            
+
             def extract_bot_response(self, raw_response):
                 return raw_response.get("answer", "")
-            
+
             def extract_metadata(self, raw_response):
                 return {"custom_field": raw_response.get("custom")}
 
