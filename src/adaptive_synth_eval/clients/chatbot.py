@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
+
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.retry_utils import retry_on_rate_limit
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 logger = setup_logger(__name__)
-
 
 # Module-level defaults (still can be overridden)
 DEFAULT_TIMEOUT = "60.0"
@@ -67,7 +67,7 @@ class ChatbotClient:
             timeout_seconds: float | None = None,
     ):
         logger.info("Initializing ChatbotClient")
-        self.endpoint = endpoint or os.getenv("RAG_ENDPOINT")
+        self.endpoint = endpoint or os.getenv("CHATBOT_ENDPOINT")
         logger.debug(f"Chatbot endpoint: {self.endpoint or 'Not set'}")
 
         self.enabled = enabled
@@ -81,21 +81,21 @@ class ChatbotClient:
         if timeout_seconds is not None:
             self.timeout_seconds = timeout_seconds
         else:
-            self.timeout_seconds = float(os.getenv("RAG_TIMEOUT", DEFAULT_TIMEOUT))
+            self.timeout_seconds = float(os.getenv("CHATBOT_TIMEOUT", DEFAULT_TIMEOUT))
         logger.debug(f"Request timeout: {self.timeout_seconds}s")
 
-        # Optional RAG specific configs
-        self.rag_model = os.getenv("RAG_MODEL")
-        if self.rag_model:
-            self.rag_model = [m.strip() for m in self.rag_model.split(",")]
-            logger.debug(f"RAG models configured: {self.rag_model}")
+        # Optional Chatbot specific configs
+        self.chatbot_model = os.getenv("CHATBOT_MODEL")
+        if self.chatbot_model:
+            self.chatbot_model = [m.strip() for m in self.chatbot_model.split(",")]
+            logger.debug(f"Chatbot models configured: {self.chatbot_model}")
 
-        self.rag_temperature = os.getenv("RAG_TEMPERATURE")
-        if self.rag_temperature is not None:
-            self.rag_temperature = float(self.rag_temperature)
-            logger.debug(f"RAG temperature: {self.rag_temperature}")
+        self.chatbot_temperature = os.getenv("CHATBOT_TEMPERATURE")
+        if self.chatbot_temperature is not None:
+            self.chatbot_temperature = float(self.chatbot_temperature)
+            logger.debug(f"Chatbot temperature: {self.chatbot_temperature}")
 
-        self.source_doc_ref = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
+        self.source_doc_ref = os.getenv("CHATBOT_SOURCE_DOCUMENT_REFERENCE")
         if self.source_doc_ref:
             logger.debug(f"Source document reference: {self.source_doc_ref}")
 
@@ -166,7 +166,7 @@ class ChatbotClient:
                 logger.warning(f"Auth token not found in environment variable: {self.auth['env_var']}")
 
         # Unified payload: support legacy params and config-driven parameters
-        payload = {
+        payload: dict[str, Any] = {
             "conversation_id": conversation_id,
             "session_id": session_id,
             "turn_id": turn_id,
@@ -174,19 +174,19 @@ class ChatbotClient:
             "query": user_message,
         }
 
-        # Add RAG config if defined
-        if self.rag_model or self.rag_temperature is not None or self.source_doc_ref:
+        # Add Chatbot config if defined
+        if self.chatbot_model or self.chatbot_temperature is not None or self.source_doc_ref:
             butler_config = {}
-            if self.rag_model:
-                butler_config["rag_model"] = self.rag_model
-            if self.rag_temperature is not None:
-                butler_config["rag_temperature"] = self.rag_temperature
+            if self.chatbot_model:
+                butler_config["chatbot_model"] = self.chatbot_model
+            if self.chatbot_temperature is not None:
+                butler_config["chatbot_temperature"] = self.chatbot_temperature
             if self.source_doc_ref is not None:
                 butler_config["source_document_reference"] = self.source_doc_ref
             payload["butler_11m_config"] = butler_config
-            logger.debug(f"RAG config added: {butler_config}")
+            logger.debug(f"Chatbot config added: {butler_config}")
 
-            # Default bmo_content if using RAG mode
+            # Default bmo_content if using Chatbot mode
             payload["bmo_content"] = ["Policies and Procedures"]
             logger.debug("Default bmo_content set to Policies and Procedures")
 
@@ -195,6 +195,10 @@ class ChatbotClient:
             logger.debug(f"Metadata included in payload: {list(metadata.keys())}")
 
         logger.debug(f"Sending POST request with payload keys: {list(payload.keys())}")
+
+        if not self.endpoint:
+            raise ValueError("Chatbot endpoint is not configured")
+
         start = time.perf_counter()
         response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_seconds)
         latency_ms = (time.perf_counter() - start) * 1000

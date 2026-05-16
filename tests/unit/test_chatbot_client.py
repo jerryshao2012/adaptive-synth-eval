@@ -28,7 +28,7 @@ def test_chatbot_client_returns_mock_response_when_disabled():
 
 
 def test_chatbot_client_init_defaults():
-    with patch.dict(os.environ, {"RAG_ENDPOINT": "http://env-endpoint", "RAG_TIMEOUT": "42.0"}):
+    with patch.dict(os.environ, {"CHATBOT_ENDPOINT": "http://env-endpoint", "CHATBOT_TIMEOUT": "42.0"}):
         client = ChatbotClient(enabled=True)
         assert client.endpoint == "http://env-endpoint"
         assert client.timeout_seconds == 42.0

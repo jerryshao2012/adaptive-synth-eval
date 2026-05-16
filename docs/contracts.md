@@ -20,21 +20,21 @@ Conversation turn ranges must be within 3-8 turns.
 
 Contract files support environment variable substitution using `${VAR_NAME}` syntax:
 
-- `${RAG_ENDPOINT}` - replaced with the value of the `RAG_ENDPOINT` environment variable
-- `${RAG_ENDPOINT:-https://default.example.com}` - uses the env var if set, otherwise falls back to the default value
+- `${CHATBOT_ENDPOINT}` - replaced with the value of the `CHATBOT_ENDPOINT` environment variable
+- `${CHATBOT_ENDPOINT:-https://default.example.com}` - uses the env var if set, otherwise falls back to the default value
 
 This is particularly useful for the `target_chatbot.endpoint` field to avoid hardcoding endpoints:
 
 ```yaml
 target_chatbot:
   enabled: true
-  endpoint: "${RAG_ENDPOINT:-https://api.example.com/v1/chat}"
+  endpoint: "${CHATBOT_ENDPOINT:-https://api.example.com/v1/chat}"
   auth:
     type: bearer
     env_var: CHATBOT_API_TOKEN
 ```
 
-When `RAG_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
+When `CHATBOT_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
 
 ## Examples
 

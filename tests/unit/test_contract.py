@@ -88,21 +88,21 @@ def test_load_contract_resolves_env_vars_in_endpoint(tmp_path):
     payload = _base_contract(tmp_path)
     payload["target_chatbot"] = {
         "enabled": True,
-        "endpoint": "${RAG_ENDPOINT:-https://default.example.com}",
+        "endpoint": "${CHATBOT_ENDPOINT:-https://default.example.com}",
         "timeout_seconds": 30.0,
     }
     path = tmp_path / "contract.json"
     path.write_text(json.dumps(payload))
 
     # Test with env var set
-    with patch.dict(os.environ, {"RAG_ENDPOINT": "http://custom-endpoint:8080"}):
+    with patch.dict(os.environ, {"CHATBOT_ENDPOINT": "http://custom-endpoint:8080"}):
         contract = load_contract(path)
         assert contract.target_chatbot.endpoint == "http://custom-endpoint:8080"
 
     # Test with env var not set (should use default)
     with patch.dict(os.environ, {}, clear=False):
-        if "RAG_ENDPOINT" in os.environ:
-            del os.environ["RAG_ENDPOINT"]
+        if "CHATBOT_ENDPOINT" in os.environ:
+            del os.environ["CHATBOT_ENDPOINT"]
         contract = load_contract(path)
         assert contract.target_chatbot.endpoint == "https://default.example.com"
 

@@ -6,7 +6,7 @@ simulation_suite:
 
 target_chatbot:
   enabled: true
-  endpoint: "${RAG_ENDPOINT:-}"
+  endpoint: "${CHATBOT_ENDPOINT:-}"
   auth:
     type: bearer
     env_var: CHATBOT_API_TOKEN
