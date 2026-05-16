@@ -1,0 +1,22 @@
+[project]
+name = "adaptive-synth-eval"
+version = "0.1.0"
+description = "Synthetic HR chatbot ChatHistory generation CLI"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0",
+  "requests>=2.31",
+]
+
+[project.scripts]
+adaptive-synth-eval = "adaptive_synth_eval.cli:entrypoint"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

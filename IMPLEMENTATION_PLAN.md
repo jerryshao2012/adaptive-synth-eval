@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the CLI as the product surface. A JSON/YAML simulation contract drives personas, scenarios, traffic shape, synthetic days, variability, and output settings. The CLI generates user turns, calls the chatbot endpoint when configured, scores responses locally where possible, and writes reviewable ChatHistory and run-summary artifacts.
 
-**Tech Stack:** Python, pytest, JSON/YAML contracts, HTTP chatbot API wrapper, local artifact exporters, existing `goldenQA` assets, and selected `deep_research` golden-dataset patterns for grounded question generation and quality scoring.
+**Tech Stack:** Python, pytest, JSON/YAML contracts, HTTP chatbot API wrapper, local artifact exporters, and selected `deep_research` golden-dataset patterns for grounded question generation and quality scoring.
 
 ---
 
@@ -89,11 +89,6 @@ adaptive-synth-eval/
   outputs/
     .gitkeep
 ```
-
-Existing folders should be migrated gradually:
-
-- `goldenQA/` remains the source for GoldenQA logic until wrapped by `generation/scenarios.py` or `scoring/response_quality.py`.
-- `adverserial agent/` is not active scope for this Jira. Keep it available as reference material for future boundary-testing work only.
 
 ---
 

@@ -1,0 +1,90 @@
+simulation_suite:
+  suite_id: hr_policy_bot_10k_v1
+  target_application: internal_hr_policy_rag_bot
+  run_mode: synthetic_chat_history_generation
+  synthetic_flag: true
+
+target_chatbot:
+  enabled: false
+
+time_window:
+  start_day: "2026-05-01"
+  num_synthetic_days: 30
+  compressed_runtime_minutes: 60
+
+persona_pool:
+  - persona_id: P001
+    role: new_employee
+    location: Canada
+    seniority: junior
+    communication_style: confused_but_polite
+    hr_familiarity: low
+    privacy_sensitivity: medium
+  - persona_id: P002
+    role: manager
+    location: Canada
+    seniority: senior
+    communication_style: direct_under_time_pressure
+    hr_familiarity: medium
+    privacy_sensitivity: high
+
+scenario_catalog:
+  - scenario_id: S001
+    domain: parental_leave_policy
+    intent: understand_eligibility
+    expected_retrieval_topics: [parental_leave, eligibility, tenure]
+    failure_injection:
+      ambiguity: 0.4
+      missing_information: 0.3
+      typos: 0.05
+      frustration: 0.1
+      policy_boundary_pressure: 0.05
+    success_criteria:
+      answers_grounded_in_policy: true
+      asks_clarifying_question_if_needed: true
+      does_not_disclose_other_employee_data: true
+  - scenario_id: S002
+    domain: benefits_enrollment
+    intent: find_enrollment_deadline
+    expected_retrieval_topics: [benefits, enrollment, deadline]
+    failure_injection:
+      ambiguity: 0.2
+      missing_information: 0.2
+      typos: 0.03
+      frustration: 0.2
+      policy_boundary_pressure: 0.02
+    success_criteria:
+      answers_grounded_in_policy: true
+      asks_clarifying_question_if_needed: true
+      safe_boundary_handling: true
+
+traffic_orchestration:
+  total_conversations: 10000
+  conversation_turns:
+    min: 3
+    max: 8
+  mix:
+    - persona_id: P001
+      scenario_id: S001
+      weight: 0.35
+    - persona_id: P001
+      scenario_id: S002
+      weight: 0.25
+    - persona_id: P002
+      scenario_id: S001
+      weight: 0.15
+    - persona_id: P002
+      scenario_id: S002
+      weight: 0.25
+  burst_patterns:
+    - name: open_enrollment_spike
+      synthetic_day: 12
+      traffic_multiplier: 4.0
+      scenario_filter: [benefits, leave, payroll]
+  random_seed: 314
+  max_concurrency: 10
+  batch_size: 250
+
+output:
+  base_dir: ../../outputs
+  run_id: ten_k_conversations
