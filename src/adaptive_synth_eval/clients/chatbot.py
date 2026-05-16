@@ -17,6 +17,7 @@ class ChatbotResponse:
     status_code: int
     error: str | None = None
     retrieved_policy_ids: list[str] | None = None
+    metadata: dict[str, Any] | None = None
 
     @classmethod
     def from_payload(
@@ -36,6 +37,12 @@ class ChatbotResponse:
             status_code=status_code,
             error=error,
             retrieved_policy_ids=list(retrieved) if isinstance(retrieved, list) else None,
+            metadata={
+                "retrieved_content": payload.get("retrieved_content", {}),
+                "used_bmo_content": payload.get("used_bmo_content", []),
+                "graph": payload.get("graph", ""),
+                "references": payload.get("references", ""),
+            }
         )
 
 
@@ -46,12 +53,27 @@ class ChatbotClient:
             endpoint: str | None = None,
             enabled: bool = True,
             auth: dict[str, Any] | None = None,
-            timeout_seconds: float = 60.0,
+            timeout_seconds: float | None = None,
     ):
-        self.endpoint = endpoint
+        self.endpoint = endpoint or os.getenv("RAG_ENDPOINT")
         self.enabled = enabled
         self.auth = auth or {}
-        self.timeout_seconds = timeout_seconds
+        if not self.auth and os.getenv("CHATBOT_API_TOKEN"):
+            self.auth = {"type": "bearer", "env_var": "CHATBOT_API_TOKEN"}
+
+        if timeout_seconds is not None:
+            self.timeout_seconds = timeout_seconds
+        else:
+            self.timeout_seconds = float(os.getenv("RAG_TIMEOUT", "60.0"))
+
+        # Optional RAG specific configs
+        self.rag_model = os.getenv("RAG_MODEL")
+        if self.rag_model:
+            self.rag_model = [m.strip() for m in self.rag_model.split(",")]
+
+        temp_str = os.getenv("RAG_TEMPERATURE")
+        self.rag_temperature = float(temp_str) if temp_str else None
+        self.source_doc_ref = os.getenv("RAG_SOURCE_DOCUMENT_REFERENCE")
 
     def send(
             self,
@@ -101,12 +123,29 @@ class ChatbotClient:
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
+        # Unified payload: support legacy params and config-driven parameters
         payload = {
             "conversation_id": conversation_id,
             "session_id": session_id,
             "turn_id": turn_id,
             "user_message": user_message,
+            "query": user_message,
         }
+
+        # Add RAG config if defined
+        if self.rag_model or self.rag_temperature is not None or self.source_doc_ref:
+            butler_config = {}
+            if self.rag_model:
+                butler_config["rag_model"] = self.rag_model
+            if self.rag_temperature is not None:
+                butler_config["rag_temperature"] = self.rag_temperature
+            if self.source_doc_ref is not None:
+                butler_config["source_document_reference"] = self.source_doc_ref
+            payload["butler_11m_config"] = butler_config
+
+            # Default bmo_content if using RAG mode
+            payload["bmo_content"] = ["Policies and Procedures"]
+
         if metadata:
             payload["metadata"] = metadata
 

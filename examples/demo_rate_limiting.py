@@ -3,11 +3,6 @@ Demonstration script showing rate limiting applied to chatbot clients.
 """
 
 from adaptive_synth_eval.clients.chatbot import ChatbotClient
-from adaptive_synth_eval.clients.unified_chatbot import (
-    create_chatbot_client,
-    ChatbotConfig,
-    ChatbotType,
-)
 
 
 def demo_chatbot_client_rate_limiting():
@@ -38,38 +33,10 @@ def demo_chatbot_client_rate_limiting():
     print()
 
 
-def demo_unified_chatbot_rate_limiting():
-    """Demonstrate rate limiting in UnifiedChatbotClient."""
-    print("=" * 80)
-    print("Demo 2: UnifiedChatbotClient with Rate Limiting")
-    print("=" * 80)
-
-    # Create a unified client
-    config = ChatbotConfig(
-        chatbot_type=ChatbotType.VANILLA_RAG,
-        endpoint="https://example.com/api",
-        timeout_seconds=30.0
-    )
-
-    # The strategy's _send_request_with_retry method is decorated with @retry_on_rate_limit
-    client = create_chatbot_client(
-        chatbot_type="vanilla_rag",
-        endpoint="https://example.com/api",
-        timeout_seconds=30.0
-    )
-
-    print(f"Client type: {client.chatbot_type}")
-    print(f"Endpoint: {client.endpoint}")
-    print()
-    print("Note: The query() method now uses rate-limited HTTP requests")
-    print("      with automatic retry on 429/rate limit errors.")
-    print()
-
-
 def demo_wrap_model_function():
     """Demonstrate the wrap_model_with_rate_limiting function."""
     print("=" * 80)
-    print("Demo 3: wrap_model_with_rate_limiting Function")
+    print("Demo 2: wrap_model_with_rate_limiting Function")
     print("=" * 80)
     print()
     print("The wrap_model_with_rate_limiting function from retry_utils.py provides:")
@@ -119,7 +86,6 @@ def show_configuration_options():
 
 if __name__ == "__main__":
     demo_chatbot_client_rate_limiting()
-    demo_unified_chatbot_rate_limiting()
     demo_wrap_model_function()
     show_configuration_options()
 
@@ -128,8 +94,7 @@ if __name__ == "__main__":
     print("=" * 80)
     print()
     print("✓ Applied retry_on_rate_limit decorator to ChatbotClient._send_with_retry")
-    print("✓ Applied retry_on_rate_limit decorator to BaseChatbotStrategy._send_request_with_retry")
-    print("✓ Both clients now automatically retry on rate limit errors")
+    print("✓ ChatbotClient now automatically retries on rate limit errors")
     print("✓ Configurable via environment variables or decorator parameters")
     print("✓ wrap_model_with_rate_limiting available for future LangChain integration")
     print()
