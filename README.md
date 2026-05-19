@@ -11,6 +11,30 @@ The active implementation is intentionally local-first:
 
 ## Setup
 
+### Prerequisites: Install uv Package Manager
+
+Install [uv](https://docs.astral.sh/uv/) package manager:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+*Alternative installation for restricted corporate environments:*
+```bash
+pip install uv
+```
+
+*If `uv` is not available on your system path, you can try:*
+```bash
+uv sync
+# In Windows if PATH is not setup properly
+python -m uv sync
+```
+
+Note: use `uv sync --reinstall` to reinstall all packages if you see some errors.
+
+### Project Setup
+
 1. Copy the example environment file and configure your settings:
    ```bash
    cp .env.example .env
