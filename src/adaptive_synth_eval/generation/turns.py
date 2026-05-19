@@ -25,7 +25,9 @@ class UserSimulator:
         self.rng = random.Random(seed)
         self.history = []
         self.planned_failure_modes = scenario.failure_injection.planned_modes()
-        self.llm_client = LLMClient(enabled=False)  # Disabled by default until provider is configured
+        # Enable LLM client if a provider is configured in environment variables
+        llm_client = LLMClient(enabled=False)  # Check if provider is available
+        self.llm_client = LLMClient(enabled=llm_client.model_provider is not None)
 
     def generate_turn(self, turn_id: int, previous_bot_response: str | None = None) -> GeneratedTurn:
         applied = choose_failure_modes(self.scenario.failure_injection, self.rng) if turn_id == 1 else []
@@ -92,3 +94,28 @@ class UserSimulator:
         if turn_id == self.turn_count:
             return "Thanks. Can you summarize what I should do next?"
         return f"Follow-up {turn_id}: can you clarify how this applies to someone in {self.persona.location}?"
+
+
+def generate_turns(persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None) -> list[GeneratedTurn]:
+    """Convenience function to generate all turns for a conversation.
+    
+    Args:
+        persona: The user persona
+        scenario: The conversation scenario
+        turn_count: Number of turns to generate
+        seed: Random seed for reproducibility
+    
+    Returns:
+        List of GeneratedTurn objects
+    """
+    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=turn_count, seed=seed)
+    turns = []
+    previous_bot_response = None
+    
+    for turn_id in range(1, turn_count + 1):
+        turn = simulator.generate_turn(turn_id=turn_id, previous_bot_response=previous_bot_response)
+        turns.append(turn)
+        # Simulate a generic bot response for context in next turn
+        previous_bot_response = f"I understand you're asking about turn {turn_id}."
+    
+    return turns

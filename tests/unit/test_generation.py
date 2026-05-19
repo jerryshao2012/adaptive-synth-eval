@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.schemas import FailureInjection, Persona, Scenario
 from adaptive_synth_eval.generation.turns import generate_turns
 
@@ -27,3 +30,64 @@ def test_generate_turns_applies_failure_modes_and_metadata():
     assert all(turn.user_message for turn in turns)
     assert {"ambiguity", "missing_information"}.issubset(set(turns[0].applied_failure_modes))
     assert "typos" in turns[0].applied_failure_modes
+
+
+def test_llm_client_disabled_by_default():
+    """Test that LLM client returns mock response when disabled."""
+    client = LLMClient(enabled=False)
+    result = client.complete("test prompt")
+
+    assert result.error == "llm_disabled"
+    assert result.raw["mock"] is True
+    assert result.content == ""
+
+
+def test_llm_client_no_provider_configured():
+    """Test that LLM client handles missing provider gracefully."""
+    with patch.dict('os.environ', {}, clear=True):
+        client = LLMClient(enabled=True)
+        result = client.complete("test prompt")
+
+        assert result.error == "no_provider_configured"
+        assert result.raw["mock"] is True
+
+
+def test_llm_client_auto_detects_azure_provider():
+    """Test that LLM client auto-detects Azure OpenAI provider."""
+    with patch.dict('os.environ', {
+        'AZURE_OPENAI_ENDPOINT': 'https://test.openai.azure.com/',
+        'AZURE_OPENAI_DEPLOYMENT': 'gpt-4',
+        'AZURE_OPENAI_API_KEY': 'test-key'
+    }):
+        client = LLMClient(enabled=False)
+        assert client.model_provider == "azure_openai"
+
+
+def test_llm_client_auto_detects_anthropic_provider():
+    """Test that LLM client auto-detects Anthropic provider."""
+    with patch.dict('os.environ', {
+        'ANTHROPIC_API_KEY': 'test-key',
+        'MODEL_NAME': 'claude-sonnet-4'
+    }):
+        client = LLMClient(enabled=False)
+        assert client.model_provider == "anthropic"
+
+
+def test_llm_client_auto_detects_openai_provider():
+    """Test that LLM client auto-detects OpenAI provider."""
+    with patch.dict('os.environ', {
+        'OPENAI_API_KEY': 'test-key',
+        'MODEL_NAME': 'gpt-4o-mini'
+    }):
+        client = LLMClient(enabled=False)
+        assert client.model_provider == "openai"
+
+
+def test_llm_client_auto_detects_ollama_provider():
+    """Test that LLM client auto-detects Ollama provider."""
+    with patch.dict('os.environ', {
+        'OLLAMA_BASE_URL': 'http://localhost:11434',
+        'OLLAMA_MODEL': 'llama3'
+    }):
+        client = LLMClient(enabled=False)
+        assert client.model_provider == "ollama"
