@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run":
             contract = load_contract(args.contract)
-            summary = run_simulation(contract, dry_run=args.dry_run)
+            summary = run_simulation(contract, dry_run=args.dry_run, output_conversations=args.output_conversations)
             print(f"Run complete: {summary['run_id']}")
             print(json.dumps(summary, indent=2))
             return 0
@@ -51,6 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("--contract", required=True)
     run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--output-conversations", action="store_true", help="Output conversations in human-readable format with Human/Bot labels")
     summarize = sub.add_parser("summarize")
     summarize.add_argument("--run-id", required=True)
     summarize.add_argument("--output-dir", default="outputs")

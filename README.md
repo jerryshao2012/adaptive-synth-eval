@@ -63,6 +63,9 @@ uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_histo
 # Run a dedicated chatbot unit test contract
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 
+# Output conversations in human-readable format (with Human/Bot labels)
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
+
 # Summarize a previous run
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
 ```
@@ -199,6 +202,7 @@ The LLM-based user simulation is powered by the following components:
 - `scores.jsonl`
 - `run_summary.json`
 - `generation_report.md`
+- `conversations.txt` (when using `--output-conversations` flag)
 
 ## Tests
 

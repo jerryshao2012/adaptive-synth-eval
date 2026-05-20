@@ -14,7 +14,7 @@ from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.scoring.response_quality import score_response
 
 
-def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> dict:
+def run_simulation(contract: SimulationContract, *, dry_run: bool = False, output_conversations: bool = False) -> dict:
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
     plan = build_run_plan(contract.traffic, contract.time_window)
@@ -137,4 +137,8 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False) -> di
     writer.write_jsonl("scores.jsonl", score_rows)
     writer.write_json("run_summary.json", summary)
     writer.write_generation_report(summary)
+
+    if output_conversations:
+        writer.write_conversations_txt(records)
+
     return summary

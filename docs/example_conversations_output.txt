@@ -1,0 +1,89 @@
+================================================================================
+Conversation ID: conv_000001
+Session ID: sess_000001
+Persona: TEST_P1
+Scenario: TEST_S1
+Synthetic Day: 2026-05-16
+================================================================================
+
+Human (Turn 1):
+Hi, I need help with chatbot testing. I want to verify all functions.
+
+Bot (Turn 1):
+[dry-run chatbot response for turn 1]
+
+---
+
+Human (Turn 2):
+Follow-up 2: can you clarify how this applies to someone in Global?
+
+Bot (Turn 2):
+[dry-run chatbot response for turn 2]
+
+---
+
+Human (Turn 3):
+Follow-up 3: can you clarify how this applies to someone in Global?
+
+Bot (Turn 3):
+[dry-run chatbot response for turn 3]
+
+---
+
+Human (Turn 4):
+Follow-up 4: can you clarify how this applies to someone in Global?
+
+Bot (Turn 4):
+[dry-run chatbot response for turn 4]
+
+---
+
+Human (Turn 5):
+Thanks. Can you summarize what I should do next?
+
+Bot (Turn 5):
+[dry-run chatbot response for turn 5]
+
+---
+
+
+================================================================================
+
+
+
+================================================================================
+Conversation ID: conv_000002
+Session ID: sess_000002
+Persona: TEST_P1
+Scenario: TEST_S1
+Synthetic Day: 2026-05-16
+================================================================================
+
+Human (Turn 1):
+Hi, I need help with chatbot testing. I want to verify all functions.
+
+Bot (Turn 1):
+[dry-run chatbot response for turn 1]
+
+---
+
+Human (Turn 2):
+Follow-up 2: can you clarify how this applies to someone in Global?
+
+Bot (Turn 2):
+[dry-run chatbot response for turn 2]
+
+---
+
+Human (Turn 3):
+Thanks. Can you summarize what I should do next?
+
+Bot (Turn 3):
+[dry-run chatbot response for turn 3]
+
+---
+
+
+================================================================================
+
+
