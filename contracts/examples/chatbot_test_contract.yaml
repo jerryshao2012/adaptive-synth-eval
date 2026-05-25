@@ -10,7 +10,7 @@ target_chatbot:
   auth:
     type: bearer
     env_var: CHATBOT_API_TOKEN
-  timeout_seconds: 30.0
+  timeout_seconds: 60.0
 
 time_window:
   start_day: "2026-05-16"
