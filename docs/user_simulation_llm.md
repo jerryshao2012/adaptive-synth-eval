@@ -11,6 +11,7 @@ When you configure an LLM provider, the `UserSimulator` automatically uses it to
 - **Scenario intent** (what the user wants to accomplish)
 - **Conversation history** (previous turns in the dialogue)
 - **Failure injection modes** (typos, ambiguity, frustration, etc.)
+- **Persona memory** (persistent demographics, preferences, and long-term recall from prior conversations; see the [Persona Memory Guide](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/docs/persona_memory.md))
 
 If no LLM is configured, the system falls back to deterministic template messages.
 

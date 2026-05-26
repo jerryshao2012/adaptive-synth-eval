@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from adaptive_synth_eval.clients.llm import LLMClient
+from adaptive_synth_eval.clients.llm import LLMClient, LLMResult
 from adaptive_synth_eval.config.schemas import FailureInjection, Persona, Scenario
 from adaptive_synth_eval.generation.turns import UserSimulator, generate_turns
 
@@ -117,3 +117,71 @@ def test_generate_turn_behavior_override_changes_fallback_and_metadata():
 
     assert turn.generation_metadata["behavior_mode"] == "aggressive"
     assert "I need a clear answer now" in turn.user_message
+
+
+def test_user_simulator_with_markdown_memory(tmp_path):
+    persona = Persona(
+        persona_id="P_MEM_TEST",
+        role="tester",
+        location="Canada",
+        seniority="senior",
+        communication_style="polite",
+        hr_familiarity="high",
+        privacy_sensitivity="low",
+    )
+    scenario = Scenario(
+        scenario_id="S001",
+        domain="benefits",
+        intent="enroll_spouse",
+        expected_retrieval_topics=["spouse_benefits"],
+        failure_injection=FailureInjection(),
+        success_criteria={"answers_grounded_in_policy": True},
+    )
+
+    memory_file = tmp_path / "personas" / "P_MEM_TEST_memory.md"
+    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=3, seed=42, memory_file=memory_file)
+
+    # 1. Verify memory is loaded and initialized with baseline demographics
+    assert simulator.memory is not None
+    assert simulator.memory.demographics["role"] == "tester"
+    assert simulator.memory.demographics["location"] == "Canada"
+
+    # 2. Generate Turn 1 and verify profile delta extraction
+    # We patch LLM complete so it returns a message containing profile information
+    with patch.object(simulator.llm_client, "complete") as mock_complete:
+        mock_complete.return_value = LLMResult(
+            content="Hi, my name is Jerry. I prefer standard dental coverage.",
+            raw={},
+        )
+        turn = simulator.generate_turn(turn_id=1, previous_bot_response=None)
+
+    assert "Jerry" in turn.user_message
+    assert simulator.memory.demographics["name"] == "Jerry"
+    assert simulator.memory.preferences["stated_preference"] == "standard dental coverage"
+    assert memory_file.exists()
+
+    # 3. Simulate bot response and next turn
+    with patch.object(simulator.llm_client, "complete") as mock_complete:
+        mock_complete.return_value = LLMResult(
+            content="I speak French. This is my preferred language. Here is my email test@example.com.",
+            raw={},
+        )
+        # Previous bot response matches something that has no delta, but registers in history
+        turn2 = simulator.generate_turn(turn_id=2, previous_bot_response="Hello Jerry, what information do you need?")
+
+    assert simulator.memory.settings["language"] == "french"
+    assert simulator.memory.demographics["email"] == "test@example.com"
+    assert len(simulator.memory.recent_window) == 3  # User Turn 1, Agent Response, User Turn 2
+
+    # 4. Save conversation summary and clear recent window
+    simulator.save_conversation_summary_to_long_term_recall()
+    assert len(simulator.memory.recent_window) == 0
+    assert len(simulator.memory.long_term_recall) == 1
+    assert "spouse" in simulator.memory.long_term_recall[0] or "benefits" in simulator.memory.long_term_recall[0]
+
+    # 5. Reload memory in a new simulator and verify persistence
+    simulator2 = UserSimulator(persona=persona, scenario=scenario, turn_count=3, seed=42, memory_file=memory_file)
+    assert simulator2.memory.demographics["name"] == "Jerry"
+    assert simulator2.memory.demographics["email"] == "test@example.com"
+    assert simulator2.memory.preferences["stated_preference"] == "standard dental coverage"
+    assert len(simulator2.memory.long_term_recall) == 1

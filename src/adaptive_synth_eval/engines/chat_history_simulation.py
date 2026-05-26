@@ -84,8 +84,10 @@ async def run_simulation_async(
 
         persona = personas[planned.persona_id]
         scenario = scenarios[planned.scenario_id]
+        memory_file = writer.run_dir / "personas" / f"{planned.persona_id}_memory.md"
         simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
-                                  seed=hash(planned.conversation_id) % 10_000)
+                                  seed=hash(planned.conversation_id) % 10_000,
+                                  memory_file=memory_file)
 
         local_conversation_row = {
             "conversation_id": planned.conversation_id,
@@ -179,6 +181,9 @@ async def run_simulation_async(
 
             if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_for_turn_delay):
                 break
+
+        # Summarize conversation and update long-term recall
+        await asyncio.to_thread(simulator.save_conversation_summary_to_long_term_recall)
 
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
 

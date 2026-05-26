@@ -287,6 +287,17 @@ The LLM-based user simulation is powered by the following components:
 - **"Connection refused" (Ollama)**: Ensure the Ollama service is running via `ollama serve`, and test connectivity with `curl http://localhost:11434/api/tags`.
 - **"no_provider_configured"**: Double check that your `src/.env` file contains the correct environment variables for either Ollama (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`) or your cloud provider.
 
+## Persistent Persona Memory
+
+The simulation engine includes a persistent, isolated markdown-based memory system for each persona to emulate human memory retention across runs and conversation threads.
+
+- **Markdown Storage**: Saves persona state (Demographics, Preferences, Settings, Summary Notes, Long Term Recall, and Recent Window) in `outputs/runs/<run_id>/personas/<persona_id>_memory.md`.
+- **Dynamic Profile Deltas**: Automatically extracts profile updates (such as language settings, custom preferences, and contact details) from chat logs using regex patterns.
+- **Context Injection**: Prepend the active memory state directly into the LLM system prompt for context-aware conversations.
+- **Thread Safety**: Uses atomic file swaps and path-level locks to support high concurrency safely.
+
+For full architectural details, see the [Persona Memory Guide](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/docs/persona_memory.md).
+
 ## Main Artifacts
 
 
