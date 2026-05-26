@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass
@@ -143,6 +144,25 @@ class ChatbotClient:
         except Exception as exc:
             logger.exception(f"Exception occurred while sending message: {exc}")
             return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=str(exc))
+
+    async def send_async(
+            self,
+            *,
+            conversation_id: str,
+            session_id: str,
+            turn_id: int,
+            user_message: str,
+            metadata: dict[str, Any] | None = None,
+    ) -> ChatbotResponse:
+        """Async wrapper around send() for the async simulation pipeline."""
+        return await asyncio.to_thread(
+            self.send,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            user_message=user_message,
+            metadata=metadata,
+        )
 
     @retry_on_rate_limit(max_retries=3, initial_backoff=1.0, max_backoff=30.0)
     def _send_with_retry(

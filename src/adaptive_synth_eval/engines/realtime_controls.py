@@ -5,6 +5,8 @@ import os
 import threading
 import time
 from contextlib import redirect_stderr
+from dataclasses import dataclass
+from typing import Any
 
 try:
     from prompt_toolkit import PromptSession
@@ -12,6 +14,14 @@ try:
 except Exception:  # pragma: no cover - optional dependency fallback
     PromptSession = None
     patch_stdout = None
+
+
+@dataclass
+class RealtimeControlState:
+    delay_seconds: float
+    paused: bool = False
+    stop_requested: bool = False
+    behavior_mode: str = "default"
 
 
 class RealtimeChatController:
@@ -40,16 +50,17 @@ class RealtimeChatController:
             min_delay_seconds: float = 0.0,
             max_delay_seconds: float = 5.0,
     ) -> None:
-        self._delay_seconds = max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
         self._delay_step_seconds = delay_step_seconds
         self._min_delay_seconds = min_delay_seconds
         self._max_delay_seconds = max_delay_seconds
+        self._state = RealtimeControlState(
+            delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
+        )
         self._lock = threading.Lock()
         self._paused_event = threading.Event()
         self._stop_event = threading.Event()
         self._input_thread: threading.Thread | None = None
-        self._behavior_mode = "default"
-        self._patched_logging_handlers: list[tuple[logging.StreamHandler, object]] = []
+        self._patched_logging_handlers: list[tuple[logging.StreamHandler[Any], Any]] = []
         self._temporary_logger_levels: list[tuple[logging.Logger, int]] = []
         # Default keeps INFO logs visible; set REALTIME_SUPPRESS_INFO_LOGS=true to silence noisy transport logs.
         self._suppress_info_logs = os.getenv("REALTIME_SUPPRESS_INFO_LOGS", "false").lower() in {
@@ -59,7 +70,7 @@ class RealtimeChatController:
     @property
     def current_delay_seconds(self) -> float:
         with self._lock:
-            return self._delay_seconds
+            return self._state.delay_seconds
 
     @property
     def is_paused(self) -> bool:
@@ -72,7 +83,7 @@ class RealtimeChatController:
     @property
     def behavior_mode(self) -> str:
         with self._lock:
-            return self._behavior_mode
+            return self._state.behavior_mode
 
     def start(self) -> bool:
         """Start background command listener if stdin supports interactive input."""
@@ -92,6 +103,9 @@ class RealtimeChatController:
         return True
 
     def stop(self) -> None:
+        with self._lock:
+            self._state.stop_requested = True
+            self._state.paused = False
         self._stop_event.set()
         self._paused_event.clear()
         self._restore_logging_streams()
@@ -115,24 +129,38 @@ class RealtimeChatController:
             return "Usage: style <default|aggressive|polite|concise|confused|anxious>"
         if normalized in {"+", "f", "faster"}:
             with self._lock:
-                self._delay_seconds = max(self._min_delay_seconds, self._delay_seconds - self._delay_step_seconds)
+                self._state.delay_seconds = max(
+                    self._min_delay_seconds,
+                    self._state.delay_seconds - self._delay_step_seconds,
+                )
             return self._status_text(prefix="Playback speed increased")
         if normalized in {"-", "l", "slower"}:
             with self._lock:
-                self._delay_seconds = min(self._max_delay_seconds, self._delay_seconds + self._delay_step_seconds)
+                self._state.delay_seconds = min(
+                    self._max_delay_seconds,
+                    self._state.delay_seconds + self._delay_step_seconds,
+                )
             return self._status_text(prefix="Playback speed decreased")
         if normalized in {"p", "pause"}:
             if self._paused_event.is_set():
                 self._paused_event.clear()
+                with self._lock:
+                    self._state.paused = False
                 return self._status_text(prefix="Playback resumed")
             self._paused_event.set()
+            with self._lock:
+                self._state.paused = True
             return self._status_text(prefix="Playback paused")
         if normalized in {"r", "resume"}:
             self._paused_event.clear()
+            with self._lock:
+                self._state.paused = False
             return self._status_text(prefix="Playback resumed")
         if normalized in {"q", "quit", "stop", "exit"}:
-            self._stop_event.set()
+            with self._lock:
+                self._state.stop_requested = True
             self._paused_event.clear()
+            self._stop_event.set()
             return "Stop requested. Finishing current turn and ending realtime run."
         if not normalized:
             return ""
@@ -175,7 +203,7 @@ class RealtimeChatController:
             return f"Unsupported behavior: {requested}. Supported: {supported}"
 
         with self._lock:
-            self._behavior_mode = requested
+            self._state.behavior_mode = requested
 
         return self._status_text(prefix="Behavior updated")
 

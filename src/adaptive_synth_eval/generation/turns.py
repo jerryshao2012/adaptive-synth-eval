@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass
 
@@ -74,6 +75,21 @@ class UserSimulator:
             applied_failure_modes=applied,
             generation_metadata={"persona_role": self.persona.role, "scenario_intent": self.scenario.intent,
                                  "dynamic": result.error != "llm_disabled", "behavior_mode": behavior_mode},
+        )
+
+    async def generate_turn_async(
+            self,
+            turn_id: int,
+            previous_bot_response: str | None = None,
+            *,
+            behavior_override: str | None = None,
+    ) -> GeneratedTurn:
+        """Async wrapper around generate_turn() for the async simulation pipeline."""
+        return await asyncio.to_thread(
+            self.generate_turn,
+            turn_id,
+            previous_bot_response,
+            behavior_override=behavior_override,
         )
 
     def _build_prompt(self, turn_id: int, *, behavior_mode: str = "default") -> str:

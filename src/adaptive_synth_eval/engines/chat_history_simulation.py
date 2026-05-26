@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
@@ -17,6 +17,26 @@ from adaptive_synth_eval.scoring.response_quality import score_response
 
 
 def run_simulation(
+        contract: SimulationContract,
+        *,
+        dry_run: bool = False,
+        output_conversations: bool = False,
+        realtime_chat: bool = False,
+        interactive_realtime_controls: bool = False,
+) -> dict:
+    """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
+    return asyncio.run(
+        run_simulation_async(
+            contract,
+            dry_run=dry_run,
+            output_conversations=output_conversations,
+            realtime_chat=realtime_chat,
+            interactive_realtime_controls=interactive_realtime_controls,
+        )
+    )
+
+
+async def run_simulation_async(
         contract: SimulationContract,
         *,
         dry_run: bool = False,
@@ -56,7 +76,7 @@ def run_simulation(
         realtime_controller = RealtimeChatController()
         realtime_controller.start()
 
-    def process_conversation(planned):
+    async def process_conversation(planned):
         local_records = []
         local_turn_rows = []
         local_score_rows = []
@@ -80,16 +100,16 @@ def run_simulation(
         for turn_id in range(1, planned.turn_count + 1):
             if realtime_controller and realtime_controller.stop_requested:
                 break
-            if realtime_controller and not realtime_controller.wait_if_paused():
+            if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
                 break
 
             behavior_override = realtime_controller.behavior_mode if realtime_controller else None
-            turn = simulator.generate_turn(
+            turn = await simulator.generate_turn_async(
                 turn_id,
                 previous_bot_response,
                 behavior_override=behavior_override,
             )
-            response = client.send(
+            response = await client.send_async(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
                 turn_id=turn.turn_id,
@@ -101,7 +121,8 @@ def run_simulation(
             previous_bot_response = response.bot_response
 
             if realtime_chat_enabled:
-                stream_simulated_chat_turn(
+                await asyncio.to_thread(
+                    stream_simulated_chat_turn,
                     conversation_id=planned.conversation_id,
                     persona_id=planned.persona_id,
                     scenario_id=planned.scenario_id,
@@ -156,7 +177,7 @@ def run_simulation(
                 }
             )
 
-            if realtime_controller and not realtime_controller.wait_for_turn_delay():
+            if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_for_turn_delay):
                 break
 
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
@@ -165,7 +186,7 @@ def run_simulation(
         if realtime_chat_enabled:
             # Keep live transcript ordering stable for single-persona runs.
             for planned in plan:
-                conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = process_conversation(planned)
+                conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = await process_conversation(planned)
                 conversation_rows.append(conv_row)
                 records.extend(loc_recs)
                 turn_rows.extend(loc_turn_rows)
@@ -176,14 +197,20 @@ def run_simulation(
                     stopped_early = True
                     break
         else:
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation,
-                                                                                                plan):
-                    conversation_rows.append(conv_row)
-                    records.extend(loc_recs)
-                    turn_rows.extend(loc_turn_rows)
-                    score_rows.extend(loc_score_rows)
-                    errors += loc_errs
+            max_concurrency = max(1, int(getattr(contract.traffic, "max_concurrency", 5) or 5))
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def limited_process(planned):
+                async with semaphore:
+                    return await process_conversation(planned)
+
+            results = await asyncio.gather(*(limited_process(planned) for planned in plan))
+            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in results:
+                conversation_rows.append(conv_row)
+                records.extend(loc_recs)
+                turn_rows.extend(loc_turn_rows)
+                score_rows.extend(loc_score_rows)
+                errors += loc_errs
     finally:
         if realtime_controller:
             realtime_controller.stop()
