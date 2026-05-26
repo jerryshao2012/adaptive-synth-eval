@@ -46,13 +46,13 @@ See [docs/example_conversations_output.txt](example_conversations_output.txt) fo
 Stream simulated Human/Bot chat to the console in real time:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 ```
 
 Disable interactive runtime controls during realtime chat (controls are enabled by default with `--realtime-chat`):
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat --no-interactive-realtime-controls
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
 ```
 
 How `--realtime-chat` works:

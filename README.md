@@ -160,7 +160,7 @@ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contra
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat --no-interactive-realtime-controls
 
 # This is a real test not a dry-run
- uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 
 # Summarize a previous run
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
@@ -331,6 +331,10 @@ Examples while the run is active:
 - `style default`
 
 The controls only exist for the active realtime run. When the run completes or you stop it, the input prompt is removed automatically.
+
+```bash
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+```
 
 ## Tests
 
