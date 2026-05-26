@@ -43,4 +43,23 @@ This generates a `conversations.txt` file in the output directory with each conv
 
 See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
 
+Stream simulated Human/Bot chat to the console in real time:
+
+```bash
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+```
+
+How `--realtime-chat` works:
+- It is opt-in and only runs when `persona_pool` contains exactly one persona.
+- For single-persona contracts, each turn is printed live as alternating Human and Assistant panels.
+- For multi-persona contracts, live output is skipped and a console notice is printed.
+- It does not replace output artifacts; files like `chat_history.jsonl` and `conversations.txt` (when enabled) are still generated normally.
+
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.
+
+If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os error 396`), switch uv to copy mode:
+
+```powershell
+$env:UV_LINK_MODE='copy'
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+```

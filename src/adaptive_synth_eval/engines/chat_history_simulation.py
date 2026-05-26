@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot import ChatbotClient
+from adaptive_synth_eval.clients.utils import stream_simulated_chat_turn
 from adaptive_synth_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.generation.traffic import build_run_plan
@@ -14,7 +15,13 @@ from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.scoring.response_quality import score_response
 
 
-def run_simulation(contract: SimulationContract, *, dry_run: bool = False, output_conversations: bool = False) -> dict:
+def run_simulation(
+        contract: SimulationContract,
+        *,
+        dry_run: bool = False,
+        output_conversations: bool = False,
+        realtime_chat: bool = False,
+) -> dict:
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
     plan = build_run_plan(contract.traffic, contract.time_window)
@@ -32,6 +39,10 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False, outpu
     turn_rows = []
     score_rows = []
     errors = 0
+    realtime_chat_enabled = realtime_chat and len(contract.persona_pool) == 1
+
+    if realtime_chat and not realtime_chat_enabled:
+        print("Realtime chat display is only enabled when persona_pool has exactly one persona; skipping live output.")
 
     def process_conversation(planned):
         local_records = []
@@ -66,6 +77,17 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False, outpu
             if response.error:
                 local_errors += 1
             previous_bot_response = response.bot_response
+
+            if realtime_chat_enabled:
+                stream_simulated_chat_turn(
+                    conversation_id=planned.conversation_id,
+                    persona_id=planned.persona_id,
+                    scenario_id=planned.scenario_id,
+                    turn_id=turn.turn_id,
+                    human_message=turn.user_message,
+                    bot_message=response.bot_response,
+                )
+
             score = score_response(
                 user_message=turn.user_message,
                 bot_response=response.bot_response,
@@ -113,13 +135,23 @@ def run_simulation(contract: SimulationContract, *, dry_run: bool = False, outpu
 
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation, plan):
+    if realtime_chat_enabled:
+        # Keep live transcript ordering stable for single-persona runs.
+        for planned in plan:
+            conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = process_conversation(planned)
             conversation_rows.append(conv_row)
             records.extend(loc_recs)
             turn_rows.extend(loc_turn_rows)
             score_rows.extend(loc_score_rows)
             errors += loc_errs
+    else:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation, plan):
+                conversation_rows.append(conv_row)
+                records.extend(loc_recs)
+                turn_rows.extend(loc_turn_rows)
+                score_rows.extend(loc_score_rows)
+                errors += loc_errs
 
     summary = {
         "run_id": run_id,

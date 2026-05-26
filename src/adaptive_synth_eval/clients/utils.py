@@ -11,6 +11,20 @@ from rich.text import Text
 console = Console()
 
 
+class HumanMessage:
+    """Lightweight message type used for Rich conversation display."""
+
+    def __init__(self, content: str):
+        self.content = content
+
+
+class AiMessage:
+    """Lightweight message type used for Rich conversation display."""
+
+    def __init__(self, content: str):
+        self.content = content
+
+
 def format_message_content(message):
     """Convert message content to displayable string."""
     parts = []
@@ -69,6 +83,22 @@ def format_messages(messages):
 def format_message(messages):
     """Alias for format_messages for backward compatibility."""
     return format_messages(messages)
+
+
+def stream_simulated_chat_turn(
+        *,
+        conversation_id: str,
+        persona_id: str,
+        scenario_id: str,
+        turn_id: int,
+        human_message: str,
+        bot_message: str,
+) -> None:
+    """Render a single simulated human<->bot turn in real time."""
+    console.rule(
+        f"Conversation {conversation_id} | Persona {persona_id} | Scenario {scenario_id} | Turn {turn_id}"
+    )
+    format_messages([HumanMessage(human_message), AiMessage(bot_message)])
 
 
 def show_prompt(prompt_text: str, title: str = "Prompt", border_style: str = "blue"):

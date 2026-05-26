@@ -33,6 +33,19 @@ python -m uv sync
 
 Note: use `uv sync --reinstall` to reinstall all packages if you see some errors.
 
+If your workspace is inside OneDrive on Windows and `uv run` fails with hardlink errors (for example `os error 396`), run commands with copy mode:
+
+```powershell
+$env:UV_LINK_MODE='copy'
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+```
+
+You can also persist this for your user profile:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('UV_LINK_MODE', 'copy', 'User')
+```
+
 ### Project Setup
 
 1. Copy the example environment file and configure your settings:
@@ -65,6 +78,9 @@ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contra
 
 # Output conversations in human-readable format (with Human/Bot labels)
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
+
+# Stream simulated Human/Bot chat live in console (single-persona contracts)
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
 
 # Summarize a previous run
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
@@ -203,6 +219,8 @@ The LLM-based user simulation is powered by the following components:
 - `run_summary.json`
 - `generation_report.md`
 - `conversations.txt` (when using `--output-conversations` flag)
+
+`--realtime-chat` streams conversation turns directly in the terminal and is enabled only when `persona_pool` has exactly one persona. For multi-persona contracts, the run continues and live output is skipped.
 
 ## Tests
 
