@@ -283,3 +283,71 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
 
     assert summary["stopped_early"] is True
     assert summary["total_turns"] == 1
+
+
+def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkeypatch):
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {"enabled": False},
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 1,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_non_interactive"},
+    }
+
+    contract_path = tmp_path / "contract_non_interactive.json"
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    class _ShouldNotBeCreatedController:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("RealtimeChatController should not be created when interactive controls are disabled")
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
+        _ShouldNotBeCreatedController,
+    )
+
+    summary = run_simulation(
+        contract,
+        dry_run=True,
+        realtime_chat=True,
+        interactive_realtime_controls=False,
+    )
+
+    assert summary["stopped_early"] is False
+    assert summary["total_turns"] == 3

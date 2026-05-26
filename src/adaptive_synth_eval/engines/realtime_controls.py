@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from contextlib import redirect_stderr
@@ -29,7 +30,7 @@ class RealtimeChatController:
         "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
         "[p]ause/resume, [q]uit, style <default|aggressive|polite|concise|confused|anxious>"
     )
-    PROMPT_TEXT = "⚡ realtime> "
+    PROMPT_TEXT = "⚡> "
 
     def __init__(
             self,
@@ -50,6 +51,10 @@ class RealtimeChatController:
         self._behavior_mode = "default"
         self._patched_logging_handlers: list[tuple[logging.StreamHandler, object]] = []
         self._temporary_logger_levels: list[tuple[logging.Logger, int]] = []
+        # Default keeps INFO logs visible; set REALTIME_SUPPRESS_INFO_LOGS=true to silence noisy transport logs.
+        self._suppress_info_logs = os.getenv("REALTIME_SUPPRESS_INFO_LOGS", "false").lower() in {
+            "1", "true", "yes", "y"
+        }
 
     @property
     def current_delay_seconds(self) -> float:
@@ -78,7 +83,8 @@ class RealtimeChatController:
             return False
 
         self._patch_logging_streams_for_prompt()
-        self._reduce_noisy_loggers_for_interactive_prompt()
+        if self._suppress_info_logs:
+            self._reduce_noisy_loggers_for_interactive_prompt()
         self._input_thread = threading.Thread(target=self._input_loop, name="realtime-chat-controls", daemon=True)
         self._input_thread.start()
         print(self.COMMAND_HELP)
@@ -89,7 +95,8 @@ class RealtimeChatController:
         self._stop_event.set()
         self._paused_event.clear()
         self._restore_logging_streams()
-        self._restore_logger_levels()
+        if self._suppress_info_logs:
+            self._restore_logger_levels()
 
     def apply_command(self, command: str) -> str:
         """Apply a command and return a status line suitable for console output."""
@@ -211,7 +218,7 @@ class RealtimeChatController:
                 print(message)
 
     def _patch_logging_streams_for_prompt(self) -> None:
-        """Ensure logs start on a fresh line while interactive prompt is active."""
+        """Route logger streams through current stdout so prompt_toolkit can redraw safely."""
         if self._patched_logging_handlers:
             return
 
@@ -230,7 +237,7 @@ class RealtimeChatController:
                     continue
                 seen_handlers.add(id(handler))
                 original_stream = handler.stream
-                handler.setStream(_PromptFriendlyLogStream(original_stream))
+                handler.setStream(_PromptFriendlyLogStream())
                 self._patched_logging_handlers.append((handler, original_stream))
 
     def _restore_logging_streams(self) -> None:
@@ -260,10 +267,9 @@ class RealtimeChatController:
 
 
 class _PromptFriendlyLogStream:
-    """Stream wrapper that keeps log lines off the active prompt line."""
+    """Stream wrapper that writes to current stdout (prompt-aware when patched)."""
 
-    def __init__(self, wrapped_stream):
-        self._wrapped_stream = wrapped_stream
+    def __init__(self):
         self._lock = threading.Lock()
 
     def write(self, text):
@@ -273,13 +279,17 @@ class _PromptFriendlyLogStream:
         if not value:
             return 0
 
+        import sys
+
         with self._lock:
-            if value != "\n" and not value.startswith("\n"):
-                self._wrapped_stream.write("\n")
-            return self._wrapped_stream.write(value)
+            return sys.stdout.write(value)
 
     def flush(self):
-        return self._wrapped_stream.flush()
+        import sys
+
+        return sys.stdout.flush()
 
     def __getattr__(self, item):
-        return getattr(self._wrapped_stream, item)
+        import sys
+
+        return getattr(sys.stdout, item)
