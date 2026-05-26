@@ -30,7 +30,7 @@ Run a focused chatbot unit test:
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 
-Output conversations in human-readable format (with Human/Bot labels):
+Output conversations in human-readable format (with Simulated Human/Bot labels):
 
 ```bash
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
@@ -38,7 +38,7 @@ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contra
 
 This generates a `conversations.txt` file in the output directory with each conversation formatted as:
 - Conversation metadata (ID, session, persona, scenario, synthetic day)
-- Alternating "Human (Turn N):" and "Bot (Turn N):" messages
+- Alternating "Simulated Human (Turn N):" and "Bot (Turn N):" messages
 - Error indicators if any occurred
 
 See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
@@ -49,11 +49,27 @@ Stream simulated Human/Bot chat to the console in real time:
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
 ```
 
+Disable interactive runtime controls during realtime chat (controls are enabled by default with `--realtime-chat`):
+
+```bash
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat --no-interactive-realtime-controls
+```
+
 How `--realtime-chat` works:
 - It is opt-in and only runs when `persona_pool` contains exactly one persona.
 - For single-persona contracts, each turn is printed live as alternating Human and Assistant panels.
 - For multi-persona contracts, live output is skipped and a console notice is printed.
 - It does not replace output artifacts; files like `chat_history.jsonl` and `conversations.txt` (when enabled) are still generated normally.
+
+How `--interactive-realtime-controls` works:
+- It is enabled by default when `--realtime-chat` is enabled.
+- Use `--no-interactive-realtime-controls` to turn it off.
+- During the run, type a command and press Enter to control playback.
+- Supported commands: `h/help`, `s/status`, `+/faster`, `-/slower`, `p/pause`, `q/stop`, `style <mode>`.
+- Behavior modes for `style`: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`.
+- Behavior changes apply to upcoming generated user turns, so you can steer conversation tone live.
+- The `realtime>` prompt remains stable while logs stream above it (Copilot CLI-style input behavior).
+- Controls are ephemeral and end automatically when the run completes or is stopped.
 
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.
 

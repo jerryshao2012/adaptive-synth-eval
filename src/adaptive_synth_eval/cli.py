@@ -21,11 +21,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run":
             contract = load_contract(args.contract)
+            interactive_controls = args.interactive_realtime_controls
+            if interactive_controls is None:
+                interactive_controls = args.realtime_chat
             summary = run_simulation(
                 contract,
                 dry_run=args.dry_run,
                 output_conversations=args.output_conversations,
                 realtime_chat=args.realtime_chat,
+                interactive_realtime_controls=interactive_controls,
             )
             print(f"Run complete: {summary['run_id']}")
             print(json.dumps(summary, indent=2))
@@ -62,6 +66,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--realtime-chat",
         action="store_true",
         help="Stream simulated human and chatbot messages to console in real time (only when persona_pool has one persona)",
+    )
+    run.add_argument(
+        "--interactive-realtime-controls",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable runtime controls during --realtime-chat (default: enabled with --realtime-chat). "
+            "Use --no-interactive-realtime-controls to disable."
+        ),
     )
     summarize = sub.add_parser("summarize")
     summarize.add_argument("--run-id", required=True)

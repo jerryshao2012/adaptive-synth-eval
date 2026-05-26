@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.schemas import FailureInjection, Persona, Scenario
-from adaptive_synth_eval.generation.turns import generate_turns
+from adaptive_synth_eval.generation.turns import UserSimulator, generate_turns
 
 
 def test_generate_turns_applies_failure_modes_and_metadata():
@@ -91,3 +91,29 @@ def test_llm_client_auto_detects_ollama_provider():
     }):
         client = LLMClient(enabled=False)
         assert client.model_provider == "ollama"
+
+
+def test_generate_turn_behavior_override_changes_fallback_and_metadata():
+    persona = Persona(
+        persona_id="P001",
+        role="new_employee",
+        location="Canada",
+        seniority="junior",
+        communication_style="confused_but_polite",
+        hr_familiarity="low",
+        privacy_sensitivity="medium",
+    )
+    scenario = Scenario(
+        scenario_id="S001",
+        domain="parental_leave_policy",
+        intent="understand_eligibility",
+        expected_retrieval_topics=["parental_leave"],
+        failure_injection=FailureInjection(),
+        success_criteria={"answers_grounded_in_policy": True},
+    )
+
+    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=3, seed=42)
+    turn = simulator.generate_turn(turn_id=1, previous_bot_response=None, behavior_override="aggressive")
+
+    assert turn.generation_metadata["behavior_mode"] == "aggressive"
+    assert "I need a clear answer now" in turn.user_message

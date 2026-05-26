@@ -8,7 +8,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-console = Console()
+
+def _console() -> Console:
+    """Create a Console bound to current stdio streams.
+
+    Using a fresh Console ensures prompt_toolkit patched stdout/stderr interception
+    can keep the interactive `realtime>` input line stable while logs stream.
+    """
+    return Console(file=sys.stdout)
 
 
 class HumanMessage:
@@ -62,12 +69,13 @@ def format_message_content(message):
 
 def format_messages(messages):
     """Format and display a list of messages with Rich formatting."""
+    console = _console()
     for m in messages:
         msg_type = m.__class__.__name__.replace("Message", "")
         content = format_message_content(m)
 
         if msg_type == "Human":
-            console.print(Panel(content, title="🧑 Human", border_style="blue"))
+            console.print(Panel(content, title="🧑 Simulated Human", border_style="blue"))
         elif msg_type == "Ai":
             console.print(Panel(content, title="🤖 Assistant", border_style="green"))
         elif msg_type == "Tool":
@@ -94,7 +102,8 @@ def stream_simulated_chat_turn(
         human_message: str,
         bot_message: str,
 ) -> None:
-    """Render a single simulated human<->bot turn in real time."""
+    """Render a single simulated-human<->assistant turn in real time."""
+    console = _console()
     console.rule(
         f"Conversation {conversation_id} | Persona {persona_id} | Scenario {scenario_id} | Turn {turn_id}"
     )
@@ -120,6 +129,7 @@ def show_prompt(prompt_text: str, title: str = "Prompt", border_style: str = "bl
     )  # Highlight sub-headers
 
     # Display in a panel for better presentation
+    console = _console()
     console.print(
         Panel(
             formatted_text,

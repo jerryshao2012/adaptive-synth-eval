@@ -10,11 +10,11 @@ from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 
 
 def test_output_conversations():
-    """Test that conversations.txt is generated with Human/Bot labels."""
-    
+    """Test that conversations.txt is generated with Simulated Human/Bot labels."""
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        
+
         # Create a minimal contract
         contract_data = {
             "simulation_suite": {
@@ -58,39 +58,39 @@ def test_output_conversations():
             },
             "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "test_run"},
         }
-        
+
         contract_path = tmp_path / "contract.json"
         contract_path.write_text(json.dumps(contract_data))
-        
+
         # Load and run simulation with output_conversations=True
         contract = load_contract(contract_path)
         summary = run_simulation(contract, dry_run=True, output_conversations=True)
-        
+
         # Check that conversations.txt was created
         conv_file = tmp_path / "outputs" / "runs" / "test_run" / "conversations.txt"
-        
+
         print(f"✓ Summary: {summary['total_conversations']} conversations, {summary['total_turns']} turns")
         print(f"✓ Output directory: {summary['output_dir']}")
-        
+
         if not conv_file.exists():
             print("✗ FAILED: conversations.txt was not created")
             return False
-        
+
         print("✓ conversations.txt exists")
-        
+
         # Read and verify content
         content = conv_file.read_text(encoding="utf-8")
-        
+
         # Check for expected markers
         checks = [
-            ("Human (Turn 1):", "Human label"),
+            ("Simulated Human (Turn 1):", "Simulated Human label"),
             ("Bot (Turn 1):", "Bot label"),
             ("Conversation ID:", "Conversation header"),
             ("Persona: P001", "Persona info"),
             ("Scenario: S001", "Scenario info"),
             ("=", "Separator lines"),
         ]
-        
+
         all_passed = True
         for marker, description in checks:
             if marker in content:
@@ -98,7 +98,7 @@ def test_output_conversations():
             else:
                 print(f"✗ Missing {description}: '{marker}'")
                 all_passed = False
-        
+
         if all_passed:
             print("\n✅ All checks passed!")
             print("\n--- Sample of conversations.txt ---")
@@ -108,7 +108,7 @@ def test_output_conversations():
             print("...\n")
         else:
             print("\n❌ Some checks failed")
-        
+
         return all_passed
 
 

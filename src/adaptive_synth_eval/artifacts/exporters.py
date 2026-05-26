@@ -47,44 +47,44 @@ class ArtifactWriter:
         return path
 
     def write_conversations_txt(self, records: list[ChatHistoryRecord]) -> Path:
-        """Write conversations in human-readable format with Human/Bot labels.
-        
+        """Write conversations in human-readable format with Simulated Human/Bot labels.
+
         Groups turns by conversation_id and formats them as a dialogue.
         """
         path = self.run_dir / "conversations.txt"
-        
+
         # Group records by conversation_id
         conversations = {}
         for record in records:
             if record.conversation_id not in conversations:
                 conversations[record.conversation_id] = []
             conversations[record.conversation_id].append(record)
-        
+
         with path.open("w", encoding="utf-8") as handle:
             for conv_id in sorted(conversations.keys()):
                 turns = conversations[conv_id]
                 # Sort turns by turn_id
                 turns.sort(key=lambda r: r.turn_id)
-                
-                handle.write(f"{'='*80}\n")
+
+                handle.write(f"{'=' * 80}\n")
                 handle.write(f"Conversation ID: {conv_id}\n")
                 handle.write(f"Session ID: {turns[0].session_id}\n")
                 handle.write(f"Persona: {turns[0].persona_id}\n")
                 handle.write(f"Scenario: {turns[0].scenario_id}\n")
                 handle.write(f"Synthetic Day: {turns[0].synthetic_day}\n")
-                handle.write(f"{'='*80}\n\n")
-                
+                handle.write(f"{'=' * 80}\n\n")
+
                 for turn in turns:
-                    handle.write(f"Human (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
+                    handle.write(f"Simulated Human (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
                     handle.write(f"Bot (Turn {turn.turn_id}):\n{turn.bot_response}\n\n")
-                    
+
                     if turn.error:
                         handle.write(f"[ERROR: {turn.error}]\n\n")
-                    
+
                     handle.write(f"---\n\n")
-                
-                handle.write(f"\n{'='*80}\n\n\n")
-        
+
+                handle.write(f"\n{'=' * 80}\n\n\n")
+
         return path
 
     def _write_csv(self, name: str, rows: list[dict]) -> Path:

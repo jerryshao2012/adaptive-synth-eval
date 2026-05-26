@@ -9,6 +9,7 @@ from adaptive_synth_eval.clients.chatbot import ChatbotClient
 from adaptive_synth_eval.clients.utils import stream_simulated_chat_turn
 from adaptive_synth_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
+from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.generation.traffic import build_run_plan
 from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
@@ -21,6 +22,7 @@ def run_simulation(
         dry_run: bool = False,
         output_conversations: bool = False,
         realtime_chat: bool = False,
+        interactive_realtime_controls: bool = False,
 ) -> dict:
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
@@ -40,9 +42,19 @@ def run_simulation(
     score_rows = []
     errors = 0
     realtime_chat_enabled = realtime_chat and len(contract.persona_pool) == 1
+    stopped_early = False
+    realtime_controller: RealtimeChatController | None = None
 
     if realtime_chat and not realtime_chat_enabled:
         print("Realtime chat display is only enabled when persona_pool has exactly one persona; skipping live output.")
+    if interactive_realtime_controls and not realtime_chat:
+        print("Interactive realtime controls require --realtime-chat; skipping controls.")
+    if interactive_realtime_controls and realtime_chat and not realtime_chat_enabled:
+        print("Interactive realtime controls were requested, but realtime chat is disabled for multi-persona runs.")
+
+    if realtime_chat_enabled and interactive_realtime_controls:
+        realtime_controller = RealtimeChatController()
+        realtime_controller.start()
 
     def process_conversation(planned):
         local_records = []
@@ -61,12 +73,22 @@ def run_simulation(
             "persona_id": planned.persona_id,
             "scenario_id": planned.scenario_id,
             "synthetic_day": planned.synthetic_day.isoformat(),
-            "turn_count": planned.turn_count,
+            "turn_count": 0,
         }
 
         previous_bot_response = None
         for turn_id in range(1, planned.turn_count + 1):
-            turn = simulator.generate_turn(turn_id, previous_bot_response)
+            if realtime_controller and realtime_controller.stop_requested:
+                break
+            if realtime_controller and not realtime_controller.wait_if_paused():
+                break
+
+            behavior_override = realtime_controller.behavior_mode if realtime_controller else None
+            turn = simulator.generate_turn(
+                turn_id,
+                previous_bot_response,
+                behavior_override=behavior_override,
+            )
             response = client.send(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
@@ -121,6 +143,7 @@ def run_simulation(
             )
             local_records.append(record)
             local_turn_rows.append(record.to_dict())
+            local_conversation_row["turn_count"] += 1
             local_score_rows.append(
                 {
                     "conversation_id": planned.conversation_id,
@@ -133,25 +156,37 @@ def run_simulation(
                 }
             )
 
+            if realtime_controller and not realtime_controller.wait_for_turn_delay():
+                break
+
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
 
-    if realtime_chat_enabled:
-        # Keep live transcript ordering stable for single-persona runs.
-        for planned in plan:
-            conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = process_conversation(planned)
-            conversation_rows.append(conv_row)
-            records.extend(loc_recs)
-            turn_rows.extend(loc_turn_rows)
-            score_rows.extend(loc_score_rows)
-            errors += loc_errs
-    else:
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation, plan):
+    try:
+        if realtime_chat_enabled:
+            # Keep live transcript ordering stable for single-persona runs.
+            for planned in plan:
+                conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = process_conversation(planned)
                 conversation_rows.append(conv_row)
                 records.extend(loc_recs)
                 turn_rows.extend(loc_turn_rows)
                 score_rows.extend(loc_score_rows)
                 errors += loc_errs
+
+                if realtime_controller and realtime_controller.stop_requested:
+                    stopped_early = True
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in executor.map(process_conversation,
+                                                                                                plan):
+                    conversation_rows.append(conv_row)
+                    records.extend(loc_recs)
+                    turn_rows.extend(loc_turn_rows)
+                    score_rows.extend(loc_score_rows)
+                    errors += loc_errs
+    finally:
+        if realtime_controller:
+            realtime_controller.stop()
 
     summary = {
         "run_id": run_id,
@@ -159,6 +194,7 @@ def run_simulation(
         "total_turns": len(records),
         "errors": errors,
         "dry_run": dry_run,
+        "stopped_early": stopped_early,
         "output_dir": str(writer.run_dir),
     }
     writer.write_json("contract.normalized.json", contract_to_dict(contract))

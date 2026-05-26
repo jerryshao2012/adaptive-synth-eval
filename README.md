@@ -147,11 +147,20 @@ uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_histo
 # Run a dedicated chatbot unit test contract
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 
-# Output conversations in human-readable format (with Human/Bot labels)
+# Output conversations in human-readable format (with Simulated Human/Bot labels)
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
 
 # Stream simulated Human/Bot chat live in console (single-persona contracts)
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+
+# Realtime chat with runtime controls is default with --realtime-chat
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+
+# Disable runtime controls explicitly
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat --no-interactive-realtime-controls
+
+# This is a real test not a dry-run
+ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 
 # Summarize a previous run
 uv run adaptive-synth-eval summarize --run-id one_week_chat_history
@@ -292,6 +301,36 @@ The LLM-based user simulation is powered by the following components:
 - `conversations.txt` (when using `--output-conversations` flag)
 
 `--realtime-chat` streams conversation turns directly in the terminal and is enabled only when `persona_pool` has exactly one persona. For multi-persona contracts, the run continues and live output is skipped.
+
+`--realtime-chat` enables interactive realtime controls by default, giving you an ephemeral command prompt during the run. This gives a Claude Code / Copilot CLI-style experience where you can influence playback while the simulator talks to the chatbot. Use `--no-interactive-realtime-controls` to turn controls off.
+
+Available runtime commands:
+- `h` or `help`: show controls
+- `s` or `status`: show current delay and mode
+- `+` or `faster`: speed up playback
+- `-` or `slower`: slow down playback
+- `p` or `pause`: toggle pause/resume
+- `q` or `stop`: stop the realtime run early
+- `style <mode>`: change user behavior for upcoming turns
+
+Input experience:
+- The `realtime>` input line stays stable while conversation logs continue above it (Copilot CLI-style terminal behavior).
+- If interactive terminal capabilities are unavailable, the CLI falls back to standard line input.
+
+Supported behavior modes:
+- `default`
+- `aggressive`
+- `polite`
+- `concise`
+- `confused`
+- `anxious`
+
+Examples while the run is active:
+- `style aggressive`
+- `style polite`
+- `style default`
+
+The controls only exist for the active realtime run. When the run completes or you stop it, the input prompt is removed automatically.
 
 ## Tests
 
