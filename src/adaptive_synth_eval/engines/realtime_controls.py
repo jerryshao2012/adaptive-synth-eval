@@ -59,9 +59,7 @@ class RealtimeChatController:
         self._state = RealtimeControlState(
             delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
         )
-        self._lock = threading.Lock()
-        self._paused_event = threading.Event()
-        self._stop_event = threading.Event()
+        self._state_cv = threading.Condition(threading.Lock())
         self._input_thread: threading.Thread | None = None
         self._patched_logging_handlers: list[tuple[logging.StreamHandler[Any], Any]] = []
         self._temporary_logger_levels: list[tuple[logging.Logger, int]] = []
@@ -72,20 +70,22 @@ class RealtimeChatController:
 
     @property
     def current_delay_seconds(self) -> float:
-        with self._lock:
+        with self._state_cv:
             return self._state.delay_seconds
 
     @property
     def is_paused(self) -> bool:
-        return self._paused_event.is_set()
+        with self._state_cv:
+            return self._state.paused
 
     @property
     def stop_requested(self) -> bool:
-        return self._stop_event.is_set()
+        with self._state_cv:
+            return self._state.stop_requested
 
     @property
     def behavior_mode(self) -> str:
-        with self._lock:
+        with self._state_cv:
             return self._state.behavior_mode
 
     def start(self) -> bool:
@@ -104,11 +104,10 @@ class RealtimeChatController:
         return True
 
     def stop(self) -> None:
-        with self._lock:
+        with self._state_cv:
             self._state.stop_requested = True
             self._state.paused = False
-        self._stop_event.set()
-        self._paused_event.clear()
+            self._state_cv.notify_all()
         self._restore_logging_streams()
         if self._suppress_info_logs:
             self._restore_logger_levels()
@@ -129,39 +128,39 @@ class RealtimeChatController:
         if normalized in {"style", "behavior", "mode"}:
             return "Usage: style <default|aggressive|polite|concise|confused|anxious>"
         if normalized in {"+", "f", "faster"}:
-            with self._lock:
+            with self._state_cv:
                 self._state.delay_seconds = max(
                     self._min_delay_seconds,
                     self._state.delay_seconds - self._delay_step_seconds,
                 )
             return self._status_text(prefix="Playback speed increased")
         if normalized in {"-", "l", "slower"}:
-            with self._lock:
+            with self._state_cv:
                 self._state.delay_seconds = min(
                     self._max_delay_seconds,
                     self._state.delay_seconds + self._delay_step_seconds,
                 )
             return self._status_text(prefix="Playback speed decreased")
         if normalized in {"p", "pause"}:
-            if self._paused_event.is_set():
-                self._paused_event.clear()
-                with self._lock:
+            with self._state_cv:
+                if self._state.paused:
                     self._state.paused = False
-                return self._status_text(prefix="Playback resumed")
-            self._paused_event.set()
-            with self._lock:
-                self._state.paused = True
-            return self._status_text(prefix="Playback paused")
+                    self._state_cv.notify_all()
+                    status_prefix = "Playback resumed"
+                else:
+                    self._state.paused = True
+                    status_prefix = "Playback paused"
+            return self._status_text(prefix=status_prefix)
         if normalized in {"r", "resume"}:
-            self._paused_event.clear()
-            with self._lock:
+            with self._state_cv:
                 self._state.paused = False
+                self._state_cv.notify_all()
             return self._status_text(prefix="Playback resumed")
         if normalized in {"q", "quit", "stop", "exit"}:
-            with self._lock:
+            with self._state_cv:
                 self._state.stop_requested = True
-            self._paused_event.clear()
-            self._stop_event.set()
+                self._state.paused = False
+                self._state_cv.notify_all()
             return "Stop requested. Finishing current turn and ending realtime run."
         if not normalized:
             return ""
@@ -169,33 +168,46 @@ class RealtimeChatController:
 
     def wait_if_paused(self) -> bool:
         """Block while paused. Return False if stop requested."""
-        while self._paused_event.is_set() and not self._stop_event.is_set():
-            time.sleep(0.05)
-        return not self._stop_event.is_set()
+        with self._state_cv:
+            while self._state.paused and not self._state.stop_requested:
+                self._state_cv.wait(timeout=0.05)
+            return not self._state.stop_requested
 
     def wait_for_turn_delay(self) -> bool:
         """Wait between turns while allowing pause/stop controls to take effect quickly."""
-        target = self.current_delay_seconds
-        if target <= 0:
-            return not self._stop_event.is_set()
+        with self._state_cv:
+            remaining = self._state.delay_seconds
+            if remaining <= 0:
+                return not self._state.stop_requested
 
-        elapsed = 0.0
-        tick = 0.05
-        while elapsed < target:
-            if self._stop_event.is_set():
-                return False
-            if self._paused_event.is_set() and not self.wait_if_paused():
-                return False
-            sleep_for = min(tick, target - elapsed)
-            time.sleep(sleep_for)
-            elapsed += sleep_for
-        return not self._stop_event.is_set()
+            tick = 0.05
+            while remaining > 0:
+                if self._state.stop_requested:
+                    return False
+
+                if self._state.paused:
+                    self._state_cv.wait_for(
+                        lambda: (not self._state.paused) or self._state.stop_requested,
+                        timeout=0.05,
+                    )
+                    continue
+
+                sleep_for = min(tick, remaining)
+                start = time.monotonic()
+                self._state_cv.wait(timeout=sleep_for)
+                elapsed = time.monotonic() - start
+                remaining = max(0.0, remaining - elapsed)
+
+            return not self._state.stop_requested
 
     def _status_text(self, *, prefix: str = "Status") -> str:
-        paused_text = "paused" if self._paused_event.is_set() else "running"
+        with self._state_cv:
+            paused_text = "paused" if self._state.paused else "running"
+            delay = self._state.delay_seconds
+            behavior = self._state.behavior_mode
         return (
-            f"{prefix}: delay={self.current_delay_seconds:.2f}s, "
-            f"mode={paused_text}, behavior={self.behavior_mode}"
+            f"{prefix}: delay={delay:.2f}s, "
+            f"mode={paused_text}, behavior={behavior}"
         )
 
     def _set_behavior_mode(self, requested: str) -> str:
@@ -203,7 +215,7 @@ class RealtimeChatController:
             supported = ", ".join(sorted(self.SUPPORTED_BEHAVIORS))
             return f"Unsupported behavior: {requested}. Supported: {supported}"
 
-        with self._lock:
+        with self._state_cv:
             self._state.behavior_mode = requested
 
         return self._status_text(prefix="Behavior updated")
@@ -216,7 +228,10 @@ class RealtimeChatController:
         import sys
 
         session = PromptSession()
-        while not self._stop_event.is_set():
+        while True:
+            with self._state_cv:
+                if self._state.stop_requested:
+                    break
             try:
                 # Keep the prompt stable while concurrent stdout/stderr lines are printed.
                 with patch_stdout(raw=True), redirect_stderr(sys.stdout):
@@ -224,7 +239,10 @@ class RealtimeChatController:
             except EOFError:
                 return
             except KeyboardInterrupt:
-                self._stop_event.set()
+                with self._state_cv:
+                    self._state.stop_requested = True
+                    self._state.paused = False
+                    self._state_cv.notify_all()
                 return
 
             message = self.apply_command(raw)
@@ -233,13 +251,19 @@ class RealtimeChatController:
 
     def _input_loop_basic(self) -> None:
         """Fallback line input when prompt_toolkit is unavailable."""
-        while not self._stop_event.is_set():
+        while True:
+            with self._state_cv:
+                if self._state.stop_requested:
+                    break
             try:
                 raw = input(self.PROMPT_TEXT)
             except EOFError:
                 return
             except KeyboardInterrupt:
-                self._stop_event.set()
+                with self._state_cv:
+                    self._state.stop_requested = True
+                    self._state.paused = False
+                    self._state_cv.notify_all()
                 return
 
             message = self.apply_command(raw)

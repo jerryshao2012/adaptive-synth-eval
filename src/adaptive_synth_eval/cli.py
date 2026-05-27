@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from adaptive_synth_eval.clients.logger_utils import setup_logger
@@ -20,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
             for warning in contract.warnings:
                 logger.warning(warning)
             logger.info("Contract valid")
+            print("Contract valid")
             return 0
         if args.command == "run":
             contract = load_contract(args.contract)
@@ -35,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             logger.info("Run complete: %s", summary['run_id'])
             logger.info(json.dumps(summary, indent=2))
+            print(f"Run complete: {summary['run_id']}")
             return 0
         if args.command == "summarize":
             summary_path = Path(args.output_dir) / "runs" / args.run_id / "run_summary.json"
@@ -47,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ContractError as exc:
         logger.error(str(exc))
+        print(str(exc), file=sys.stderr)
         return 2
 
 

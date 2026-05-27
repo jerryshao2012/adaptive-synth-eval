@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,9 +98,24 @@ class PersonaMarkdownMemory:
         with lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             content = self.to_markdown()
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            tmp_path.write_text(content, encoding="utf-8")
-            tmp_path.replace(path)
+            # Use a unique temp file and retry replace to tolerate transient file locks on Windows.
+            tmp_path = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
+            try:
+                tmp_path.write_text(content, encoding="utf-8")
+                for attempt in range(6):
+                    try:
+                        os.replace(tmp_path, path)
+                        return
+                    except PermissionError:
+                        if attempt == 5:
+                            raise
+                        time.sleep(0.02 * (attempt + 1))
+            finally:
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
 
     def to_markdown(self) -> str:
         md = []

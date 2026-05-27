@@ -67,6 +67,7 @@ async def run_simulation_async(
     realtime_chat_enabled = realtime_chat and len(contract.persona_pool) == 1
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
+    persona_locks = {persona.persona_id: asyncio.Lock() for persona in contract.persona_pool}
 
     if realtime_chat and not realtime_chat_enabled:
         logger.warning(
@@ -82,6 +83,10 @@ async def run_simulation_async(
         realtime_controller.start()
 
     async def process_conversation(planned):
+        async with persona_locks[planned.persona_id]:
+            return await _process_conversation_locked(planned)
+
+    async def _process_conversation_locked(planned):
         local_records = []
         local_turn_rows = []
         local_score_rows = []
