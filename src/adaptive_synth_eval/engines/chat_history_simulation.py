@@ -69,11 +69,13 @@ async def run_simulation_async(
     realtime_controller: RealtimeChatController | None = None
 
     if realtime_chat and not realtime_chat_enabled:
-        print("Realtime chat display is only enabled when persona_pool has exactly one persona; skipping live output.")
+        logger.warning(
+            "Realtime chat display is only enabled when persona_pool has exactly one persona; skipping live output.")
     if interactive_realtime_controls and not realtime_chat:
-        print("Interactive realtime controls require --realtime-chat; skipping controls.")
+        logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
     if interactive_realtime_controls and realtime_chat and not realtime_chat_enabled:
-        print("Interactive realtime controls were requested, but realtime chat is disabled for multi-persona runs.")
+        logger.warning(
+            "Interactive realtime controls were requested, but realtime chat is disabled for multi-persona runs.")
 
     if realtime_chat_enabled and interactive_realtime_controls:
         realtime_controller = RealtimeChatController()

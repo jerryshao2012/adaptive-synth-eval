@@ -5,8 +5,11 @@ import json
 import sys
 from pathlib import Path
 
+from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError, load_contract
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
+
+logger = setup_logger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,8 +19,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-contract":
             contract = load_contract(args.contract)
             for warning in contract.warnings:
-                print(f"Warning: {warning}", file=sys.stderr)
-            print("Contract valid")
+                logger.warning(warning)
+            logger.info("Contract valid")
             return 0
         if args.command == "run":
             contract = load_contract(args.contract)
@@ -31,20 +34,20 @@ def main(argv: list[str] | None = None) -> int:
                 realtime_chat=args.realtime_chat,
                 interactive_realtime_controls=interactive_controls,
             )
-            print(f"Run complete: {summary['run_id']}")
-            print(json.dumps(summary, indent=2))
+            logger.info("Run complete: %s", summary['run_id'])
+            logger.info(json.dumps(summary, indent=2))
             return 0
         if args.command == "summarize":
             summary_path = Path(args.output_dir) / "runs" / args.run_id / "run_summary.json"
             if not summary_path.exists():
-                print(f"Run summary not found: {summary_path}", file=sys.stderr)
+                logger.error("Run summary not found: %s", summary_path)
                 return 2
             print(summary_path.read_text(encoding="utf-8"))
             return 0
         parser.print_help()
         return 1
     except ContractError as exc:
-        print(str(exc), file=sys.stderr)
+        logger.error(str(exc))
         return 2
 
 

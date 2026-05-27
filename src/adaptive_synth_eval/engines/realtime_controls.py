@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from contextlib import redirect_stderr
@@ -14,6 +15,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency fallback
     PromptSession = None
     patch_stdout = None
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -87,10 +90,8 @@ class RealtimeChatController:
 
     def start(self) -> bool:
         """Start background command listener if stdin supports interactive input."""
-        import sys
-
         if not sys.stdin.isatty():
-            print("Realtime controls unavailable: stdin is not interactive. Continuing without controls.")
+            logger.warning("Realtime controls unavailable: stdin is not interactive. Continuing without controls.")
             return False
 
         self._patch_logging_streams_for_prompt()
@@ -98,8 +99,8 @@ class RealtimeChatController:
             self._reduce_noisy_loggers_for_interactive_prompt()
         self._input_thread = threading.Thread(target=self._input_loop, name="realtime-chat-controls", daemon=True)
         self._input_thread.start()
-        print(self.COMMAND_HELP)
-        print("Type a command and press Enter while realtime chat is running.")
+        logger.info(self.COMMAND_HELP)
+        logger.info("Type a command and press Enter while realtime chat is running.")
         return True
 
     def stop(self) -> None:
@@ -228,7 +229,7 @@ class RealtimeChatController:
 
             message = self.apply_command(raw)
             if message:
-                print(message)
+                logger.info(message)
 
     def _input_loop_basic(self) -> None:
         """Fallback line input when prompt_toolkit is unavailable."""
@@ -243,7 +244,7 @@ class RealtimeChatController:
 
             message = self.apply_command(raw)
             if message:
-                print(message)
+                logger.info(message)
 
     def _patch_logging_streams_for_prompt(self) -> None:
         """Route logger streams through current stdout so prompt_toolkit can redraw safely."""
