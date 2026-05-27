@@ -6,6 +6,7 @@ import time
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot import ChatbotClient
+from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.utils import stream_simulated_chat_turn
 from adaptive_synth_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
@@ -14,6 +15,8 @@ from adaptive_synth_eval.generation.traffic import build_run_plan
 from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.scoring.response_quality import score_response
+
+logger = setup_logger(__name__)
 
 
 def run_simulation(
@@ -106,17 +109,50 @@ async def run_simulation_async(
                 break
 
             behavior_override = realtime_controller.behavior_mode if realtime_controller else None
+            logger.info(
+                "[%s|turn=%s] Simulated human thinking started (provider=%s, behavior=%s)...",
+                planned.conversation_id,
+                turn_id,
+                "llm" if simulator.llm_client.enabled else "fallback",
+                behavior_override or "default",
+            )
+            human_start = time.perf_counter()
             turn = await simulator.generate_turn_async(
                 turn_id,
                 previous_bot_response,
                 behavior_override=behavior_override,
             )
+            human_elapsed_ms = (time.perf_counter() - human_start) * 1000
+            logger.info(
+                "[%s|turn=%s] Simulated human thinking completed in %.2f ms; message_length=%s",
+                planned.conversation_id,
+                turn_id,
+                human_elapsed_ms,
+                len(turn.user_message),
+            )
+
+            logger.info(
+                "[%s|turn=%s] Sending request to chatbot and waiting for response...",
+                planned.conversation_id,
+                turn.turn_id,
+            )
+            chatbot_wait_start = time.perf_counter()
             response = await client.send_async(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
                 turn_id=turn.turn_id,
                 user_message=turn.user_message,
                 metadata={"persona_id": planned.persona_id, "scenario_id": planned.scenario_id, "synthetic": True},
+            )
+            chatbot_wait_ms = (time.perf_counter() - chatbot_wait_start) * 1000
+            logger.info(
+                "[%s|turn=%s] Chatbot response received in %.2f ms (http_latency_ms=%s, status=%s, error=%s)",
+                planned.conversation_id,
+                turn.turn_id,
+                chatbot_wait_ms,
+                response.latency_ms,
+                response.status_code,
+                response.error or "none",
             )
             if response.error:
                 local_errors += 1
