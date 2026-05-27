@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from adaptive_synth_eval.clients.logger_utils import setup_logger
@@ -56,13 +55,33 @@ def entrypoint() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="adaptive-synth-eval")
-    sub = parser.add_subparsers(dest="command", required=True)
-    validate = sub.add_parser("validate-contract")
-    validate.add_argument("contract")
-    run = sub.add_parser("run")
-    run.add_argument("--contract", required=True)
-    run.add_argument("--dry-run", action="store_true")
+    parser = argparse.ArgumentParser(
+        prog="adaptive-synth-eval",
+        description=(
+            "Generate synthetic multi-turn chat history data for chatbot evaluation. "
+            "Use subcommands to validate a contract, run a simulation, or summarize a prior run."
+        ),
+    )
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+        title="commands",
+        description="Available operations",
+        metavar="{validate-contract,run,summarize}",
+    )
+    validate = sub.add_parser(
+        "validate-contract",
+        help="Validate a simulation contract file and report schema or config issues",
+        description="Validate a simulation contract file and print warnings if present.",
+    )
+    validate.add_argument("contract", help="Path to a YAML/JSON simulation contract file")
+    run = sub.add_parser(
+        "run",
+        help="Run a synthetic chat simulation from a contract",
+        description="Execute a simulation run from a contract and write artifacts to outputs/runs/<run_id>/.",
+    )
+    run.add_argument("--contract", required=True, help="Path to a YAML/JSON simulation contract file")
+    run.add_argument("--dry-run", action="store_true", help="Skip real chatbot calls and use mock responses")
     run.add_argument("--output-conversations", action="store_true",
                      help="Output conversations in human-readable format with Human/Bot labels")
     run.add_argument(
@@ -79,9 +98,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "Use --no-interactive-realtime-controls to disable."
         ),
     )
-    summarize = sub.add_parser("summarize")
-    summarize.add_argument("--run-id", required=True)
-    summarize.add_argument("--output-dir", default="outputs")
+    summarize = sub.add_parser(
+        "summarize",
+        help="Print run_summary.json for a previous run",
+        description="Load and print the summary JSON for an existing run.",
+    )
+    summarize.add_argument("--run-id", required=True, help="Run ID to summarize")
+    summarize.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory that contains runs/<run_id>/run_summary.json (default: outputs)",
+    )
     return parser
 
 
