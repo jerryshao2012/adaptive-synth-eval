@@ -70,7 +70,7 @@ If your workspace is inside OneDrive on Windows and `uv run` fails with hardlink
 
 ```powershell
 $env:UV_LINK_MODE='copy'
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
 ```
 
 You can also persist this for your user profile:
@@ -96,6 +96,20 @@ You can also persist this for your user profile:
    ```
 
    This is useful for local development because the project uses a `src/` layout, where the importable package lives under `src/adaptive_synth_eval`.
+
+5. **Command Shortcut**: The project exposes a shorthand entrypoint `ase`. Once you run `uv sync` in the workspace, you can execute the CLI via:
+   ```bash
+   uv run ase [COMMAND]
+   ```
+   
+   To use the shortcut command directly from any directory without prefixing `uv run`, install it as a tool:
+   ```bash
+   uv tool install --editable .
+   ```
+   Now you can execute simply:
+   ```bash
+   ase [COMMAND]
+   ```
 
 ### Corporate Environment Setup
 
@@ -173,7 +187,7 @@ To make these settings permanent:
 ### 1. Validate a Contract
 
 ```bash
-uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_contract.yaml
+uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
 ```
 
 ### 2. Run a Dry-Run Simulation
@@ -181,7 +195,7 @@ uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_con
 Test your contract without making real API calls:
 
 ```bash
-uv run adaptive-synth-eval run \
+uv run ase run \
   --contract contracts/examples/chatbot_test_contract.yaml \
   --dry-run
 ```
@@ -191,7 +205,7 @@ uv run adaptive-synth-eval run \
 Export conversations in a readable format with Persona/Bot labels:
 
 ```bash
-uv run adaptive-synth-eval run \
+uv run ase run \
   --contract contracts/examples/chatbot_test_contract.yaml \
   --dry-run \
   --output-conversations
@@ -204,7 +218,7 @@ Output: `outputs/runs/<run_id>/conversations.txt`
 Stream conversations live in your terminal:
 
 ```bash
-uv run adaptive-synth-eval run \
+uv run ase run \
   --contract contracts/examples/chatbot_test_contract.yaml \
   --realtime-chat
 ```
@@ -214,7 +228,7 @@ uv run adaptive-synth-eval run \
 ### 5. Summarize Previous Runs
 
 ```bash
-uv run adaptive-synth-eval summarize --run-id chatbot_test_run
+uv run ase summarize --run-id chatbot_test_run
 ```
 
 Outputs are written under `outputs/runs/<run_id>/`.
@@ -329,7 +343,7 @@ The simulation engine supports both template-based message generation and dynami
 
 5. **Run Test Simulation**:
    ```bash
-   uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+   uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
    ```
 
 ### Enterprise Setup (Azure OpenAI)
@@ -345,7 +359,7 @@ The simulation engine supports both template-based message generation and dynami
 
 2. **Run Simulation**:
    ```bash
-   uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+   uv run ase run --contract contracts/examples/one_week_chat_history.yaml --dry-run
    ```
 
 ### Verify It's Working
@@ -369,7 +383,7 @@ grep "persona_role" outputs/runs/*/conversations.jsonl
 Or enable debug logging to check the provider output:
 ```bash
 export LOG_LEVEL=DEBUG
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 Look for lines like:
 ```
@@ -435,12 +449,12 @@ For full architectural details, see the [Persona Memory Guide](./docs/persona_me
 Validate a simulation contract file:
 
 ```bash
-uv run adaptive-synth-eval validate-contract <contract-file.yaml>
+uv run ase validate-contract <contract-file.yaml>
 ```
 
 **Example**:
 ```bash
-uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_contract.yaml
+uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
 ```
 
 ### run
@@ -448,7 +462,7 @@ uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_con
 Execute a simulation run:
 
 ```bash
-uv run adaptive-synth-eval run --contract <contract-file.yaml> [OPTIONS]
+uv run ase run --contract <contract-file.yaml> [OPTIONS]
 ```
 
 **Options**:
@@ -462,13 +476,13 @@ uv run adaptive-synth-eval run --contract <contract-file.yaml> [OPTIONS]
 **Examples**:
 ```bash
 # Dry run
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 
 # Real run with realtime chat
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 
 # Export readable conversations
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --output-conversations
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --output-conversations
 ```
 
 ### summarize
@@ -476,12 +490,12 @@ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contra
 Print run summary for a previous run:
 
 ```bash
-uv run adaptive-synth-eval summarize --run-id <run-id> [--output-dir outputs]
+uv run ase summarize --run-id <run-id> [--output-dir outputs]
 ```
 
 **Example**:
 ```bash
-uv run adaptive-synth-eval summarize --run-id chatbot_test_run
+uv run ase summarize --run-id chatbot_test_run
 ```
 
 ## Output Artifacts
@@ -561,10 +575,10 @@ style default
 
 ```bash
 # Enable realtime chat with interactive controls (default)
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 
 # Disable interactive controls
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
 ```
 
 > **Note**: Controls are ephemeral—they only exist during the active run. When the run completes or you stop it, the input prompt is removed automatically.
@@ -677,7 +691,7 @@ export SSL_CERT_FILE=/path/to/corporate-ca.pem
 **Solution**:
 ```powershell
 $env:UV_LINK_MODE='copy'
-uv run adaptive-synth-eval run --contract ... --dry-run
+uv run ase run --contract ... --dry-run
 ```
 
 Persist permanently:
@@ -715,7 +729,7 @@ Enable debug logging for detailed troubleshooting:
 
 ```bash
 export LOG_LEVEL=DEBUG
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 
 Look for informative log messages like:

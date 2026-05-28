@@ -83,10 +83,10 @@ This installs:
 
 ```bash
 # Dry-run mode (generates user messages without calling chatbot)
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 
 # Full simulation (calls both user simulation LLM and target chatbot)
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml
 ```
 
 ## Auto-Detection
@@ -208,7 +208,7 @@ Enable debug logging to see LLM interactions:
 
 ```bash
 export LOG_LEVEL=DEBUG
-uv run adaptive-synth-eval run --contract your_contract.yaml
+uv run ase run --contract your_contract.yaml
 ```
 
 ## Architecture Reference
@@ -224,6 +224,6 @@ The implementation follows the pattern from `/Users/jerryshao/Documents/projects
 ## Next Steps
 
 1. Configure your preferred LLM provider in `src/.env`
-2. Run a small test: `uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run`
+2. Run a small test: `uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run`
 3. Inspect generated conversations in `outputs/runs/chatbot_test_run/conversations.jsonl`
 4. Scale up to full simulations once satisfied with message quality

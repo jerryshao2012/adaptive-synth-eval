@@ -1,39 +1,59 @@
 # CLI Usage
 
+For convenience, you can use the shorthand command `ase` instead of the full `adaptive-synth-eval` command.
+
+### Running with uv
+Prefix commands with `uv run ase`:
+```bash
+uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
+```
+
+### Running Globally (No `uv run` prefix)
+You can install the tool globally so that `ase` is available in your PATH from any directory:
+```bash
+uv tool install --editable .
+```
+Then, you can run commands directly:
+```bash
+ase validate-contract contracts/examples/one_week_chat_history.yaml
+```
+
+---
+
 Validate a contract:
 
 ```bash
-uv run adaptive-synth-eval validate-contract contracts/examples/one_week_chat_history.yaml
+uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
 ```
 
 Generate one week of dry-run ChatHistory:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+uv run ase run --contract contracts/examples/one_week_chat_history.yaml --dry-run
 ```
 
 Generate the 10,000-conversation dataset:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/ten_k_conversations.yaml --dry-run
+uv run ase run --contract contracts/examples/ten_k_conversations.yaml --dry-run
 ```
 
 Summarize a run:
 
 ```bash
-uv run adaptive-synth-eval summarize --run-id one_week_chat_history
+uv run ase summarize --run-id one_week_chat_history
 ```
 
 Run a focused chatbot unit test:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 
 Output conversations in human-readable format (with Persona/Bot labels):
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
 ```
 
 This generates a `conversations.txt` file in the output directory with each conversation formatted as:
@@ -46,13 +66,13 @@ See [docs/example_conversations_output.txt](example_conversations_output.txt) fo
 Stream Persona/Bot chat to the console in real time:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 ```
 
 Disable interactive runtime controls during realtime chat (controls are enabled by default with `--realtime-chat`):
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
 ```
 
 How `--realtime-chat` works:
@@ -93,5 +113,5 @@ If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os e
 
 ```powershell
 $env:UV_LINK_MODE='copy'
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
 ```

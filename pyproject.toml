@@ -26,6 +26,7 @@ name = "Developer"
 
 [project.scripts]
 adaptive-synth-eval = "adaptive_synth_eval.cli:entrypoint"
+ase = "adaptive_synth_eval.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]

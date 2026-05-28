@@ -9,7 +9,7 @@
 Recommended first command:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+uv run ase run --contract contracts/examples/one_week_chat_history.yaml --dry-run
 ```
 
 The package does not require production telemetry, Azure AI Evaluation Simulator, or chatbot tool-call support.
