@@ -5,7 +5,7 @@ import time
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
-from adaptive_synth_eval.clients.chatbot import ChatbotClient
+from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.utils import stream_simulated_chat_turn
 from adaptive_synth_eval.config.contract import contract_to_dict
@@ -52,12 +52,7 @@ async def run_simulation_async(
     plan = build_run_plan(contract.traffic, contract.time_window)
     personas = contract.persona_by_id()
     scenarios = contract.scenario_by_id()
-    client = ChatbotClient(
-        endpoint=contract.target_chatbot.endpoint,
-        enabled=contract.target_chatbot.enabled and not dry_run,
-        auth=contract.target_chatbot.auth,
-        timeout_seconds=contract.target_chatbot.timeout_seconds,
-    )
+    client = create_chatbot_client(contract.target_chatbot, dry_run=dry_run)
 
     records: list[ChatHistoryRecord] = []
     conversation_rows = []
@@ -245,7 +240,7 @@ async def run_simulation_async(
                     stopped_early = True
                     break
         else:
-            max_concurrency = max(1, int(getattr(contract.traffic, "max_concurrency", 5) or 5))
+            max_concurrency = _effective_max_concurrency(contract)
             semaphore = asyncio.Semaphore(max_concurrency)
 
             async def limited_process(planned):
@@ -260,6 +255,12 @@ async def run_simulation_async(
                 score_rows.extend(loc_score_rows)
                 errors += loc_errs
     finally:
+        close_client_async = getattr(client, "close_async", None)
+        close_client = getattr(client, "close", None)
+        if close_client_async:
+            await close_client_async()
+        elif close_client:
+            await asyncio.to_thread(close_client)
         if realtime_controller:
             realtime_controller.stop()
 
@@ -285,3 +286,9 @@ async def run_simulation_async(
         writer.write_conversations_txt(records)
 
     return summary
+
+
+def _effective_max_concurrency(contract: SimulationContract) -> int:
+    if contract.target_chatbot.mode == "browser":
+        return 1
+    return max(1, int(getattr(contract.traffic, "max_concurrency", 5) or 5))

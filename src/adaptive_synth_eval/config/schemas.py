@@ -15,11 +15,25 @@ class SimulationSuite:
 
 
 @dataclass(frozen=True)
+class BrowserChatbot:
+    url: str
+    input_selector: str
+    submit_selector: str
+    response_selector: str
+    browser_type: str = "chromium"
+    ready_selector: str | None = None
+    response_timeout_seconds: float = 60.0
+    headless: bool = False
+
+
+@dataclass(frozen=True)
 class TargetChatbot:
     enabled: bool = True
     endpoint: str | None = None
+    mode: str = "api"
     auth: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 60.0
+    browser: BrowserChatbot | None = None
 
 
 @dataclass(frozen=True)

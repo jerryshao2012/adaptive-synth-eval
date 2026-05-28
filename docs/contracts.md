@@ -36,6 +36,34 @@ target_chatbot:
 
 When `CHATBOT_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
 
+## Browser Chatbot Mode
+
+The chatbot can also be driven through a generic browser UI instead of an HTTP API. This is useful when the target chatbot only exposes a web chat surface.
+
+```yaml
+target_chatbot:
+  enabled: true
+  mode: browser
+  browser:
+    browser_type: edge
+    url: "https://chat.example.com"
+    input_selector: "textarea"
+    submit_selector: "button[type='submit']"
+    response_selector: ".bot-message"
+    ready_selector: "textarea"
+    response_timeout_seconds: 60
+    headless: false
+```
+
+Browser mode uses CSS selectors:
+
+- `input_selector`: element that receives the user message.
+- `submit_selector`: element clicked to send the message.
+- `response_selector`: bot message elements; the newest matching element is captured.
+- `ready_selector`: optional element to wait for after page load. Defaults to `input_selector`.
+
+Set `browser_type: edge` to launch Microsoft Edge through Playwright's `msedge` channel. Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max_concurrency` is higher, because a single browser chat page cannot safely process concurrent turns.
+
 ## Examples
 
 - `contracts/examples/one_week_chat_history.yaml`: A comprehensive 7-day simulation plan.

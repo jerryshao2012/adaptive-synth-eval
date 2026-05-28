@@ -73,6 +73,22 @@ How `--interactive-realtime-controls` works:
 
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.
 
+To drive a chatbot through a browser UI instead, set `target_chatbot.mode: browser` and provide CSS selectors for the input, submit button, and bot responses:
+
+```yaml
+target_chatbot:
+  enabled: true
+  mode: browser
+  browser:
+    browser_type: edge
+    url: "https://chat.example.com"
+    input_selector: "textarea"
+    submit_selector: "button[type='submit']"
+    response_selector: ".bot-message"
+```
+
+Browser mode uses Playwright. With `browser_type: edge`, it launches Microsoft Edge via the `msedge` channel and processes chatbot turns sequentially.
+
 If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os error 396`), switch uv to copy mode:
 
 ```powershell

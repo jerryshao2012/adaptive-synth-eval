@@ -3,8 +3,7 @@ import os
 from unittest.mock import patch
 
 import pytest
-
-from adaptive_synth_eval.config.contract import ContractError, load_contract
+from adaptive_synth_eval.config.contract import ContractError, contract_to_dict, load_contract
 
 
 def _base_contract(tmp_path):
@@ -130,3 +129,57 @@ def test_load_contract_resolves_env_vars_without_default(tmp_path):
             del os.environ["CUSTOM_ENDPOINT"]
         contract = load_contract(path)
         assert contract.target_chatbot.endpoint == ""
+
+
+def test_load_contract_parses_browser_chatbot_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["target_chatbot"] = {
+        "enabled": True,
+        "mode": "browser",
+        "browser": {
+            "browser_type": "edge",
+            "url": "https://chat.example.com",
+            "input_selector": "textarea",
+            "submit_selector": "button[type='submit']",
+            "response_selector": ".bot-message",
+            "ready_selector": ".chat-ready",
+            "response_timeout_seconds": 45.0,
+            "headless": True,
+        },
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+
+    contract = load_contract(path)
+
+    assert contract.target_chatbot.mode == "browser"
+    assert contract.target_chatbot.browser is not None
+    assert contract.target_chatbot.browser.browser_type == "edge"
+    assert contract.target_chatbot.browser.url == "https://chat.example.com"
+    assert contract.target_chatbot.browser.input_selector == "textarea"
+    assert contract.target_chatbot.browser.submit_selector == "button[type='submit']"
+    assert contract.target_chatbot.browser.response_selector == ".bot-message"
+    assert contract.target_chatbot.browser.ready_selector == ".chat-ready"
+    assert contract.target_chatbot.browser.response_timeout_seconds == 45.0
+    assert contract.target_chatbot.browser.headless is True
+
+
+def test_contract_to_dict_serializes_browser_chatbot_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["target_chatbot"] = {
+        "enabled": True,
+        "mode": "browser",
+        "browser": {
+            "url": "https://chat.example.com",
+            "input_selector": "textarea",
+            "submit_selector": "button",
+            "response_selector": ".bot-message",
+        },
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+
+    serialized = contract_to_dict(contract)
+
+    assert serialized["target_chatbot"]["browser"]["url"] == "https://chat.example.com"

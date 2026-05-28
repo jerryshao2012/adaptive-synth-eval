@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from adaptive_synth_eval.config.schemas import (
+    BrowserChatbot,
     BurstPattern,
     ConversationTurns,
     FailureInjection,
@@ -52,7 +52,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
             raise ContractError(f"Missing required contract section: {key}")
 
     suite = SimulationSuite(**payload["simulation_suite"])
-    chatbot = TargetChatbot(**payload.get("target_chatbot", {}))
+    chatbot = _parse_target_chatbot(payload.get("target_chatbot", {}))
     window_payload = payload["time_window"]
     window = TimeWindow(
         start_day=date.fromisoformat(str(window_payload["start_day"])),
@@ -82,9 +82,12 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
 
 
 def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
+    target_chatbot = contract.target_chatbot.__dict__.copy()
+    if contract.target_chatbot.browser is not None:
+        target_chatbot["browser"] = contract.target_chatbot.browser.__dict__
     return {
         "simulation_suite": contract.simulation_suite.__dict__,
-        "target_chatbot": contract.target_chatbot.__dict__,
+        "target_chatbot": target_chatbot,
         "time_window": {
             "start_day": contract.time_window.start_day.isoformat(),
             "num_synthetic_days": contract.time_window.num_synthetic_days,
@@ -185,6 +188,14 @@ def _parse_persona(payload: dict[str, Any]) -> Persona:
     _require_keys(payload, required, "persona")
     fields = Persona.__dataclass_fields__.keys()
     return Persona(**{key: payload.get(key) for key in fields if key in payload})
+
+
+def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:
+    browser_payload = payload.get("browser")
+    browser = BrowserChatbot(**browser_payload) if isinstance(browser_payload, dict) else None
+    fields = set(TargetChatbot.__dataclass_fields__.keys()) - {"browser"}
+    values = {key: payload.get(key) for key in fields if key in payload}
+    return TargetChatbot(**values, browser=browser)
 
 
 def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
