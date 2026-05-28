@@ -9,9 +9,10 @@ from functools import wraps
 from typing import Any, Callable, TypeVar, List, Tuple
 
 import tiktoken
+from dotenv import load_dotenv
+
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.utils import str2bool
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()

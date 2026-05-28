@@ -60,10 +60,10 @@ class LLMClient:
         try:
             if self.model_provider == "azure_openai":
                 from langchain_openai import AzureChatOpenAI
-                
+
                 verify_ssl = os.getenv("VERIFY_SSL", "true").lower() != "false"
                 auth_kwargs = self._get_azure_auth_kwargs()
-                
+
                 self._model = AzureChatOpenAI(
                     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                     azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
@@ -72,50 +72,50 @@ class LLMClient:
                     http_client=httpx.Client(verify=verify_ssl),
                     **auth_kwargs,
                 )
-            
+
             elif self.model_provider == "anthropic":
                 from langchain_anthropic import ChatAnthropic
-                
+
                 self._model = ChatAnthropic(
                     model=os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929"),
                     temperature=0.7,
                     api_key=SecretStr(os.getenv("ANTHROPIC_API_KEY", "")),
                 )
-            
+
             elif self.model_provider == "openai":
                 from langchain_openai import ChatOpenAI
-                
+
                 self._model = ChatOpenAI(
                     model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
                     temperature=0.7,
                     api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")),
                 )
-            
+
             elif self.model_provider == "ollama":
                 from langchain_ollama import ChatOllama
-                
+
                 self._model = ChatOllama(
                     model=os.getenv("MODEL_NAME", "qwen3.6:35b-a3b"),
                     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
                     temperature=0.7,
                 )
-            
+
             else:
                 raise ValueError(f"Unsupported model provider: {self.model_provider}")
-        
+
         except ImportError as e:
             raise ImportError(
                 f"Required package for {self.model_provider} not installed. "
                 f"Install with: pip install langchain-{self.model_provider.replace('_', '-')}"
             ) from e
-        
+
         return self._model
 
     def _get_azure_auth_kwargs(self) -> dict:
         """Return authentication kwargs for Azure OpenAI."""
         if os.getenv("AZURE_AUTH_TYPE") == "managed_identity":
             from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
-            
+
             credential = ManagedIdentityCredential(
                 client_id=os.getenv("AZURE_CLIENT_ID")
             )
@@ -130,14 +130,14 @@ class LLMClient:
         """Generate a completion using the configured LLM provider."""
         if not self.enabled:
             return LLMResult(content="", raw={"mock": True, "prompt": prompt}, error="llm_disabled")
-        
+
         if not self.model_provider:
             return LLMResult(
                 content="",
                 raw={"mock": True, "prompt": prompt},
                 error="no_provider_configured"
             )
-        
+
         try:
             model = self._get_model()
             if model is None:
@@ -146,11 +146,11 @@ class LLMClient:
                     raw={"mock": True, "prompt": prompt},
                     error="model_initialization_failed"
                 )
-            
+
             # Use LangChain's invoke method
             response = model.invoke(prompt)
             content = response.content if hasattr(response, 'content') else str(response)
-            
+
             return LLMResult(
                 content=str(content),
                 raw={
@@ -160,7 +160,7 @@ class LLMClient:
                 },
                 error=None,
             )
-        
+
         except Exception as e:
             return LLMResult(
                 content="",

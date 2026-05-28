@@ -30,7 +30,7 @@ Run a focused chatbot unit test:
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 
-Output conversations in human-readable format (with Simulated Human/Bot labels):
+Output conversations in human-readable format (with Persona/Bot labels):
 
 ```bash
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
@@ -38,12 +38,12 @@ uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contra
 
 This generates a `conversations.txt` file in the output directory with each conversation formatted as:
 - Conversation metadata (ID, session, persona, scenario, synthetic day)
-- Alternating "Simulated Human (Turn N):" and "Bot (Turn N):" messages
+- Alternating "Persona (Turn N):" and "Bot (Turn N):" messages
 - Error indicators if any occurred
 
 See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
 
-Stream simulated Human/Bot chat to the console in real time:
+Stream Persona/Bot chat to the console in real time:
 
 ```bash
 uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat

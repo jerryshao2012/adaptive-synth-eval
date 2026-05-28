@@ -10,7 +10,7 @@ from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 
 
 def test_output_conversations():
-    """Test that conversations.txt is generated with Simulated Human/Bot labels."""
+    """Test that conversations.txt is generated with Persona/Bot labels."""
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -83,7 +83,7 @@ def test_output_conversations():
 
         # Check for expected markers
         checks = [
-            ("Simulated Human (Turn 1):", "Simulated Human label"),
+            ("Persona (Turn 1):", "Persona label"),
             ("Bot (Turn 1):", "Bot label"),
             ("Conversation ID:", "Conversation header"),
             ("Persona: P001", "Persona info"),

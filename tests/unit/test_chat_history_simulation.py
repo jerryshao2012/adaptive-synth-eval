@@ -173,9 +173,9 @@ def test_run_simulation_with_output_conversations(tmp_path):
     assert summary["total_conversations"] == 2
     assert (tmp_path / "outputs" / "runs" / "run1" / "conversations.txt").exists()
 
-    # Verify the file contains Simulated Human/Bot labels
+    # Verify the file contains Persona/Bot labels
     content = (tmp_path / "outputs" / "runs" / "run1" / "conversations.txt").read_text(encoding="utf-8")
-    assert "Simulated Human (Turn 1):" in content
+    assert "Persona (Turn 1):" in content
     assert "Bot (Turn 1):" in content
     assert "Conversation ID:" in content
 

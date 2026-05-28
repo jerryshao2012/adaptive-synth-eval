@@ -87,11 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--contract", required=True, help="Path to a YAML/JSON simulation contract file")
     run.add_argument("--dry-run", action="store_true", help="Skip real chatbot calls and use mock responses")
     run.add_argument("--output-conversations", action="store_true",
-                     help="Output conversations in human-readable format with Human/Bot labels")
+                     help="Output conversations in human-readable format with Persona/Bot labels")
     run.add_argument(
         "--realtime-chat",
         action="store_true",
-        help="Stream simulated human and chatbot messages to console in real time (only when persona_pool has one persona)",
+        help="Stream persona and chatbot messages to console in real time (only when persona_pool has one persona)",
     )
     run.add_argument(
         "--interactive-realtime-controls",

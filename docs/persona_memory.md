@@ -1,6 +1,6 @@
 # Persistent Persona Memory System
 
-The `adaptive-synth-eval` tool features a persistent, isolated persona memory system. This allows simulated humans (personas) to retain context across conversations and runs, mimicking how a real human remembers demographics, preferences, settings, and prior interactions.
+The `adaptive-synth-eval` tool features a persistent, isolated persona memory system. This allows personas to retain context across conversations and runs, mimicking how a real human remembers demographics, preferences, settings, and prior interactions.
 
 ---
 

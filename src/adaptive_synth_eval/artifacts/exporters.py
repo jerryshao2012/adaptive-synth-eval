@@ -47,7 +47,7 @@ class ArtifactWriter:
         return path
 
     def write_conversations_txt(self, records: list[ChatHistoryRecord]) -> Path:
-        """Write conversations in human-readable format with Simulated Human/Bot labels.
+        """Write conversations in human-readable format with Persona/Bot labels.
 
         Groups turns by conversation_id and formats them as a dialogue.
         """
@@ -75,7 +75,7 @@ class ArtifactWriter:
                 handle.write(f"{'=' * 80}\n\n")
 
                 for turn in turns:
-                    handle.write(f"Simulated Human (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
+                    handle.write(f"Persona (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
                     handle.write(f"Bot (Turn {turn.turn_id}):\n{turn.bot_response}\n\n")
 
                     if turn.error:

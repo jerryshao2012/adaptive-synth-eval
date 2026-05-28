@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
 from adaptive_synth_eval.config.schemas import (
     BurstPattern,
     ConversationTurns,
@@ -126,6 +127,7 @@ def _resolve_env_vars(value: str) -> str:
     Returns:
         String with environment variables resolved
     """
+
     def replace_env_var(match):
         var_expr = match.group(1)
         # Check for default value syntax: ${VAR:-default}
@@ -134,7 +136,7 @@ def _resolve_env_vars(value: str) -> str:
             return os.getenv(var_name, default_value)
         else:
             return os.getenv(var_expr, '')
-    
+
     # Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
     pattern = r'\$\{([^}]+)\}'
     return re.sub(pattern, replace_env_var, value)
@@ -165,7 +167,7 @@ def _load_payload(path: Path) -> dict[str, Any]:
         payload = json.loads(text)
     else:
         payload = yaml.safe_load(text)
-    
+
     # Resolve environment variables in the entire payload
     return _resolve_env_vars_in_dict(payload)
 

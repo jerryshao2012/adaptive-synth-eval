@@ -75,7 +75,7 @@ def format_messages(messages):
         content = format_message_content(m)
 
         if msg_type == "Human":
-            console.print(Panel(content, title="🧑 Simulated Human", border_style="blue"))
+            console.print(Panel(content, title="🧑 Persona", border_style="blue"))
         elif msg_type == "Ai":
             console.print(Panel(content, title="🤖 Assistant", border_style="green"))
         elif msg_type == "Tool":

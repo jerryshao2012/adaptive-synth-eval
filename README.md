@@ -1,28 +1,61 @@
 # Adaptive Synthetic Eval
 
-Python CLI for generating synthetic multi-turn ChatHistory data for an HR policy chatbot.
+A Python CLI tool for generating synthetic multi-turn chat histories to evaluate HR policy chatbots. This local-first, contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
 
-The active implementation is intentionally local-first:
+## 🎯 Overview
 
-- No production telemetry dependency
-- No Azure AI Evaluation Simulator dependency
-- No chatbot tool-call requirement
-- Contract-driven personas, scenarios, traffic mix, synthetic days, and failure injection
+Adaptive Synthetic Eval helps you:
+- **Generate realistic test data**: Create thousands of diverse, persona-driven conversations
+- **Test chatbot behavior**: Validate responses across different user types, scenarios, and edge cases
+- **Inject failures**: Simulate ambiguous queries, typos, frustration, and policy boundary pressure
+- **Evaluate at scale**: Run concurrent simulations with configurable traffic patterns
+- **Analyze results**: Export structured artifacts (JSONL, CSV, Markdown) for downstream analysis
+
+### Key Features
+
+✅ **Contract-driven configuration** - YAML-based contracts define personas, scenarios, and traffic mix  
+✅ **LLM-powered user simulation** - Dynamic, context-aware message generation using Azure OpenAI, Ollama, Anthropic, or OpenAI  
+✅ **Persistent persona memory** - Markdown-based memory system that evolves across conversations  
+✅ **Real-time chat streaming** - Watch conversations unfold live in your terminal  
+✅ **Interactive runtime controls** - Adjust speed, pause, change user behavior mid-run  
+✅ **Failure injection** - Configurable ambiguity, missing information, typos, and frustration  
+✅ **Local-first design** - No production telemetry or cloud dependencies required  
+✅ **Dry-run mode** - Test contracts and workflows without calling external APIs  
+
+## 📋 Table of Contents
+
+- [Setup](#setup)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [LLM-Based User Simulation](#llm-based-user-simulation)
+- [Persistent Persona Memory](#persistent-persona-memory)
+- [CLI Commands](#cli-commands)
+- [Output Artifacts](#output-artifacts)
+- [Realtime Chat & Controls](#realtime-chat--controls)
+- [Configuration Reference](#configuration-reference)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Troubleshooting](#troubleshooting)
 
 ## Setup
 
-### Prerequisites: Install uv Package Manager
+### Prerequisites
 
-Install [uv](https://docs.astral.sh/uv/) package manager:
+1. **Python 3.11+**
+2. **uv package manager** (recommended)
+
+#### Install uv
 
 ```bash
+# macOS/Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
-*Alternative installation for restricted corporate environments:*
-```bash
+# Alternative via pip
 pip install uv
 ```
+
+> **Note**: If `uv` is not on your PATH, use `python -m uv` instead.
+> For Windows OneDrive users experiencing hardlink errors, set `$env:UV_LINK_MODE='copy'`.
 
 *If `uv` is not available on your system path, you can try:*
 ```bash
@@ -137,36 +170,133 @@ To make these settings permanent:
 
 ## Quick Start
 
+### 1. Validate a Contract
+
 ```bash
-# Validate the one week history contract
-uv run adaptive-synth-eval validate-contract contracts/examples/one_week_chat_history.yaml
+uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_contract.yaml
+```
 
-# Run the simulation in dry-run mode
-uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+### 2. Run a Dry-Run Simulation
 
-# Run a dedicated chatbot unit test contract
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+Test your contract without making real API calls:
 
-# Output conversations in human-readable format (with Simulated Human/Bot labels)
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
+```bash
+uv run adaptive-synth-eval run \
+  --contract contracts/examples/chatbot_test_contract.yaml \
+  --dry-run
+```
 
-# Stream simulated Human/Bot chat live in console (single-persona contracts)
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+### 3. Generate Human-Readable Conversations
 
-# Realtime chat with runtime controls is default with --realtime-chat
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat
+Export conversations in a readable format with Persona/Bot labels:
 
-# Disable runtime controls explicitly
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --realtime-chat --no-interactive-realtime-controls
+```bash
+uv run adaptive-synth-eval run \
+  --contract contracts/examples/chatbot_test_contract.yaml \
+  --dry-run \
+  --output-conversations
+```
 
-# This is a real test not a dry-run
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+Output: `outputs/runs/<run_id>/conversations.txt`
 
-# Summarize a previous run
-uv run adaptive-synth-eval summarize --run-id one_week_chat_history
+### 4. Watch Realtime Chat (Single Persona Only)
+
+Stream conversations live in your terminal:
+
+```bash
+uv run adaptive-synth-eval run \
+  --contract contracts/examples/chatbot_test_contract.yaml \
+  --realtime-chat
+```
+
+> **Note**: Realtime chat only works when `persona_pool` has exactly one persona.
+
+### 5. Summarize Previous Runs
+
+```bash
+uv run adaptive-synth-eval summarize --run-id chatbot_test_run
 ```
 
 Outputs are written under `outputs/runs/<run_id>/`.
+
+## Core Concepts
+
+### Contracts
+
+Contracts are YAML files that define your simulation configuration. They specify:
+
+- **Personas**: User profiles with demographics, communication styles, and HR familiarity
+- **Scenarios**: Conversation topics with failure injection parameters
+- **Traffic Mix**: How personas and scenarios combine, concurrency, and batch sizes
+- **Time Window**: Synthetic days and compressed runtime duration
+- **Output Configuration**: Where to save results and run identifiers
+
+Example contract structure:
+```yaml
+simulation_suite:
+  suite_id: my_test_suite
+  target_application: hr_chatbot
+  
+persona_pool:
+  - persona_id: P1
+    role: new_employee
+    location: Toronto
+    seniority: junior
+    communication_style: polite
+    hr_familiarity: low
+
+scenario_catalog:
+  - scenario_id: S1
+    domain: parental_leave
+    intent: understand_eligibility
+    failure_injection:
+      ambiguity: 0.2
+      typos: 0.1
+
+traffic_orchestration:
+  total_conversations: 100
+  conversation_turns:
+    min: 3
+    max: 7
+  mix:
+    - persona_id: P1
+      scenario_id: S1
+      weight: 1.0
+```
+
+See [`contracts/examples/`](./contracts/examples) for complete examples.
+
+### Personas
+
+Personas represent different user types interacting with your chatbot. Each persona has:
+
+- **Demographics**: Role, location, seniority level
+- **Behavioral Traits**: Communication style (direct, polite, anxious), HR familiarity
+- **Memory State**: Persistent markdown file tracking preferences, settings, and conversation history
+- **Privacy Sensitivity**: How cautious they are about sharing personal information
+
+### Scenarios
+
+Scenarios define conversation topics and inject realistic challenges:
+
+- **Domain**: HR policy area (parental leave, benefits, performance reviews)
+- **Intent**: What the user wants to accomplish
+- **Failure Injection**:
+  - `ambiguity`: Vague or unclear questions
+  - `missing_information`: Incomplete context
+  - `typos`: Spelling errors and grammatical mistakes
+  - `frustration`: Emotional escalation
+  - `policy_boundary_pressure`: Edge cases testing policy limits
+
+### Traffic Orchestration
+
+Controls how conversations are generated:
+
+- **Total Conversations**: Number of unique chat sessions
+- **Turn Range**: Min/max turns per conversation
+- **Mix**: Weighted combinations of personas and scenarios
+- **Concurrency**: Parallel conversation generation
+- **Batch Size**: How many conversations to generate at once
 
 ## LLM-Based User Simulation
 
@@ -296,65 +426,402 @@ The simulation engine includes a persistent, isolated markdown-based memory syst
 - **Context Injection**: Prepend the active memory state directly into the LLM system prompt for context-aware conversations.
 - **Thread Safety**: Uses atomic file swaps and path-level locks to support high concurrency safely.
 
-For full architectural details, see the [Persona Memory Guide](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/docs/persona_memory.md).
+For full architectural details, see the [Persona Memory Guide](./docs/persona_memory.md).
 
-## Main Artifacts
+## CLI Commands
 
+### validate-contract
 
-- `chat_history.jsonl`
-- `chat_history.csv`
-- `run_plan.json`
-- `conversations.jsonl`
-- `turns.jsonl`
-- `scores.jsonl`
-- `run_summary.json`
-- `generation_report.md`
-- `conversations.txt` (when using `--output-conversations` flag)
-
-`--realtime-chat` streams conversation turns directly in the terminal and is enabled only when `persona_pool` has exactly one persona. For multi-persona contracts, the run continues and live output is skipped.
-
-`--realtime-chat` enables interactive realtime controls by default, giving you an ephemeral command prompt during the run. This gives a Claude Code / Copilot CLI-style experience where you can influence playback while the simulator talks to the chatbot. Use `--no-interactive-realtime-controls` to turn controls off.
-
-Available runtime commands:
-- `h` or `help`: show controls
-- `s` or `status`: show current delay and mode
-- `+` or `faster`: speed up playback
-- `-` or `slower`: slow down playback
-- `p` or `pause`: toggle pause/resume
-- `q` or `stop`: stop the realtime run early
-- `style <mode>`: change user behavior for upcoming turns
-
-Input experience:
-- The `realtime>` input line stays stable while conversation logs continue above it (Copilot CLI-style terminal behavior).
-- If interactive terminal capabilities are unavailable, the CLI falls back to standard line input.
-
-Supported behavior modes:
-- `default`
-- `aggressive`
-- `polite`
-- `concise`
-- `confused`
-- `anxious`
-
-Examples while the run is active:
-- `style aggressive`
-- `style polite`
-- `style default`
-
-The controls only exist for the active realtime run. When the run completes or you stop it, the input prompt is removed automatically.
+Validate a simulation contract file:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+uv run adaptive-synth-eval validate-contract <contract-file.yaml>
 ```
 
-## Tests
+**Example**:
+```bash
+uv run adaptive-synth-eval validate-contract contracts/examples/chatbot_test_contract.yaml
+```
 
-Run all unit tests:
+### run
+
+Execute a simulation run:
+
+```bash
+uv run adaptive-synth-eval run --contract <contract-file.yaml> [OPTIONS]
+```
+
+**Options**:
+- `--contract`: Path to YAML/JSON contract file (required)
+- `--dry-run`: Skip real chatbot calls, use mock responses
+- `--output-conversations`: Generate human-readable conversations.txt
+- `--realtime-chat`: Stream conversations live in terminal (single-persona only)
+- `--interactive-realtime-controls`: Enable runtime controls (default: on with --realtime-chat)
+- `--no-interactive-realtime-controls`: Disable runtime controls
+
+**Examples**:
+```bash
+# Dry run
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+
+# Real run with realtime chat
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+
+# Export readable conversations
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --output-conversations
+```
+
+### summarize
+
+Print run summary for a previous run:
+
+```bash
+uv run adaptive-synth-eval summarize --run-id <run-id> [--output-dir outputs]
+```
+
+**Example**:
+```bash
+uv run adaptive-synth-eval summarize --run-id chatbot_test_run
+```
+
+## Output Artifacts
+
+Each run generates the following files in `outputs/runs/<run_id>/`:
+
+| File | Description |
+|------|-------------|
+| `chat_history.jsonl` | Full chat history in JSON Lines format |
+| `chat_history.csv` | Chat history in CSV format for spreadsheet analysis |
+| `run_plan.json` | Detailed execution plan with persona/scenario assignments |
+| `conversations.jsonl` | Structured conversation data with turns and metadata |
+| `turns.jsonl` | Individual turn-level data with scores and annotations |
+| `scores.jsonl` | Quality scores for each response (relevance, safety, grounding) |
+| `run_summary.json` | High-level summary statistics and metrics |
+| `generation_report.md` | Markdown report with run details and insights |
+| `conversations.txt` | Human-readable conversations (with `--output-conversations`) |
+| `personas/<id>_memory.md` | Persistent memory state for each persona |
+| `contract.normalized.json` | Normalized contract used for the run |
+
+### Example Output Structure
+
+```
+outputs/runs/chatbot_test_run/
+├── chat_history.jsonl
+├── chat_history.csv
+├── conversations.jsonl
+├── conversations.txt          # if --output-conversations
+├── turns.jsonl
+├── scores.jsonl
+├── run_summary.json
+├── run_plan.json
+├── generation_report.md
+├── contract.normalized.json
+└── personas/
+    └── TEST_P1_memory.md
+```
+
+## Realtime Chat & Controls
+
+The `--realtime-chat` flag streams conversation turns directly in your terminal, providing a Claude Code / Copilot CLI-style experience. This feature is only available when `persona_pool` has exactly one persona.
+
+### Interactive Runtime Controls
+
+When realtime chat is enabled, you get an ephemeral command prompt (`realtime>`) that stays stable while conversation logs scroll above it. Use these commands to control the simulation:
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `help` | `h` | Show all available controls |
+| `status` | `s` | Show current delay and mode |
+| `faster` | `+` | Speed up playback |
+| `slower` | `-` | Slow down playback |
+| `pause` | `p` | Toggle pause/resume |
+| `stop` | `q` | Stop the run early |
+| `style <mode>` | - | Change user behavior for upcoming turns |
+
+### Behavior Modes
+
+Change how the persona behaves mid-conversation:
+
+- `default` - Normal conversation style
+- `aggressive` - Direct, demanding tone
+- `polite` - Courteous and formal
+- `concise` - Brief, to-the-point messages
+- `confused` - Uncertain, asking clarifying questions
+- `anxious` - Worried, seeking reassurance
+
+**Examples**:
+```bash
+# While the run is active, type:
+style aggressive
+style polite
+style default
+```
+
+### Usage
+
+```bash
+# Enable realtime chat with interactive controls (default)
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
+
+# Disable interactive controls
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
+```
+
+> **Note**: Controls are ephemeral—they only exist during the active run. When the run completes or you stop it, the input prompt is removed automatically.
+
+## Documentation
+
+Comprehensive guides are available in the [`docs/`](./docs) directory:
+
+- [**Contract Specification**](./docs/contracts.md) - Detailed contract schema and configuration options
+- [**CLI Usage Guide**](./docs/cli_usage.md) - Complete CLI reference and examples
+- [**Persona Memory System**](./docs/persona_memory.md) - How persona memory works and persists across runs
+- [**LLM User Simulation**](./docs/user_simulation_llm.md) - Setting up and configuring LLM providers
+- [**Failure Injection**](./docs/failure_injection.md) - Configuring ambiguity, typos, frustration, and edge cases
+- [**Chat History Schema**](./docs/chat_history_schema.md) - Output format specifications
+- [**Adversarial Agent Review**](./docs/adversarial_agent_review.md) - Security and robustness testing
+- [**Team Handoff Guide**](./docs/team_handoff.md) - Onboarding and collaboration tips
+
+## Testing
+
+### Run All Tests
+
 ```bash
 uv run pytest -q
 ```
 
-Run specific chatbot client tests:
+### Run Specific Test Suites
+
 ```bash
+# Chatbot client tests
 uv run pytest tests/unit/test_chatbot_client.py -v
+
+# Contract validation tests
+uv run pytest tests/unit/test_contract.py -v
+
+# Generation tests
+uv run pytest tests/unit/test_generation.py -v
+
+# Integration tests
+uv run pytest tests/integration/ -v
 ```
+
+### Test Coverage
+
+```bash
+uv run pytest --cov=adaptive_synth_eval --cov-report=html
+```
+
+View coverage report in `htmlcov/index.html`.
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Module Not Found Errors
+
+**Error**: `ModuleNotFoundError: No module named 'adaptive_synth_eval'`
+
+**Solution**:
+```bash
+# Ensure you're in the project root
+cd /path/to/adaptive-synth-eval
+
+# Reinstall dependencies
+uv sync --reinstall
+
+# If running directly, set PYTHONPATH
+export PYTHONPATH=src
+```
+
+#### 2. LLM Provider Configuration
+
+**Error**: `no_provider_configured`
+
+**Solution**: Verify your `src/.env` file has the correct variables for at least one provider:
+- Ollama: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
+- Azure OpenAI: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY`
+- Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
+- OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL`
+
+#### 3. Ollama Connection Refused
+
+**Error**: `Connection refused` when using Ollama
+
+**Solution**:
+```bash
+# Start Ollama service
+ollama serve
+
+# Verify it's running
+curl http://localhost:11434/api/tags
+
+# Check model is pulled
+ollama list
+```
+
+#### 4. SSL Certificate Errors (Corporate Networks)
+
+**Error**: `SSL: CERTIFICATE_VERIFY_FAILED`
+
+**Solution**: Set corporate CA certificate:
+```bash
+export REQUESTS_CA_BUNDLE=/path/to/corporate-ca.pem
+export SSL_CERT_FILE=/path/to/corporate-ca.pem
+```
+
+#### 5. uv Hardlink Errors on Windows OneDrive
+
+**Error**: `os error 396` or hardlink failures
+
+**Solution**:
+```powershell
+$env:UV_LINK_MODE='copy'
+uv run adaptive-synth-eval run --contract ... --dry-run
+```
+
+Persist permanently:
+```powershell
+[System.Environment]::SetEnvironmentVariable('UV_LINK_MODE', 'copy', 'User')
+```
+
+#### 6. Realtime Chat Not Working
+
+**Issue**: `--realtime-chat` doesn't stream output
+
+**Cause**: Only works with single-persona contracts
+
+**Solution**: Ensure your contract has exactly one persona in `persona_pool`:
+```yaml
+persona_pool:
+  - persona_id: TEST_P1  # Only one persona
+    role: tester
+    ...
+```
+
+#### 7. Slow Performance
+
+**Issue**: Simulation runs very slowly
+
+**Solutions**:
+- Use `--dry-run` to skip real API calls during testing
+- Reduce `max_concurrency` in traffic orchestration
+- Use local Ollama instead of cloud providers for faster iteration
+- Increase batch size for better throughput
+
+### Debug Mode
+
+Enable debug logging for detailed troubleshooting:
+
+```bash
+export LOG_LEVEL=DEBUG
+uv run adaptive-synth-eval run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
+```
+
+Look for informative log messages like:
+```
+INFO: Using Ollama model: qwen3.6:35b-a3b
+INFO: Generated turn 1 with LLM provider: ollama
+DEBUG: Request payload: {...}
+```
+
+### Getting Help
+
+If you encounter issues not covered here:
+
+1. Check the [documentation](./docs) directory for detailed guides
+2. Review example contracts in [`contracts/examples/`](./contracts/examples)
+3. Examine test files for usage patterns
+4. Enable `LOG_LEVEL=DEBUG` and review logs
+
+## Project Structure
+
+```
+adaptive-synth-eval/
+├── contracts/examples/          # Example simulation contracts
+│   ├── chatbot_test_contract.yaml
+│   ├── one_week_chat_history.yaml
+│   └── ten_k_conversations.yaml
+├── docs/                        # Detailed documentation
+│   ├── contracts.md
+│   ├── cli_usage.md
+│   ├── persona_memory.md
+│   └── ...
+├── outputs/runs/                # Generated simulation outputs
+│   └── <run_id>/
+│       ├── chat_history.jsonl
+│       ├── conversations.jsonl
+│       ├── run_summary.json
+│       └── ...
+├── src/adaptive_synth_eval/     # Main source code
+│   ├── clients/                 # API clients (chatbot, LLM)
+│   │   ├── chatbot.py
+│   │   ├── llm.py
+│   │   └── retry_utils.py
+│   ├── config/                  # Configuration and contract parsing
+│   │   ├── contract.py
+│   │   └── schemas.py
+│   ├── engines/                 # Core simulation engines
+│   │   ├── chat_history_simulation.py
+│   │   └── realtime_controls.py
+│   ├── generation/              # Content generation modules
+│   │   ├── personas.py
+│   │   ├── scenarios.py
+│   │   ├── turns.py
+│   │   └── traffic.py
+│   ├── scoring/                 # Response quality scoring
+│   │   ├── response_quality.py
+│   │   └── failure_modes.py
+│   ├── artifacts/               # Output exporters and schemas
+│   │   ├── exporters.py
+│   │   └── schemas.py
+│   └── cli.py                   # CLI entry point
+├── tests/                       # Test suite
+│   ├── unit/                    # Unit tests
+│   └── integration/             # Integration tests
+├── pyproject.toml               # Project configuration
+└── README.md                    # This file
+```
+
+### Key Modules
+
+- **`clients/`**: HTTP clients for chatbot APIs and LLM providers (Azure OpenAI, Ollama, Anthropic, OpenAI)
+- **`config/`**: Contract validation, normalization, and schema definitions
+- **`engines/`**: Core simulation logic including chat history generation and realtime controls
+- **`generation/`**: Persona creation, scenario generation, turn synthesis, and traffic orchestration
+- **`scoring/`**: Quality metrics for evaluating chatbot responses (relevance, safety, grounding)
+- **`artifacts/`**: Export formats (JSONL, CSV, Markdown) and data schemas
+
+## Contributing
+
+### Development Workflow
+
+1. **Fork and clone** the repository
+2. **Create a feature branch**: `git checkout -b feature/my-feature`
+3. **Make changes** and write tests
+4. **Run tests**: `uv run pytest -q`
+5. **Commit changes**: `git commit -am 'Add feature'`
+6. **Push and create PR**
+
+### Code Style
+
+- Follow PEP 8 guidelines
+- Use type hints where applicable
+- Write docstrings for public functions and classes
+- Keep functions focused and testable
+
+### Adding New Features
+
+1. Update or create contracts in `contracts/examples/`
+2. Implement feature in appropriate module under `src/adaptive_synth_eval/`
+3. Add unit tests in `tests/unit/`
+4. Update documentation in `docs/` if needed
+5. Update this README if user-facing changes
+
+## Support
+
+For questions, issues, or feature requests:
+
+1. Review the [documentation](./docs)
+2. Check existing issues and pull requests
+3. Contact the development team

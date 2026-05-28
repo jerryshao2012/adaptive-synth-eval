@@ -117,7 +117,7 @@ async def run_simulation_async(
 
             behavior_override = realtime_controller.behavior_mode if realtime_controller else None
             logger.info(
-                "[%s|turn=%s] Simulated human thinking started (provider=%s, behavior=%s)...",
+                "[%s|turn=%s] Persona thinking started (provider=%s, behavior=%s)...",
                 planned.conversation_id,
                 turn_id,
                 "llm" if simulator.llm_client.enabled else "fallback",
@@ -131,7 +131,7 @@ async def run_simulation_async(
             )
             human_elapsed_ms = (time.perf_counter() - human_start) * 1000
             logger.info(
-                "[%s|turn=%s] Simulated human thinking completed in %.2f ms; message_length=%s",
+                "[%s|turn=%s] Persona thinking completed in %.2f ms; message_length=%s",
                 planned.conversation_id,
                 turn_id,
                 human_elapsed_ms,
