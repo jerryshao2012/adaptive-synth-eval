@@ -1,4 +1,4 @@
-# Adaptive Synthetic Eval
+# Adaptive Synthetic Evaluation
 
 A Python CLI tool for generating synthetic multi-turn chat histories to evaluate HR policy chatbots. This local-first, contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
 
