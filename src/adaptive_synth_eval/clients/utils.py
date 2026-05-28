@@ -93,6 +93,31 @@ def format_message(messages):
     return format_messages(messages)
 
 
+def display_persona_message(
+        *,
+        conversation_id: str,
+        persona_id: str,
+        scenario_id: str,
+        turn_id: int,
+        human_message: str,
+) -> None:
+    """Display the persona message immediately when generated (realtime)."""
+    console = _console()
+    console.rule(
+        f"Conversation {conversation_id} | Persona {persona_id} | Scenario {scenario_id} | Turn {turn_id}"
+    )
+    format_messages([HumanMessage(human_message)])
+
+
+def display_bot_message(
+        *,
+        bot_message: str,
+) -> None:
+    """Display the bot response when received (realtime)."""
+    console = _console()
+    format_messages([AiMessage(bot_message)])
+
+
 def stream_simulated_chat_turn(
         *,
         conversation_id: str,
@@ -102,7 +127,7 @@ def stream_simulated_chat_turn(
         human_message: str,
         bot_message: str,
 ) -> None:
-    """Render a single simulated-human<->assistant turn in real time."""
+    """Render a single simulated-human<->assistant turn in real time (legacy function)."""
     console = _console()
     console.rule(
         f"Conversation {conversation_id} | Persona {persona_id} | Scenario {scenario_id} | Turn {turn_id}"

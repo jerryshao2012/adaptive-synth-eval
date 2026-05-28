@@ -223,7 +223,7 @@ class UserSimulator:
         prompt = self._build_prompt(turn_id, behavior_mode=behavior_mode)
         result = self.llm_client.complete(prompt)
 
-        if result.error == "llm_disabled":
+        if result.error:
             message = self._fallback_message(turn_id, behavior_mode=behavior_mode)
         else:
             message = result.content

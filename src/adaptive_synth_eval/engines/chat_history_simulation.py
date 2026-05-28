@@ -7,7 +7,7 @@ from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
-from adaptive_synth_eval.clients.utils import stream_simulated_chat_turn
+from adaptive_synth_eval.clients.utils import display_bot_message, display_persona_message
 from adaptive_synth_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
@@ -133,6 +133,16 @@ async def run_simulation_async(
                 len(turn.user_message),
             )
 
+            if realtime_chat_enabled:
+                await asyncio.to_thread(
+                    display_persona_message,
+                    conversation_id=planned.conversation_id,
+                    persona_id=planned.persona_id,
+                    scenario_id=planned.scenario_id,
+                    turn_id=turn.turn_id,
+                    human_message=turn.user_message,
+                )
+
             logger.info(
                 "[%s|turn=%s] Sending request to chatbot and waiting for response...",
                 planned.conversation_id,
@@ -162,12 +172,7 @@ async def run_simulation_async(
 
             if realtime_chat_enabled:
                 await asyncio.to_thread(
-                    stream_simulated_chat_turn,
-                    conversation_id=planned.conversation_id,
-                    persona_id=planned.persona_id,
-                    scenario_id=planned.scenario_id,
-                    turn_id=turn.turn_id,
-                    human_message=turn.user_message,
+                    display_bot_message,
                     bot_message=response.bot_response,
                 )
 
