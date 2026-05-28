@@ -116,6 +116,8 @@ class LLMClient:
                     model=os.getenv("MODEL_NAME", "qwen3.6:35b-a3b"),
                     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
                     temperature=0.7,
+                    keep_alive="15m",
+                    reasoning=False,
                 )
 
             else:
