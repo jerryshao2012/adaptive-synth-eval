@@ -36,3 +36,4 @@ pythonpath = ["src"]
 
 [tool.uv]
 package = true
+link-mode = "copy"
