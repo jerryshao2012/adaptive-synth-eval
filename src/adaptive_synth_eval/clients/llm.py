@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from pydantic import SecretStr
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file if it exists
 env_path = Path(__file__).parent.parent.parent / ".env"
@@ -24,7 +27,7 @@ class LLMResult:
 
 class LLMClient:
     """Configurable LLM client for user simulation and optional local judging/generation hooks.
-    
+
     Supports multiple model providers via environment variables:
     - Azure OpenAI (AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_KEY)
     - Anthropic (ANTHROPIC_API_KEY, MODEL_NAME)
@@ -40,13 +43,21 @@ class LLMClient:
     def _detect_provider(self) -> str | None:
         """Auto-detect available LLM provider from environment variables."""
         if os.getenv("AZURE_OPENAI_ENDPOINT") and os.getenv("AZURE_OPENAI_DEPLOYMENT"):
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
+            logger.debug(f"Detected Azure OpenAI provider: endpoint={endpoint}, deployment={deployment}")
             return "azure_openai"
         elif os.getenv("ANTHROPIC_API_KEY"):
+            logger.debug("Detected Anthropic provider")
             return "anthropic"
         elif os.getenv("OPENAI_API_KEY"):
+            logger.debug("Detected OpenAI provider")
             return "openai"
         elif os.getenv("OLLAMA_BASE_URL"):
+            logger.debug("Detected Ollama provider")
             return "ollama"
+        logger.warning(
+            "No LLM provider detected. Configure one of: AZURE_OPENAI_ENDPOINT/DEPLOYMENT, ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL")
         return None
 
     def _get_model(self):
@@ -61,17 +72,24 @@ class LLMClient:
             if self.model_provider == "azure_openai":
                 from langchain_openai import AzureChatOpenAI
 
+                endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+                deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
+                api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview").strip()
                 verify_ssl = os.getenv("VERIFY_SSL", "true").lower() != "false"
+
+                logger.info(
+                    f"Initializing Azure OpenAI: endpoint={endpoint}, deployment={deployment}, api_version={api_version}")
                 auth_kwargs = self._get_azure_auth_kwargs()
 
                 self._model = AzureChatOpenAI(
-                    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-                    azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-                    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+                    azure_endpoint=endpoint,
+                    azure_deployment=deployment,
+                    api_version=api_version,
                     temperature=0.7,
                     http_client=httpx.Client(verify=verify_ssl),
                     **auth_kwargs,
                 )
+                logger.info("Azure OpenAI model initialized successfully")
 
             elif self.model_provider == "anthropic":
                 from langchain_anthropic import ChatAnthropic
@@ -162,8 +180,10 @@ class LLMClient:
             )
 
         except Exception as e:
+            error_msg = f"LLM error ({self.model_provider}): {type(e).__name__}: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             return LLMResult(
                 content="",
-                raw={"mock": True, "prompt": prompt, "provider": self.model_provider},
-                error=f"llm_error: {str(e)}",
+                raw={"mock": True, "prompt": prompt, "provider": self.model_provider, "exception": type(e).__name__},
+                error=error_msg,
             )

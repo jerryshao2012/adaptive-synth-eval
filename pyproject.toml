@@ -19,6 +19,7 @@ dependencies = [
   "azure-identity>=1.15.0",
   "prompt-toolkit>=3.0.47",
   "playwright>=1.40.0",
+  "jsonpatch>=1.33",
 ]
 
 [[project.authors]]

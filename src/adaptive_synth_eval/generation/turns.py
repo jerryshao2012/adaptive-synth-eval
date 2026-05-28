@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 import re
@@ -13,6 +14,8 @@ from typing import Any
 from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.generation.variability import apply_typos, choose_failure_modes
+
+logger = logging.getLogger(__name__)
 
 # Thread-safe locks per file path to prevent concurrent write/read corruption
 _memory_locks = {}
@@ -224,6 +227,14 @@ class UserSimulator:
         result = self.llm_client.complete(prompt)
 
         if result.error:
+            logger.warning(
+                f"⚠️  LLM FAILED FOR PERSONA SIMULATION - Using fallback message\n"
+                f"   Provider: {self.llm_client.model_provider or 'none'}\n"
+                f"   Error: {result.error}\n"
+                f"   Persona: {self.persona.persona_id}\n"
+                f"   Turn: {turn_id}\n"
+                f"   Message will be templated instead of dynamically generated!"
+            )
             message = self._fallback_message(turn_id, behavior_mode=behavior_mode)
         else:
             message = result.content
