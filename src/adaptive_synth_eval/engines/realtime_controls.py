@@ -25,6 +25,7 @@ class RealtimeControlState:
     paused: bool = False
     stop_requested: bool = False
     behavior_mode: str = "default"
+    active_persona_id: str | None = None
 
 
 class RealtimeChatController:
@@ -41,7 +42,7 @@ class RealtimeChatController:
 
     COMMAND_HELP = (
         "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
-        "[p]ause/resume, [q]uit, style <default|aggressive|polite|concise|confused|anxious>"
+        "[p]ause/resume, [q]uit, style <behavior>, persona <persona_id>, personas"
     )
     PROMPT_TEXT = "⚡> "
 
@@ -52,10 +53,12 @@ class RealtimeChatController:
             delay_step_seconds: float = 0.25,
             min_delay_seconds: float = 0.0,
             max_delay_seconds: float = 5.0,
+            personas: dict[str, Any] | None = None,
     ) -> None:
         self._delay_step_seconds = delay_step_seconds
         self._min_delay_seconds = min_delay_seconds
         self._max_delay_seconds = max_delay_seconds
+        self._personas = personas or {}
         self._state = RealtimeControlState(
             delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
         )
@@ -88,6 +91,15 @@ class RealtimeChatController:
         with self._state_cv:
             return self._state.behavior_mode
 
+    @property
+    def active_persona_id(self) -> str | None:
+        with self._state_cv:
+            return self._state.active_persona_id
+
+    def set_active_persona(self, persona_id: str | None) -> None:
+        with self._state_cv:
+            self._state.active_persona_id = persona_id
+
     def start(self) -> bool:
         """Start background command listener if stdin supports interactive input."""
         if not sys.stdin.isatty():
@@ -119,6 +131,18 @@ class RealtimeChatController:
             return self.COMMAND_HELP
         if normalized in {"s", "status"}:
             return self._status_text()
+        if normalized == "personas":
+            if not self._personas:
+                return "No personas available in pool."
+            return "Available personas: " + ", ".join(self._personas.keys())
+        if normalized.startswith("persona ") or normalized.startswith("switch "):
+            parts = command.strip().split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                return "Usage: persona <persona_id>"
+            requested = parts[1].strip()
+            return self._set_active_persona_by_name(requested)
+        if normalized in {"persona", "switch"}:
+            return "Usage: persona <persona_id>"
         if normalized.startswith("style ") or normalized.startswith("behavior "):
             parts = normalized.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
@@ -205,10 +229,26 @@ class RealtimeChatController:
             paused_text = "paused" if self._state.paused else "running"
             delay = self._state.delay_seconds
             behavior = self._state.behavior_mode
+            persona = self._state.active_persona_id
         return (
             f"{prefix}: delay={delay:.2f}s, "
-            f"mode={paused_text}, behavior={behavior}"
+            f"mode={paused_text}, behavior={behavior}, persona={persona or 'none'}"
         )
+
+    def _set_active_persona_by_name(self, requested: str) -> str:
+        if not self._personas:
+            return "No personas configured."
+        match = None
+        for pid in self._personas:
+            if pid.lower() == requested.lower():
+                match = pid
+                break
+        if not match:
+            available = ", ".join(self._personas.keys())
+            return f"Unknown persona: {requested}. Available: {available}"
+        with self._state_cv:
+            self._state.active_persona_id = match
+        return self._status_text(prefix="Persona updated")
 
     def _set_behavior_mode(self, requested: str) -> str:
         if requested not in self.SUPPORTED_BEHAVIORS:

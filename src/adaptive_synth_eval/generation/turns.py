@@ -199,6 +199,27 @@ class UserSimulator:
                     role_lbl = "agent" if turn["role"] == "assistant" else "user"
                     self.history.append({"role": role_lbl, "content": turn["text"]})
 
+    def switch_persona(self, new_persona: Persona) -> None:
+        """Dynamically update the active persona mid-conversation and sync its memory state."""
+        self.persona = new_persona
+        if self.memory_file:
+            self.memory_file = self.memory_file.parent / f"{new_persona.persona_id}_memory.md"
+            self.memory = PersonaMarkdownMemory.load_from_file(self.memory_file, new_persona.persona_id)
+            if not self.memory.demographics:
+                self.memory.demographics["role"] = new_persona.role
+                self.memory.demographics["location"] = new_persona.location
+                self.memory.demographics["seniority"] = new_persona.seniority
+                self.memory.demographics["style"] = new_persona.communication_style
+                self.memory.demographics["hr_familiarity"] = new_persona.hr_familiarity
+                self.memory.demographics["privacy_sensitivity"] = new_persona.privacy_sensitivity
+
+            # Sync recent window to current conversation history
+            self.memory.recent_window = []
+            for turn in self.history:
+                role_lbl = "assistant" if turn["role"] == "agent" else "user"
+                self.memory.recent_window.append({"role": role_lbl, "text": turn["content"]})
+            self.memory.save_to_file(self.memory_file)
+
     def generate_turn(
             self,
             turn_id: int,

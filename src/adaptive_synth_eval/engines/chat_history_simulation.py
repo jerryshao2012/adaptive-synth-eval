@@ -59,22 +59,16 @@ async def run_simulation_async(
     turn_rows = []
     score_rows = []
     errors = 0
-    realtime_chat_enabled = realtime_chat and len(contract.persona_pool) == 1
+    realtime_chat_enabled = realtime_chat
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
     persona_locks = {persona.persona_id: asyncio.Lock() for persona in contract.persona_pool}
 
-    if realtime_chat and not realtime_chat_enabled:
-        logger.warning(
-            "Realtime chat display is only enabled when persona_pool has exactly one persona; skipping live output.")
     if interactive_realtime_controls and not realtime_chat:
         logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
-    if interactive_realtime_controls and realtime_chat and not realtime_chat_enabled:
-        logger.warning(
-            "Interactive realtime controls were requested, but realtime chat is disabled for multi-persona runs.")
 
     if realtime_chat_enabled and interactive_realtime_controls:
-        realtime_controller = RealtimeChatController()
+        realtime_controller = RealtimeChatController(personas=personas)
         realtime_controller.start()
 
     async def process_conversation(planned):
@@ -89,6 +83,9 @@ async def run_simulation_async(
 
         persona = personas[planned.persona_id]
         scenario = scenarios[planned.scenario_id]
+        if realtime_controller:
+            realtime_controller.set_active_persona(planned.persona_id)
+
         memory_file = writer.run_dir / "personas" / f"{planned.persona_id}_memory.md"
         simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
                                   seed=hash(planned.conversation_id) % 10_000,
@@ -109,6 +106,13 @@ async def run_simulation_async(
                 break
             if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
                 break
+
+            if realtime_controller and realtime_controller.active_persona_id:
+                active_pid = realtime_controller.active_persona_id
+                if active_pid != simulator.persona.persona_id:
+                    if active_pid in personas:
+                        new_persona = personas[active_pid]
+                        simulator.switch_persona(new_persona)
 
             behavior_override = realtime_controller.behavior_mode if realtime_controller else None
             logger.info(
@@ -137,7 +141,7 @@ async def run_simulation_async(
                 await asyncio.to_thread(
                     display_persona_message,
                     conversation_id=planned.conversation_id,
-                    persona_id=planned.persona_id,
+                    persona_id=simulator.persona.persona_id,
                     scenario_id=planned.scenario_id,
                     turn_id=turn.turn_id,
                     human_message=turn.user_message,
@@ -154,7 +158,8 @@ async def run_simulation_async(
                 session_id=planned.session_id,
                 turn_id=turn.turn_id,
                 user_message=turn.user_message,
-                metadata={"persona_id": planned.persona_id, "scenario_id": planned.scenario_id, "synthetic": True},
+                metadata={"persona_id": simulator.persona.persona_id, "scenario_id": planned.scenario_id,
+                          "synthetic": True},
             )
             chatbot_wait_ms = (time.perf_counter() - chatbot_wait_start) * 1000
             logger.info(
@@ -187,7 +192,7 @@ async def run_simulation_async(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
                 synthetic_day=planned.synthetic_day,
-                persona_id=planned.persona_id,
+                persona_id=simulator.persona.persona_id,
                 scenario_id=planned.scenario_id,
                 turn_id=turn.turn_id,
                 user_message=turn.user_message,

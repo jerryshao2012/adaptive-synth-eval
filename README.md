@@ -213,7 +213,7 @@ uv run ase run \
 
 Output: `outputs/runs/<run_id>/conversations.txt`
 
-### 4. Watch Realtime Chat (Single Persona Only)
+### 4. Watch Realtime Chat
 
 Stream conversations live in your terminal:
 
@@ -222,8 +222,6 @@ uv run ase run \
   --contract contracts/examples/chatbot_test_contract.yaml \
   --realtime-chat
 ```
-
-> **Note**: Realtime chat only works when `persona_pool` has exactly one persona.
 
 ### 5. Summarize Previous Runs
 
@@ -469,7 +467,7 @@ uv run ase run --contract <contract-file.yaml> [OPTIONS]
 - `--contract`: Path to YAML/JSON contract file (required)
 - `--dry-run`: Skip real chatbot calls, use mock responses
 - `--output-conversations`: Generate human-readable conversations.txt
-- `--realtime-chat`: Stream conversations live in terminal (single-persona only)
+- `--realtime-chat`: Stream conversations live in terminal (supports single & multi-persona)
 - `--interactive-realtime-controls`: Enable runtime controls (default: on with --realtime-chat)
 - `--no-interactive-realtime-controls`: Disable runtime controls
 
@@ -536,21 +534,23 @@ outputs/runs/chatbot_test_run/
 
 ## Realtime Chat & Controls
 
-The `--realtime-chat` flag streams conversation turns directly in your terminal, providing a Claude Code / Copilot CLI-style experience. This feature is only available when `persona_pool` has exactly one persona.
+The `--realtime-chat` flag streams conversation turns directly in your terminal, providing a Claude Code / Copilot CLI-style experience. It supports both single-persona and multi-persona simulation pools, running planned conversations sequentially.
 
 ### Interactive Runtime Controls
 
-When realtime chat is enabled, you get an ephemeral command prompt (`realtime>`) that stays stable while conversation logs scroll above it. Use these commands to control the simulation:
+When realtime chat is enabled, you get an ephemeral command prompt (`⚡>`) that stays stable while conversation logs scroll above it. Use these commands to control the simulation:
 
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `help` | `h` | Show all available controls |
-| `status` | `s` | Show current delay and mode |
+| `status` | `s` | Show current speed settings, mode, active behavior, and active persona |
 | `faster` | `+` | Speed up playback |
 | `slower` | `-` | Slow down playback |
 | `pause` | `p` | Toggle pause/resume |
 | `stop` | `q` | Stop the run early |
-| `style <mode>` | - | Change user behavior for upcoming turns |
+| `style <mode>` | - | Change user behavior for upcoming turns (default, aggressive, polite, concise, confused, anxious) |
+| `personas` | - | List all persona IDs available in the simulation pool |
+| `persona <id>` | - | Dynamically switch the user simulator to a different persona mid-conversation (e.g. `persona TEST_P1`) |
 
 ### Behavior Modes
 
@@ -699,19 +699,13 @@ Persist permanently:
 [System.Environment]::SetEnvironmentVariable('UV_LINK_MODE', 'copy', 'User')
 ```
 
-#### 6. Realtime Chat Not Working
+#### 6. Interactive Controls Not Working
 
-**Issue**: `--realtime-chat` doesn't stream output
+**Issue**: Realtime commands are ignored or prompt doesn't show
 
-**Cause**: Only works with single-persona contracts
+**Cause**: Interactive controls require a TTY-enabled, interactive stdin shell session. They are skipped if stdin is redirected or not a TTY.
 
-**Solution**: Ensure your contract has exactly one persona in `persona_pool`:
-```yaml
-persona_pool:
-  - persona_id: TEST_P1  # Only one persona
-    role: tester
-    ...
-```
+**Solution**: Ensure you are running the command in an interactive terminal. If running via a script or CI pipeline, interactive controls will automatically be disabled while still streaming the chat turns.
 
 #### 7. Slow Performance
 

@@ -41,3 +41,37 @@ def test_realtime_controller_rejects_unknown_behavior_mode():
 
     assert "Unsupported behavior" in message
     assert controller.behavior_mode == "default"
+
+
+def test_realtime_controller_personas_listing_and_switching():
+    personas = {
+        "P1": {"role": "tester"},
+        "P2": {"role": "manager"},
+    }
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
+
+    # test personas listing
+    msg = controller.apply_command("personas")
+    assert "P1" in msg
+    assert "P2" in msg
+
+    # test initial active persona is None
+    assert controller.active_persona_id is None
+
+    # test set_active_persona programmatically
+    controller.set_active_persona("P1")
+    assert controller.active_persona_id == "P1"
+
+    # test switching to existing persona (case-insensitive)
+    msg = controller.apply_command("persona p2")
+    assert "Persona updated" in msg
+    assert controller.active_persona_id == "P2"
+
+    # test switching to non-existing persona
+    msg = controller.apply_command("persona P3")
+    assert "Unknown persona: P3" in msg
+    assert controller.active_persona_id == "P2"  # remains unchanged
+
+    # test invalid usage format
+    msg = controller.apply_command("persona")
+    assert "Usage: persona" in msg

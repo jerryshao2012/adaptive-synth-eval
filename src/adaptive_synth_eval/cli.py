@@ -91,7 +91,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--realtime-chat",
         action="store_true",
-        help="Stream persona and chatbot messages to console in real time (only when persona_pool has one persona)",
+        help="Stream persona and chatbot messages to console in real time (supports multiple personas and switching)",
     )
     run.add_argument(
         "--interactive-realtime-controls",

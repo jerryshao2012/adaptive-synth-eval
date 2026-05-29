@@ -76,19 +76,25 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 ```
 
 How `--realtime-chat` works:
-- It is opt-in and only runs when `persona_pool` contains exactly one persona.
-- For single-persona contracts, each turn is printed live as alternating Human and Assistant panels.
-- For multi-persona contracts, live output is skipped and a console notice is printed.
+- It is opt-in and streams conversations directly in the console as alternating Human and Assistant panels.
+- It supports both single-persona and multi-persona simulation pools, processing conversations in a clean sequential order.
 - It does not replace output artifacts; files like `chat_history.jsonl` and `conversations.txt` (when enabled) are still generated normally.
 
 How `--interactive-realtime-controls` works:
 - It is enabled by default when `--realtime-chat` is enabled.
 - Use `--no-interactive-realtime-controls` to turn it off.
 - During the run, type a command and press Enter to control playback.
-- Supported commands: `h/help`, `s/status`, `+/faster`, `-/slower`, `p/pause`, `q/stop`, `style <mode>`.
-- Behavior modes for `style`: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`.
-- Behavior changes apply to upcoming generated user turns, so you can steer conversation tone live.
-- The `realtime>` prompt remains stable while logs stream above it (Copilot CLI-style input behavior).
+- Supported commands:
+  - `h/help`: Show available controls.
+  - `s/status`: Show current playback speed, mode, active behavior, and active persona.
+  - `+/faster` or `-/slower`: Adjust turn playback speed.
+  - `p/pause`: Pause or resume conversation turns.
+  - `q/stop`: Stop the simulation early.
+  - `style <mode>`: Dynamically set the communication style of subsequent turns. Modes: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`.
+  - `personas`: List all persona IDs available in the simulation pool.
+  - `persona <persona_id>` or `switch <persona_id>`: Dynamically switch the user simulator to a different persona mid-conversation.
+- Behavior and persona changes apply to upcoming generated user turns, so you can steer conversation tone and identity live.
+- The `⚡>` prompt remains stable while logs stream above it.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.

@@ -243,7 +243,7 @@ def test_run_simulation_with_output_conversations(tmp_path):
     assert "Conversation ID:" in content
 
 
-def test_run_simulation_realtime_chat_only_for_single_persona(tmp_path, monkeypatch):
+def test_run_simulation_realtime_chat_display_multi_persona(tmp_path, monkeypatch):
     base_contract = {
         "simulation_suite": {
             "suite_id": "suite",
@@ -289,10 +289,10 @@ def test_run_simulation_realtime_chat_only_for_single_persona(tmp_path, monkeypa
 
     realtime_calls = []
 
-    def _capture_realtime(**kwargs):
+    def _capture_realtime(*args, **kwargs):
         realtime_calls.append(kwargs)
 
-    monkeypatch.setattr("adaptive_synth_eval.engines.chat_history_simulation.stream_simulated_chat_turn",
+    monkeypatch.setattr("adaptive_synth_eval.engines.chat_history_simulation.display_persona_message",
                         _capture_realtime)
 
     single_path = tmp_path / "single_contract.json"
@@ -319,7 +319,7 @@ def test_run_simulation_realtime_chat_only_for_single_persona(tmp_path, monkeypa
     multi_path.write_text(json.dumps(multi_contract_payload))
     multi_contract = load_contract(multi_path)
     run_simulation(multi_contract, dry_run=True, realtime_chat=True)
-    assert len(realtime_calls) == 0
+    assert len(realtime_calls) > 0
 
 
 def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
@@ -371,9 +371,10 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
     contract = load_contract(contract_path)
 
     class _FakeController:
-        def __init__(self):
+        def __init__(self, *args, **kwargs):
             self.stop_requested = False
             self.behavior_mode = "default"
+            self.active_persona_id = None
 
         def start(self):
             return True
@@ -388,6 +389,9 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
             # Simulate user stop right after first turn.
             self.stop_requested = True
             return False
+
+        def set_active_persona(self, persona_id):
+            self.active_persona_id = persona_id
 
     monkeypatch.setattr(
         "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
