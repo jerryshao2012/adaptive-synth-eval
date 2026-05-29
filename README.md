@@ -569,9 +569,10 @@ The `--realtime-chat` flag streams conversation turns directly in your terminal,
  
 ### Interactive Runtime Controls
  
-When realtime chat is enabled, you get an ephemeral command prompt (`⚡>`) that stays stable while conversation logs scroll above it. Use these commands to control the simulation:
+When realtime chat is enabled, you get an ephemeral command prompt that stays stable while conversation logs scroll above it. In multi-persona mode, the prompt dynamically displays the current active persona ID (e.g., `⚡> [P001] `) for continuous visibility. In single-persona mode, the prompt remains as `⚡> `. Use these commands to control the simulation:
  
 - **Interactive Auto-Hint / Auto-Complete**: Offers auto-completions for commands and arguments dynamically as you type.
+- **Persona Visibility**: In multi-persona mode, the current persona ID is always visible in the prompt, updating instantly when switched. Hidden in single-persona mode to avoid redundancy.
 - **Single-Persona Mode**: If the contract only has one persona, or if the run is filtered using the `--persona <id>` command-line option, the persona switching/listing commands (`personas`, `persona`, `switch`) are disabled and omitted from help/autocomplete.
  
 | Command | Alias | Description |

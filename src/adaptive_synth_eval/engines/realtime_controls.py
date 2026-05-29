@@ -338,6 +338,19 @@ class RealtimeChatController:
 
         return self._status_text(prefix="Behavior updated")
 
+    @property
+    def prompt_text(self) -> str:
+        """Generate dynamic prompt text that includes current persona ID if available.
+        
+        Only shows persona ID in multi-persona mode where switching is possible.
+        In single-persona mode, the base prompt is used to avoid redundancy.
+        """
+        base_prompt = self.PROMPT_TEXT
+        # Only show persona ID in multi-persona mode where it provides value
+        if not self._single_persona_mode and self._state.active_persona_id:
+            return f"{base_prompt}[{self._state.active_persona_id}] "
+        return base_prompt
+
     def _input_loop(self) -> None:
         if PromptSession is None or patch_stdout is None:
             self._input_loop_basic()
@@ -352,7 +365,7 @@ class RealtimeChatController:
             try:
                 # Keep the prompt stable while concurrent stdout/stderr lines are printed.
                 with patch_stdout(raw=True), redirect_stderr(sys.stdout):
-                    raw = session.prompt(self.PROMPT_TEXT)
+                    raw = session.prompt(self.prompt_text)
             except EOFError:
                 return
             except KeyboardInterrupt:
@@ -373,7 +386,7 @@ class RealtimeChatController:
                 if self._state.stop_requested:
                     break
             try:
-                raw = input(self.PROMPT_TEXT)
+                raw = input(self.prompt_text)
             except EOFError:
                 return
             except KeyboardInterrupt:

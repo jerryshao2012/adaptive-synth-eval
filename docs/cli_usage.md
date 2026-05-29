@@ -90,6 +90,8 @@ How `--interactive-realtime-controls` works:
 - Use `--no-interactive-realtime-controls` to turn it off.
 - During the run, type a command and press Enter to control playback.
 - Offers interactive auto-hinting / auto-completion of commands and arguments as you type.
+- In multi-persona mode, the prompt displays the current active persona ID (e.g., `⚡> [P001] `) for continuous visibility.
+- In single-persona mode (one persona in contract or using `--persona` flag), the prompt remains as `⚡> ` without the persona ID since switching is disabled.
 - Supported commands:
   - `h/help`: Show available controls.
   - `s/status`: Show current playback speed, mode, active behavior, and active persona.
@@ -100,7 +102,7 @@ How `--interactive-realtime-controls` works:
   - `personas` (disabled in single-persona runs): List all persona IDs available in the simulation pool.
   - `persona <persona_id>` or `switch <persona_id>` (disabled in single-persona runs): Dynamically switch the user simulator to a different persona mid-conversation.
 - Behavior and persona changes apply to upcoming generated user turns, so you can steer conversation tone and identity live.
-- The `⚡>` prompt remains stable while logs stream above it.
+- The prompt remains stable while logs stream above it, with the persona ID updating dynamically when switched.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.

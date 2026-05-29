@@ -190,3 +190,40 @@ def test_realtime_controller_single_persona_mode():
             assert len(completions) == 0
     except ImportError:
         pass
+
+
+def test_realtime_controller_prompt_text_shows_persona():
+    """Test that the prompt text dynamically includes the active persona ID in multi-persona mode."""
+    from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
+
+    personas = {
+        "P001": {"role": "tester"},
+        "P002": {"role": "manager"},
+    }
+
+    # Test multi-persona mode (default)
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
+
+    # Initially, no persona is set, so prompt should be base only
+    assert controller.prompt_text == "⚡> "
+
+    # Set active persona and verify it appears in prompt (multi-persona mode)
+    controller.set_active_persona("P001")
+    assert controller.prompt_text == "⚡> [P001] "
+
+    # Switch to another persona
+    controller.set_active_persona("P002")
+    assert controller.prompt_text == "⚡> [P002] "
+
+    # Clear persona (set to None)
+    controller.set_active_persona(None)
+    assert controller.prompt_text == "⚡> "
+
+    # Test single-persona mode - should NOT show persona ID even when set
+    controller_single = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P001": {"role": "tester"}},
+        single_persona_mode=True,
+    )
+    controller_single.set_active_persona("P001")
+    assert controller_single.prompt_text == "⚡> "  # No persona ID shown in single-persona mode
