@@ -480,7 +480,7 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
 def test_run_simulation_with_persona_filter(tmp_path):
     from adaptive_synth_eval.config.contract import ContractError
     import pytest
-    
+
     contract_path = tmp_path / "contract_filter.json"
     contract_payload = {
         "simulation_suite": {
@@ -541,7 +541,7 @@ def test_run_simulation_with_persona_filter(tmp_path):
 
     # 1. Run simulation filtering by P002 (case-insensitive)
     summary = run_simulation(contract, dry_run=True, persona_filter="p002")
-    
+
     # Check that conversations only for P002 were run
     turns_file = tmp_path / "outputs" / "runs" / "run_filter" / "turns.jsonl"
     assert turns_file.exists()
@@ -554,3 +554,105 @@ def test_run_simulation_with_persona_filter(tmp_path):
     with pytest.raises(ContractError) as excinfo:
         run_simulation(contract, dry_run=True, persona_filter="P003")
     assert "not found in contract's persona pool" in str(excinfo.value)
+
+
+def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path, monkeypatch):
+    contract_path = tmp_path / "contract_filter_realtime.json"
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {"enabled": False},
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            },
+            {
+                "persona_id": "P002",
+                "role": "manager",
+                "location": "Canada",
+                "seniority": "senior",
+                "communication_style": "direct",
+                "hr_familiarity": "high",
+                "privacy_sensitivity": "medium",
+            },
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 2,
+            "conversation_turns": {"min": 2, "max": 2},
+            "mix": [
+                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
+            ],
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_filter_realtime"},
+    }
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    observed = {"seeded_before_start": False}
+
+    class _FakeController:
+        def __init__(self, *args, **kwargs):
+            self.stop_requested = False
+            self.behavior_mode = "default"
+            self.active_persona_id = None
+
+        def set_active_persona(self, persona_id):
+            self.active_persona_id = persona_id
+
+        def start(self):
+            observed["seeded_before_start"] = self.active_persona_id == "P002"
+            return True
+
+        def stop(self):
+            self.stop_requested = True
+
+        def wait_if_paused(self):
+            return not self.stop_requested
+
+        def wait_for_turn_delay(self):
+            return not self.stop_requested
+
+        def get_behavior_for_persona(self, persona_id=None):
+            return self.behavior_mode
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
+        _FakeController,
+    )
+
+    run_simulation(
+        contract,
+        dry_run=True,
+        realtime_chat=True,
+        interactive_realtime_controls=True,
+        persona_filter="P002",
+    )
+
+    assert observed["seeded_before_start"] is True

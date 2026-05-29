@@ -56,9 +56,9 @@ async def run_simulation_async(
     plan = build_run_plan(contract.traffic, contract.time_window)
     personas = contract.persona_by_id()
     scenarios = contract.scenario_by_id()
+    matched_persona_id: str | None = None
 
     if persona_filter:
-        matched_persona_id = None
         for pid in personas:
             if pid.lower() == persona_filter.lower():
                 matched_persona_id = pid
@@ -92,6 +92,8 @@ async def run_simulation_async(
             personas=personas,
             single_persona_mode=single_persona_mode,
         )
+        if matched_persona_id:
+            realtime_controller.set_active_persona(matched_persona_id)
         realtime_controller.start()
 
     async def process_conversation(planned):

@@ -339,6 +339,7 @@ class RealtimeChatController:
             supported = ", ".join(sorted(self.SUPPORTED_BEHAVIORS))
             return f"Unsupported behavior: {requested}. Supported: {supported}"
 
+        status_prefix = "Behavior updated (global)"
         with self._state_cv:
             # Apply to active persona if one is set, otherwise use global fallback
             if self._state.active_persona_id:
@@ -348,31 +349,32 @@ class RealtimeChatController:
                 self._state.persona_behavior_modes[persona_id] = requested
                 # Also update global for backward compatibility
                 self._state.behavior_mode = requested
-                return self._status_text(prefix=f"Behavior updated for {persona_id}")
+                status_prefix = f"Behavior updated for {persona_id}"
             else:
                 # No active persona, apply globally (backward compatibility)
                 self._state.behavior_mode = requested
-                return self._status_text(prefix="Behavior updated (global)")
+        return self._status_text(prefix=status_prefix)
 
     @property
     def prompt_text(self) -> str:
         """Generate dynamic prompt text that includes current persona ID if available.
-        
-        Only shows persona ID in multi-persona mode where switching is possible.
-        In single-persona mode, the base prompt is used to avoid redundancy.
+
+        Include the active persona whenever it is known so realtime sessions that
+        are filtered to one persona still show which identity is active.
         """
         base_prompt = self.PROMPT_TEXT
-        # Only show persona ID in multi-persona mode where it provides value
-        if not self._single_persona_mode and self._state.active_persona_id:
-            return f"{base_prompt}[{self._state.active_persona_id}] "
+        with self._state_cv:
+            active_persona_id = self._state.active_persona_id
+        if active_persona_id:
+            return f"{base_prompt}[{active_persona_id}] "
         return base_prompt
 
     def get_behavior_for_persona(self, persona_id: str | None = None) -> str:
         """Get the behavior mode for a specific persona or the active persona.
-        
+
         Args:
             persona_id: The persona ID to query. If None, uses the active persona.
-            
+
         Returns:
             The behavior mode for the persona, or 'default' if not set.
         """

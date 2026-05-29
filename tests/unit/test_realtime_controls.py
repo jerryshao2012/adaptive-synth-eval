@@ -322,11 +322,11 @@ def test_realtime_controller_prompt_text_shows_persona():
     controller.set_active_persona(None)
     assert controller.prompt_text == "⚡> "
 
-    # Test single-persona mode - should NOT show persona ID even when set
+    # Test single-persona mode - should still show persona ID when set
     controller_single = RealtimeChatController(
         initial_delay_seconds=0.5,
         personas={"P001": {"role": "tester"}},
         single_persona_mode=True,
     )
     controller_single.set_active_persona("P001")
-    assert controller_single.prompt_text == "⚡> "  # No persona ID shown in single-persona mode
+    assert controller_single.prompt_text == "⚡> [P001] "
