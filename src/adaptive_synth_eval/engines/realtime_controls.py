@@ -12,9 +12,12 @@ from typing import Any
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.patch_stdout import patch_stdout
+    from prompt_toolkit.completion import Completer, Completion
 except Exception:  # pragma: no cover - optional dependency fallback
     PromptSession = None
     patch_stdout = None
+    Completer = None
+    Completion = None
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,77 @@ class RealtimeControlState:
     stop_requested: bool = False
     behavior_mode: str = "default"
     active_persona_id: str | None = None
+
+
+if Completer is not None:
+    class RealtimeCommandCompleter(Completer):
+        """Autocompleter for realtime control commands."""
+
+        def __init__(self, controller: RealtimeChatController) -> None:
+            self.controller = controller
+
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            words = text.split()
+
+            # Commands to suggest at the top level
+            top_level_cmds = [
+                "help",
+                "status",
+                "personas",
+                "persona",
+                "switch",
+                "style",
+                "behavior",
+                "faster",
+                "slower",
+                "pause",
+                "resume",
+                "quit",
+                "stop",
+                "exit",
+            ]
+
+            # Case 1: Empty input or starting to type a single word command
+            if len(words) == 0:
+                for cmd in top_level_cmds:
+                    yield Completion(cmd, start_position=0)
+            elif len(words) == 1 and not text.endswith(" "):
+                prefix = words[0].lower()
+                for cmd in top_level_cmds:
+                    if cmd.startswith(prefix):
+                        yield Completion(cmd, start_position=-len(prefix))
+
+            # Case 2: We have typed the command and a space, and are suggesting the argument
+            elif len(words) == 1 and text.endswith(" "):
+                cmd = words[0].lower()
+                if cmd in {"persona", "switch"}:
+                    active_persona = self.controller.active_persona_id
+                    for p_id in self.controller._personas.keys():
+                        if p_id != active_persona:
+                            yield Completion(p_id, start_position=0)
+                elif cmd in {"style", "behavior", "mode"}:
+                    current_behavior = self.controller.behavior_mode
+                    for behavior in self.controller.SUPPORTED_BEHAVIORS:
+                        if behavior != current_behavior:
+                            yield Completion(behavior, start_position=0)
+
+            # Case 3: We have typed the command and started typing the argument
+            elif len(words) == 2:
+                cmd = words[0].lower()
+                prefix = words[1]
+                if cmd in {"persona", "switch"}:
+                    active_persona = self.controller.active_persona_id
+                    for p_id in self.controller._personas.keys():
+                        if p_id != active_persona and p_id.lower().startswith(prefix.lower()):
+                            yield Completion(p_id, start_position=-len(prefix))
+                elif cmd in {"style", "behavior", "mode"}:
+                    current_behavior = self.controller.behavior_mode
+                    for behavior in self.controller.SUPPORTED_BEHAVIORS:
+                        if behavior != current_behavior and behavior.lower().startswith(prefix.lower()):
+                            yield Completion(behavior, start_position=-len(prefix))
+else:
+    RealtimeCommandCompleter = None
 
 
 class RealtimeChatController:
@@ -265,9 +339,8 @@ class RealtimeChatController:
             self._input_loop_basic()
             return
 
-        import sys
-
-        session = PromptSession()
+        completer = RealtimeCommandCompleter(self) if RealtimeCommandCompleter is not None else None
+        session = PromptSession(completer=completer)
         while True:
             with self._state_cv:
                 if self._state.stop_requested:

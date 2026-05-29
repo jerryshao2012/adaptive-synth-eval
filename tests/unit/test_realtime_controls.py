@@ -75,3 +75,72 @@ def test_realtime_controller_personas_listing_and_switching():
     # test invalid usage format
     msg = controller.apply_command("persona")
     assert "Usage: persona" in msg
+
+
+def test_realtime_command_completer():
+    try:
+        from prompt_toolkit.document import Document
+        from adaptive_synth_eval.engines.realtime_controls import RealtimeCommandCompleter, RealtimeChatController
+    except ImportError:
+        return  # Skip if prompt_toolkit is not installed
+
+    if RealtimeCommandCompleter is None:
+        return  # Skip if prompt_toolkit is not installed
+
+    personas = {
+        "P1": {"role": "tester"},
+        "P2": {"role": "manager"},
+        "P3": {"role": "developer"},
+    }
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
+    completer = RealtimeCommandCompleter(controller)
+
+    # 1. Test top-level commands suggestions
+    completions = list(completer.get_completions(Document("per"), None))
+    # Should suggest "personas" and "persona"
+    texts = [c.text for c in completions]
+    assert "persona" in texts
+    assert "personas" in texts
+    # start_position should be -3 because "per" has length 3
+    assert completions[0].start_position == -3
+
+    # 2. Test empty input top-level suggestions
+    completions = list(completer.get_completions(Document(""), None))
+    texts = [c.text for c in completions]
+    assert "help" in texts
+    assert "persona" in texts
+
+    # 3. Test persona suggestions (active persona is None)
+    completions = list(completer.get_completions(Document("persona "), None))
+    texts = [c.text for c in completions]
+    assert set(texts) == {"P1", "P2", "P3"}
+    assert completions[0].start_position == 0
+
+    # 4. Test persona suggestions with prefix
+    completions = list(completer.get_completions(Document("persona p"), None))
+    texts = [c.text for c in completions]
+    assert set(texts) == {"P1", "P2", "P3"}
+    assert completions[0].start_position == -1
+
+    # 5. Test persona suggestions when active persona is P1 (should exclude P1)
+    controller.set_active_persona("P1")
+    completions = list(completer.get_completions(Document("persona "), None))
+    texts = [c.text for c in completions]
+    assert set(texts) == {"P2", "P3"}
+
+    # 6. Test switch command
+    completions = list(completer.get_completions(Document("switch p"), None))
+    texts = [c.text for c in completions]
+    assert set(texts) == {"P2", "P3"}
+
+    # 7. Test style/behavior command suggestions (active behavior is "default")
+    completions = list(completer.get_completions(Document("style "), None))
+    texts = [c.text for c in completions]
+    assert "aggressive" in texts
+    assert "default" not in texts  # should exclude active behavior
+
+    # 8. Test style/behavior command suggestions with prefix
+    completions = list(completer.get_completions(Document("style agg"), None))
+    texts = [c.text for c in completions]
+    assert texts == ["aggressive"]
+    assert completions[0].start_position == -3
