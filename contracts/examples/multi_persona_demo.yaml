@@ -1,0 +1,119 @@
+simulation_suite:
+  suite_id: multi_persona_demo_suite
+  target_application: unit_test_bot
+  run_mode: synthetic_chat_history_generation
+  synthetic_flag: true
+
+target_chatbot:
+  enabled: true
+  endpoint: "${CHATBOT_ENDPOINT:-}"
+  auth:
+    type: bearer
+    env_var: CHATBOT_API_TOKEN
+  timeout_seconds: 60.0
+
+time_window:
+  start_day: "2026-05-28"
+  num_synthetic_days: 1
+  compressed_runtime_minutes: 10
+
+# Multiple personas demonstrating different user types
+persona_pool:
+  - persona_id: DEMO_P1
+    role: new_employee
+    location: Toronto
+    seniority: junior
+    communication_style: confused_but_polite
+    hr_familiarity: low
+    privacy_sensitivity: medium
+    
+  - persona_id: DEMO_P2
+    role: manager
+    location: Vancouver
+    seniority: senior
+    communication_style: direct_under_time_pressure
+    hr_familiarity: high
+    privacy_sensitivity: high
+    
+  - persona_id: DEMO_P3
+    role: contractor
+    location: Remote
+    seniority: mid_level
+    communication_style: casual_and_brief
+    hr_familiarity: medium
+    privacy_sensitivity: low
+
+# Different scenarios to test various chatbot capabilities
+scenario_catalog:
+  - scenario_id: DEMO_S1
+    domain: benefits_enrollment
+    intent: understand_eligibility
+    expected_retrieval_topics: [benefits, enrollment, eligibility]
+    failure_injection:
+      ambiguity: 0.3
+      missing_information: 0.2
+      typos: 0.1
+      frustration: 0.1
+      policy_boundary_pressure: 0.0
+    success_criteria:
+      answers_grounded_in_policy: true
+      asks_clarifying_question_if_needed: true
+      
+  - scenario_id: DEMO_S2
+    domain: leave_policy
+    intent: request_time_off
+    expected_retrieval_topics: [vacation, sick_leave, approval_process]
+    failure_injection:
+      ambiguity: 0.2
+      missing_information: 0.3
+      typos: 0.05
+      frustration: 0.2
+      policy_boundary_pressure: 0.1
+    success_criteria:
+      answers_grounded_in_policy: true
+      safe_boundary_handling: true
+
+traffic_orchestration:
+  total_conversations: 15
+  conversation_turns:
+    min: 3
+    max: 5
+  # Mix demonstrates how different personas interact with different scenarios
+  mix:
+    # New employee asking about benefits (most common)
+    - persona_id: DEMO_P1
+      scenario_id: DEMO_S1
+      weight: 0.35
+      
+    # New employee asking about leave
+    - persona_id: DEMO_P1
+      scenario_id: DEMO_S2
+      weight: 0.20
+      
+    # Manager asking about benefits (less common, more direct)
+    - persona_id: DEMO_P2
+      scenario_id: DEMO_S1
+      weight: 0.15
+      
+    # Manager asking about leave policies
+    - persona_id: DEMO_P2
+      scenario_id: DEMO_S2
+      weight: 0.15
+      
+    # Contractor asking about benefits
+    - persona_id: DEMO_P3
+      scenario_id: DEMO_S1
+      weight: 0.10
+      
+    # Contractor asking about leave
+    - persona_id: DEMO_P3
+      scenario_id: DEMO_S2
+      weight: 0.05
+      
+  random_seed: 42
+  max_concurrency: 3
+  batch_size: 15
+
+output:
+  base_dir: ../../outputs
+  run_id: multi_persona_demo_run
