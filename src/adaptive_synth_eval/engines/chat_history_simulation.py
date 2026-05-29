@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import cast
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
@@ -131,10 +132,9 @@ async def run_simulation_async(
 
             if realtime_controller and realtime_controller.active_persona_id:
                 active_pid = realtime_controller.active_persona_id
-                if active_pid != simulator.persona.persona_id:
-                    if active_pid in personas:
-                        new_persona = personas[active_pid]
-                        simulator.switch_persona(new_persona)
+                if active_pid is not None and active_pid != simulator.persona.persona_id and active_pid in personas:
+                    new_persona = personas[cast(str, active_pid)]
+                    simulator.switch_persona(new_persona)
 
             # Get behavior mode for the current persona (persona-specific or global fallback)
             behavior_override = (
@@ -296,7 +296,7 @@ async def run_simulation_async(
         close_client = getattr(client, "close", None)
         if close_client_async:
             await close_client_async()
-        elif close_client:
+        elif callable(close_client):
             await asyncio.to_thread(close_client)
         if realtime_controller:
             realtime_controller.stop()

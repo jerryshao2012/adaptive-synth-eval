@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import fields
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+
 from adaptive_synth_eval.config.schemas import (
     BrowserChatbot,
     BurstPattern,
@@ -186,15 +188,15 @@ def _parse_persona(payload: dict[str, Any]) -> Persona:
         "privacy_sensitivity",
     ]
     _require_keys(payload, required, "persona")
-    fields = Persona.__dataclass_fields__.keys()
-    return Persona(**{key: payload.get(key) for key in fields if key in payload})
+    field_names = {f.name for f in fields(Persona)}
+    return Persona(**{key: payload.get(key) for key in field_names if key in payload})
 
 
 def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:
     browser_payload = payload.get("browser")
     browser = BrowserChatbot(**browser_payload) if isinstance(browser_payload, dict) else None
-    fields = set(TargetChatbot.__dataclass_fields__.keys()) - {"browser"}
-    values = {key: payload.get(key) for key in fields if key in payload}
+    field_names = {f.name for f in fields(TargetChatbot)} - {"browser"}
+    values = {key: payload.get(key) for key in field_names if key in payload}
     return TargetChatbot(**values, browser=browser)
 
 
@@ -218,7 +220,8 @@ def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
         intent=str(payload["intent"]),
         expected_retrieval_topics=list(payload["expected_retrieval_topics"]),
         failure_injection=FailureInjection.from_dict(payload.get("failure_injection")),
-        success_criteria=dict(payload["success_criteria"]),
+        success_criteria=cast(dict[str, Any], payload["success_criteria"]) if isinstance(payload["success_criteria"],
+                                                                                         dict) else {},
         context=payload.get("context"),
     )
 
@@ -230,7 +233,7 @@ def _parse_traffic(payload: dict[str, Any]) -> TrafficOrchestration:
         conversation_turns=ConversationTurns(min=int(turns["min"]), max=int(turns["max"])),
         mix=[MixItem(**item) for item in payload["mix"]],
         burst_patterns=[BurstPattern(**item) for item in payload.get("burst_patterns", [])],
-        synthetic_day_distribution=dict(payload.get("synthetic_day_distribution", {})),
+        synthetic_day_distribution=cast(dict[str, float], payload.get("synthetic_day_distribution", {})),
         random_seed=payload.get("random_seed"),
         max_concurrency=int(payload.get("max_concurrency", 5)),
         batch_size=int(payload.get("batch_size", 50)),
