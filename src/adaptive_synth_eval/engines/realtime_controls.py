@@ -40,7 +40,9 @@ if Completer is not None:
 
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
-            words = text.split()
+            word_before = document.get_word_before_cursor()
+            text_before = text[:-len(word_before)] if word_before else text
+            words_before = text_before.split()
 
             # Commands to suggest at the top level
             top_level_cmds = [
@@ -60,43 +62,26 @@ if Completer is not None:
                 "exit",
             ]
 
-            # Case 1: Empty input or starting to type a single word command
-            if len(words) == 0:
+            # Case 1: Typing the command itself
+            if len(words_before) == 0:
+                prefix = word_before.lower()
                 for cmd in top_level_cmds:
-                    yield Completion(cmd, start_position=0)
-            elif len(words) == 1 and not text.endswith(" "):
-                prefix = words[0].lower()
-                for cmd in top_level_cmds:
-                    if cmd.startswith(prefix):
+                    if not prefix or cmd.startswith(prefix):
                         yield Completion(cmd, start_position=-len(prefix))
 
-            # Case 2: We have typed the command and a space, and are suggesting the argument
-            elif len(words) == 1 and text.endswith(" "):
-                cmd = words[0].lower()
+            # Case 2: Typing the first argument
+            elif len(words_before) == 1:
+                cmd = words_before[0].lower()
+                prefix = word_before.lower()
                 if cmd in {"persona", "switch"}:
                     active_persona = self.controller.active_persona_id
                     for p_id in self.controller._personas.keys():
-                        if p_id != active_persona:
-                            yield Completion(p_id, start_position=0)
-                elif cmd in {"style", "behavior", "mode"}:
-                    current_behavior = self.controller.behavior_mode
-                    for behavior in self.controller.SUPPORTED_BEHAVIORS:
-                        if behavior != current_behavior:
-                            yield Completion(behavior, start_position=0)
-
-            # Case 3: We have typed the command and started typing the argument
-            elif len(words) == 2:
-                cmd = words[0].lower()
-                prefix = words[1]
-                if cmd in {"persona", "switch"}:
-                    active_persona = self.controller.active_persona_id
-                    for p_id in self.controller._personas.keys():
-                        if p_id != active_persona and p_id.lower().startswith(prefix.lower()):
+                        if p_id != active_persona and (not prefix or p_id.lower().startswith(prefix)):
                             yield Completion(p_id, start_position=-len(prefix))
                 elif cmd in {"style", "behavior", "mode"}:
                     current_behavior = self.controller.behavior_mode
                     for behavior in self.controller.SUPPORTED_BEHAVIORS:
-                        if behavior != current_behavior and behavior.lower().startswith(prefix.lower()):
+                        if behavior != current_behavior and (not prefix or behavior.lower().startswith(prefix)):
                             yield Completion(behavior, start_position=-len(prefix))
 else:
     RealtimeCommandCompleter = None
@@ -340,7 +325,7 @@ class RealtimeChatController:
             return
 
         completer = RealtimeCommandCompleter(self) if RealtimeCommandCompleter is not None else None
-        session = PromptSession(completer=completer)
+        session = PromptSession(completer=completer, complete_while_typing=True)
         while True:
             with self._state_cv:
                 if self._state.stop_requested:
