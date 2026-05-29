@@ -324,3 +324,64 @@ def test_cli_can_disable_interactive_controls_with_no_flag(tmp_path, monkeypatch
 
     assert exit_code == 0
     assert captured["interactive_realtime_controls"] is False
+
+
+def test_cli_runs_with_persona_option(tmp_path, monkeypatch):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target_chatbot": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    captured = {}
+
+    def _fake_run_simulation(*args, **kwargs):
+        captured["persona_filter"] = kwargs.get("persona_filter")
+        return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
+
+    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--persona", "P001"])
+
+    assert exit_code == 0
+    assert captured["persona_filter"] == "P001"

@@ -61,6 +61,8 @@ if Completer is not None:
                 "stop",
                 "exit",
             ]
+            if self.controller._single_persona_mode:
+                top_level_cmds = [c for c in top_level_cmds if c not in {"personas", "persona", "switch"}]
 
             # Case 1: Typing the command itself
             if len(words_before) == 0:
@@ -74,6 +76,8 @@ if Completer is not None:
                 cmd = words_before[0].lower()
                 prefix = word_before.lower()
                 if cmd in {"persona", "switch"}:
+                    if self.controller._single_persona_mode:
+                        return
                     active_persona = self.controller.active_persona_id
                     for p_id in self.controller._personas.keys():
                         if p_id != active_persona and (not prefix or p_id.lower().startswith(prefix)):
@@ -113,11 +117,20 @@ class RealtimeChatController:
             min_delay_seconds: float = 0.0,
             max_delay_seconds: float = 5.0,
             personas: dict[str, Any] | None = None,
+            single_persona_mode: bool = False,
     ) -> None:
         self._delay_step_seconds = delay_step_seconds
         self._min_delay_seconds = min_delay_seconds
         self._max_delay_seconds = max_delay_seconds
         self._personas = personas or {}
+        self._single_persona_mode = single_persona_mode
+        if self._single_persona_mode:
+            self.command_help = (
+                "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
+                "[p]ause/resume, [q]uit, style <behavior>"
+            )
+        else:
+            self.command_help = self.COMMAND_HELP
         self._state = RealtimeControlState(
             delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
         )
@@ -170,7 +183,7 @@ class RealtimeChatController:
             self._reduce_noisy_loggers_for_interactive_prompt()
         self._input_thread = threading.Thread(target=self._input_loop, name="realtime-chat-controls", daemon=True)
         self._input_thread.start()
-        logger.info(self.COMMAND_HELP)
+        logger.info(self.command_help)
         logger.info("Type a command and press Enter while realtime chat is running.")
         return True
 
@@ -187,20 +200,26 @@ class RealtimeChatController:
         """Apply a command and return a status line suitable for console output."""
         normalized = command.strip().lower()
         if normalized in {"h", "help"}:
-            return self.COMMAND_HELP
+            return self.command_help
         if normalized in {"s", "status"}:
             return self._status_text()
         if normalized == "personas":
+            if self._single_persona_mode:
+                return "Persona switching commands are disabled when running in single-persona mode."
             if not self._personas:
                 return "No personas available in pool."
             return "Available personas: " + ", ".join(self._personas.keys())
         if normalized.startswith("persona ") or normalized.startswith("switch "):
+            if self._single_persona_mode:
+                return "Persona switching commands are disabled when running in single-persona mode."
             parts = command.strip().split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 return "Usage: persona <persona_id>"
             requested = parts[1].strip()
             return self._set_active_persona_by_name(requested)
         if normalized in {"persona", "switch"}:
+            if self._single_persona_mode:
+                return "Persona switching commands are disabled when running in single-persona mode."
             return "Usage: persona <persona_id>"
         if normalized.startswith("style ") or normalized.startswith("behavior "):
             parts = normalized.split(maxsplit=1)

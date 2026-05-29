@@ -475,3 +475,82 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
 
     assert summary["stopped_early"] is False
     assert summary["total_turns"] == 3
+
+
+def test_run_simulation_with_persona_filter(tmp_path):
+    from adaptive_synth_eval.config.contract import ContractError
+    import pytest
+    
+    contract_path = tmp_path / "contract_filter.json"
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {"enabled": False},
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            },
+            {
+                "persona_id": "P002",
+                "role": "manager",
+                "location": "Canada",
+                "seniority": "senior",
+                "communication_style": "direct",
+                "hr_familiarity": "high",
+                "privacy_sensitivity": "medium",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 4,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [
+                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5}
+            ],
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_filter"},
+    }
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    # 1. Run simulation filtering by P002 (case-insensitive)
+    summary = run_simulation(contract, dry_run=True, persona_filter="p002")
+    
+    # Check that conversations only for P002 were run
+    turns_file = tmp_path / "outputs" / "runs" / "run_filter" / "turns.jsonl"
+    assert turns_file.exists()
+    lines = [json.loads(line) for line in turns_file.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) > 0
+    for turn in lines:
+        assert turn["persona_id"] == "P002"
+
+    # 2. Test invalid persona filter throws ContractError
+    with pytest.raises(ContractError) as excinfo:
+        run_simulation(contract, dry_run=True, persona_filter="P003")
+    assert "not found in contract's persona pool" in str(excinfo.value)

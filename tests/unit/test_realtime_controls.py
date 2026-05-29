@@ -144,3 +144,49 @@ def test_realtime_command_completer():
     texts = [c.text for c in completions]
     assert texts == ["aggressive"]
     assert completions[0].start_position == -3
+
+
+def test_realtime_controller_single_persona_mode():
+    from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
+    personas = {
+        "P1": {"role": "tester"},
+        "P2": {"role": "manager"},
+    }
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas=personas,
+        single_persona_mode=True,
+    )
+
+    # 1. Test command_help doesn't show persona controls
+    assert "persona" not in controller.command_help
+
+    # 2. Test apply_command returns disabled messages
+    msg1 = controller.apply_command("personas")
+    assert "disabled" in msg1
+
+    msg2 = controller.apply_command("persona P2")
+    assert "disabled" in msg2
+
+    msg3 = controller.apply_command("switch P1")
+    assert "disabled" in msg3
+
+    # 3. Test autocomplete does not suggest persona commands
+    try:
+        from prompt_toolkit.document import Document
+        from adaptive_synth_eval.engines.realtime_controls import RealtimeCommandCompleter
+
+        if RealtimeCommandCompleter is not None:
+            completer = RealtimeCommandCompleter(controller)
+            # Test empty input autocomplete
+            completions = list(completer.get_completions(Document(""), None))
+            texts = [c.text for c in completions]
+            assert "personas" not in texts
+            assert "persona" not in texts
+            assert "switch" not in texts
+
+            # Test typed 'persona ' argument autocomplete is empty
+            completions = list(completer.get_completions(Document("persona "), None))
+            assert len(completions) == 0
+    except ImportError:
+        pass

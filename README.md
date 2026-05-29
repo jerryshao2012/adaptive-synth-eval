@@ -500,6 +500,7 @@ uv run ase run --contract <contract-file.yaml> [OPTIONS]
 - `--realtime-chat`: Stream conversations live in terminal (supports single & multi-persona)
 - `--interactive-realtime-controls`: Enable runtime controls (default: on with --realtime-chat)
 - `--no-interactive-realtime-controls`: Disable runtime controls
+- `--persona <id>`: Limit/filter simulation run to only a specific persona ID, disabling persona switching controls
 
 **Examples**:
 ```bash
@@ -563,13 +564,16 @@ outputs/runs/chatbot_test_run/
 ```
 
 ## Realtime Chat & Controls
-
+ 
 The `--realtime-chat` flag streams conversation turns directly in your terminal, providing a Claude Code / Copilot CLI-style experience. It supports both single-persona and multi-persona simulation pools, running planned conversations sequentially.
-
+ 
 ### Interactive Runtime Controls
-
+ 
 When realtime chat is enabled, you get an ephemeral command prompt (`⚡>`) that stays stable while conversation logs scroll above it. Use these commands to control the simulation:
-
+ 
+- **Interactive Auto-Hint / Auto-Complete**: Offers auto-completions for commands and arguments dynamically as you type.
+- **Single-Persona Mode**: If the contract only has one persona, or if the run is filtered using the `--persona <id>` command-line option, the persona switching/listing commands (`personas`, `persona`, `switch`) are disabled and omitted from help/autocomplete.
+ 
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `help` | `h` | Show all available controls |
@@ -579,20 +583,20 @@ When realtime chat is enabled, you get an ephemeral command prompt (`⚡>`) that
 | `pause` | `p` | Toggle pause/resume |
 | `stop` | `q` | Stop the run early |
 | `style <mode>` | - | Change user behavior for upcoming turns (default, aggressive, polite, concise, confused, anxious) |
-| `personas` | - | List all persona IDs available in the simulation pool |
-| `persona <id>` | - | Dynamically switch the user simulator to a different persona mid-conversation (e.g. `persona TEST_P1`) |
-
+| `personas` | - | List all persona IDs available in the simulation pool (disabled in single-persona runs) |
+| `persona <id>` | - | Dynamically switch the user simulator to a different persona mid-conversation (disabled in single-persona runs) |
+ 
 ### Behavior Modes
-
+ 
 Change how the persona behaves mid-conversation:
-
+ 
 - `default` - Normal conversation style
 - `aggressive` - Direct, demanding tone
 - `polite` - Courteous and formal
 - `concise` - Brief, to-the-point messages
 - `confused` - Uncertain, asking clarifying questions
 - `anxious` - Worried, seeking reassurance
-
+ 
 **Examples**:
 ```bash
 # While the run is active, type:
@@ -600,17 +604,20 @@ style aggressive
 style polite
 style default
 ```
-
+ 
 ### Usage
-
+ 
 ```bash
 # Enable realtime chat with interactive controls (default)
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
-
+ 
+# Run a specific persona in isolation (disables persona switching/listing)
+uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --persona P1
+ 
 # Disable interactive controls
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
 ```
-
+ 
 > **Note**: Controls are ephemeral—they only exist during the active run. When the run completes or you stop it, the input prompt is removed automatically.
 
 ## Documentation

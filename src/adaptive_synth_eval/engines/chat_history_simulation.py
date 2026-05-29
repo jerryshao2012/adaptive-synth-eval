@@ -8,7 +8,7 @@ from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.utils import display_bot_message, display_persona_message
-from adaptive_synth_eval.config.contract import contract_to_dict
+from adaptive_synth_eval.config.contract import ContractError, contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.generation.traffic import build_run_plan
@@ -26,6 +26,7 @@ def run_simulation(
         output_conversations: bool = False,
         realtime_chat: bool = False,
         interactive_realtime_controls: bool = False,
+        persona_filter: str | None = None,
 ) -> dict:
     """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
     return asyncio.run(
@@ -35,6 +36,7 @@ def run_simulation(
             output_conversations=output_conversations,
             realtime_chat=realtime_chat,
             interactive_realtime_controls=interactive_realtime_controls,
+            persona_filter=persona_filter,
         )
     )
 
@@ -46,12 +48,28 @@ async def run_simulation_async(
         output_conversations: bool = False,
         realtime_chat: bool = False,
         interactive_realtime_controls: bool = False,
+        persona_filter: str | None = None,
 ) -> dict:
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
     plan = build_run_plan(contract.traffic, contract.time_window)
     personas = contract.persona_by_id()
     scenarios = contract.scenario_by_id()
+
+    if persona_filter:
+        matched_persona_id = None
+        for pid in personas:
+            if pid.lower() == persona_filter.lower():
+                matched_persona_id = pid
+                break
+        if not matched_persona_id:
+            raise ContractError(
+                f"Specified persona '{persona_filter}' not found in contract's persona pool: {list(personas.keys())}"
+            )
+        plan = [planned for planned in plan if planned.persona_id == matched_persona_id]
+        if not plan:
+            logger.warning("No conversations planned for persona '%s' in this run.", matched_persona_id)
+
     client = create_chatbot_client(contract.target_chatbot, dry_run=dry_run)
 
     records: list[ChatHistoryRecord] = []
@@ -68,7 +86,11 @@ async def run_simulation_async(
         logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
 
     if realtime_chat_enabled and interactive_realtime_controls:
-        realtime_controller = RealtimeChatController(personas=personas)
+        single_persona_mode = (len(personas) <= 1) or (persona_filter is not None)
+        realtime_controller = RealtimeChatController(
+            personas=personas,
+            single_persona_mode=single_persona_mode,
+        )
         realtime_controller.start()
 
     async def process_conversation(planned):

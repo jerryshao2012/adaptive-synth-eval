@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_conversations=args.output_conversations,
                 realtime_chat=args.realtime_chat,
                 interactive_realtime_controls=interactive_controls,
+                persona_filter=args.persona,
             )
             logger.info("Run complete: %s", summary['run_id'])
             logger.info(json.dumps(summary, indent=2))
@@ -101,6 +102,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "Enable runtime controls during --realtime-chat (default: enabled with --realtime-chat). "
             "Use --no-interactive-realtime-controls to disable."
         ),
+    )
+    run.add_argument(
+        "--persona",
+        help="Limit/filter the simulation run to only a specific persona ID, disabling persona switching controls.",
     )
     summarize = sub.add_parser(
         "summarize",
