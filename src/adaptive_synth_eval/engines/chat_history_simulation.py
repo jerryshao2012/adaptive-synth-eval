@@ -136,7 +136,12 @@ async def run_simulation_async(
                         new_persona = personas[active_pid]
                         simulator.switch_persona(new_persona)
 
-            behavior_override = realtime_controller.behavior_mode if realtime_controller else None
+            # Get behavior mode for the current persona (persona-specific or global fallback)
+            behavior_override = (
+                realtime_controller.get_behavior_for_persona(simulator.persona.persona_id)
+                if realtime_controller
+                else None
+            )
             logger.info(
                 "[%s|turn=%s] Persona thinking started (provider=%s, behavior=%s)...",
                 planned.conversation_id,

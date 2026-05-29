@@ -27,8 +27,9 @@ class RealtimeControlState:
     delay_seconds: float
     paused: bool = False
     stop_requested: bool = False
-    behavior_mode: str = "default"
+    behavior_mode: str = "default"  # Global fallback for backward compatibility
     active_persona_id: str | None = None
+    persona_behavior_modes: dict[str, str] | None = None  # Per-persona behavior tracking
 
 
 if Completer is not None:
@@ -132,7 +133,8 @@ class RealtimeChatController:
         else:
             self.command_help = self.COMMAND_HELP
         self._state = RealtimeControlState(
-            delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds))
+            delay_seconds=max(min_delay_seconds, min(max_delay_seconds, initial_delay_seconds)),
+            persona_behavior_modes={},
         )
         self._state_cv = threading.Condition(threading.Lock())
         self._input_thread: threading.Thread | None = None
@@ -306,8 +308,12 @@ class RealtimeChatController:
         with self._state_cv:
             paused_text = "paused" if self._state.paused else "running"
             delay = self._state.delay_seconds
-            behavior = self._state.behavior_mode
             persona = self._state.active_persona_id
+            # Get the behavior for the active persona specifically
+            if persona and self._state.persona_behavior_modes:
+                behavior = self._state.persona_behavior_modes.get(persona, self._state.behavior_mode)
+            else:
+                behavior = self._state.behavior_mode
         return (
             f"{prefix}: delay={delay:.2f}s, "
             f"mode={paused_text}, behavior={behavior}, persona={persona or 'none'}"
@@ -334,9 +340,19 @@ class RealtimeChatController:
             return f"Unsupported behavior: {requested}. Supported: {supported}"
 
         with self._state_cv:
-            self._state.behavior_mode = requested
-
-        return self._status_text(prefix="Behavior updated")
+            # Apply to active persona if one is set, otherwise use global fallback
+            if self._state.active_persona_id:
+                persona_id = self._state.active_persona_id
+                if self._state.persona_behavior_modes is None:
+                    self._state.persona_behavior_modes = {}
+                self._state.persona_behavior_modes[persona_id] = requested
+                # Also update global for backward compatibility
+                self._state.behavior_mode = requested
+                return self._status_text(prefix=f"Behavior updated for {persona_id}")
+            else:
+                # No active persona, apply globally (backward compatibility)
+                self._state.behavior_mode = requested
+                return self._status_text(prefix="Behavior updated (global)")
 
     @property
     def prompt_text(self) -> str:
@@ -350,6 +366,21 @@ class RealtimeChatController:
         if not self._single_persona_mode and self._state.active_persona_id:
             return f"{base_prompt}[{self._state.active_persona_id}] "
         return base_prompt
+
+    def get_behavior_for_persona(self, persona_id: str | None = None) -> str:
+        """Get the behavior mode for a specific persona or the active persona.
+        
+        Args:
+            persona_id: The persona ID to query. If None, uses the active persona.
+            
+        Returns:
+            The behavior mode for the persona, or 'default' if not set.
+        """
+        with self._state_cv:
+            target_id = persona_id or self._state.active_persona_id
+            if target_id and self._state.persona_behavior_modes:
+                return self._state.persona_behavior_modes.get(target_id, "default")
+            return self._state.behavior_mode  # Fallback to global
 
     def _input_loop(self) -> None:
         if PromptSession is None or patch_stdout is None:

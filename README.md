@@ -583,13 +583,13 @@ When realtime chat is enabled, you get an ephemeral command prompt that stays st
 | `slower` | `-` | Slow down playback |
 | `pause` | `p` | Toggle pause/resume |
 | `stop` | `q` | Stop the run early |
-| `style <mode>` | - | Change user behavior for upcoming turns (default, aggressive, polite, concise, confused, anxious) |
+| `style <mode>` | - | Change user behavior for the **active persona** (default, aggressive, polite, concise, confused, anxious). Each persona maintains its own behavior mode. |
 | `personas` | - | List all persona IDs available in the simulation pool (disabled in single-persona runs) |
 | `persona <id>` | - | Dynamically switch the user simulator to a different persona mid-conversation (disabled in single-persona runs) |
  
 ### Behavior Modes
  
-Change how the persona behaves mid-conversation:
+Change how the persona behaves mid-conversation. **Each persona maintains its own behavior mode independently**, allowing you to test different personality combinations:
  
 - `default` - Normal conversation style
 - `aggressive` - Direct, demanding tone
@@ -601,10 +601,29 @@ Change how the persona behaves mid-conversation:
 **Examples**:
 ```bash
 # While the run is active, type:
-style aggressive
-style polite
-style default
+
+# Set P001 to aggressive mode
+⚡> [P001] style aggressive
+Behavior updated for P001
+
+# Switch to P002 and set different behavior
+⚡> [P001] persona P002
+Persona updated
+⚡> [P002] style polite
+Behavior updated for P002
+
+# Switch back to P001 - retains 'aggressive' behavior
+⚡> [P002] persona P001
+Persona updated
+⚡> [P001] status
+Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
 ```
+
+**Key Points:**
+- `style <mode>` applies to the **currently active persona** only
+- Behavior modes are stored per-persona and persist across switches
+- When no persona is active, styles apply globally as a fallback
+- Status command shows the correct behavior for the active persona
  
 ### Usage
  

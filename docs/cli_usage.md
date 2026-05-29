@@ -98,12 +98,31 @@ How `--interactive-realtime-controls` works:
   - `+/faster` or `-/slower`: Adjust turn playback speed.
   - `p/pause`: Pause or resume conversation turns.
   - `q/stop`: Stop the simulation early.
-  - `style <mode>`: Dynamically set the communication style of subsequent turns. Modes: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`.
+  - `style <mode>`: Dynamically set the communication style for the **currently active persona**. Each persona maintains its own behavior mode independently. Modes: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`. When no persona is active, applies globally as a fallback.
   - `personas` (disabled in single-persona runs): List all persona IDs available in the simulation pool.
   - `persona <persona_id>` or `switch <persona_id>` (disabled in single-persona runs): Dynamically switch the user simulator to a different persona mid-conversation.
-- Behavior and persona changes apply to upcoming generated user turns, so you can steer conversation tone and identity live.
+- Behavior changes apply to the active persona and persist across persona switches. Each persona can have its own distinct behavior mode.
 - The prompt remains stable while logs stream above it, with the persona ID updating dynamically when switched.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
+
+**Per-Persona Behavior Example:**
+```bash
+# Set P001 to aggressive mode
+⚡> [P001] style aggressive
+Behavior updated for P001
+
+# Switch to P002 and set different behavior
+⚡> [P001] persona P002
+Persona updated
+⚡> [P002] style polite
+Behavior updated for P002
+
+# Switch back to P001 - retains 'aggressive' behavior
+⚡> [P002] persona P001
+Persona updated
+⚡> [P001] status
+Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
+```
 
 To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.
 

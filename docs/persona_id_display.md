@@ -1,8 +1,8 @@
-# Realtime Persona ID Display Enhancement
+# Realtime Persona ID Display and Per-Persona Behavior Enhancement
 
 ## Overview
 
-This enhancement adds continuous visibility of the current persona ID during realtime simulation mode by displaying it directly in the interactive control prompt.
+This enhancement adds continuous visibility of the current persona ID during realtime simulation mode by displaying it directly in the interactive control prompt, and enables **per-persona behavior modes** where each persona can maintain its own distinct communication style independently.
 
 ## Problem
 
@@ -69,6 +69,7 @@ def prompt_text(self) -> str:
 3. **Non-Intrusive**: Doesn't clutter the conversation display
 4. **Context-Aware**: Shows relevant information right where user interacts
 5. **No Breaking Changes**: Backward compatible - works with existing code
+6. **Per-Persona Behaviors**: Each persona maintains independent behavior modes that persist across switches
 
 ## Testing
 
@@ -111,13 +112,42 @@ persona P002
 # Prompt updates to: ⚡> [P002] 
 ```
 
+### Per-Persona Behavior Modes
+
+Each persona can have its own behavior mode that persists across switches:
+
+```bash
+# Set P001 to aggressive mode
+⚡> [P001] style aggressive
+Behavior updated for P001
+
+# Switch to P002 and set different behavior
+⚡> [P001] persona P002
+Persona updated
+⚡> [P002] style polite
+Behavior updated for P002
+
+# Switch back to P001 - retains 'aggressive' behavior
+⚡> [P002] persona P001
+Persona updated
+⚡> [P001] status
+Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
+```
+
+**Key Points:**
+- `style <mode>` applies to the **currently active persona** only
+- Behavior modes are stored per-persona and persist across switches
+- When no persona is active, styles apply globally as a fallback
+- Status command shows the correct behavior for the active persona
+
 ## Files Modified
 
-1. `src/adaptive_synth_eval/engines/realtime_controls.py` - Core implementation
-2. `tests/unit/test_realtime_controls.py` - Test coverage
-3. `docs/cli_usage.md` - Documentation update
-4. `README.md` - User-facing documentation
-5. `examples/demo_persona_prompt.py` - Demonstration script
+1. `src/adaptive_synth_eval/engines/realtime_controls.py` - Core implementation (prompt display + per-persona behavior tracking)
+2. `src/adaptive_synth_eval/engines/chat_history_simulation.py` - Integration with persona-specific behavior retrieval
+3. `tests/unit/test_realtime_controls.py` - Test coverage for both features
+4. `docs/cli_usage.md` - Documentation update
+5. `README.md` - User-facing documentation
+6. `examples/demo_persona_prompt.py` - Demonstration script
 
 ## Design Rationale
 
@@ -148,10 +178,11 @@ Using a `@property` decorator ensures:
 
 Potential improvements could include:
 
-1. **Color Coding**: Different colors for different personas
+1. **Color Coding**: Different colors for different personas in the prompt
 2. **Persona Role Display**: Show role alongside ID (e.g., `⚡> [P001:new_employee]`)
-3. **Behavior Mode Indicator**: Also show current behavior style
+3. **Behavior Mode Indicator**: Also show current behavior style in prompt (e.g., `⚡> [P001:aggressive]`)
 4. **Customizable Format**: Allow users to configure prompt format
+5. **Visual Styling**: Apply Rich formatting styles to persona messages based on behavior mode
 
 ## Compatibility
 
