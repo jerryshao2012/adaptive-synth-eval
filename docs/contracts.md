@@ -71,3 +71,4 @@ Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max
 - `contracts/examples/chatbot_test_contract.yaml`: A focused contract for unit testing chatbot client functionality.
 - `contracts/examples/browser_chatbot_test.yaml`: A focused contract for testing browser-driven chatbot integration.
 - `contracts/examples/ten_k_conversations.yaml`: A scale test contract for 10,000 conversations.
+- `contracts/examples/multi_persona_demo.yaml`: A multi-persona contract demonstrating real-time chat and isolated persona runs.

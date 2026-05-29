@@ -393,6 +393,9 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
         def set_active_persona(self, persona_id):
             self.active_persona_id = persona_id
 
+        def get_behavior_for_persona(self, persona_id=None):
+            return self.behavior_mode
+
     monkeypatch.setattr(
         "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
         _FakeController,
@@ -603,7 +606,7 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
         ],
         "traffic_orchestration": {
             "total_conversations": 2,
-            "conversation_turns": {"min": 2, "max": 2},
+            "conversation_turns": {"min": 3, "max": 3},
             "mix": [
                 {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
                 {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},

@@ -347,8 +347,6 @@ class RealtimeChatController:
                 if self._state.persona_behavior_modes is None:
                     self._state.persona_behavior_modes = {}
                 self._state.persona_behavior_modes[persona_id] = requested
-                # Also update global for backward compatibility
-                self._state.behavior_mode = requested
                 status_prefix = f"Behavior updated for {persona_id}"
             else:
                 # No active persona, apply globally (backward compatibility)
@@ -380,8 +378,8 @@ class RealtimeChatController:
         """
         with self._state_cv:
             target_id = persona_id or self._state.active_persona_id
-            if target_id and self._state.persona_behavior_modes:
-                return self._state.persona_behavior_modes.get(target_id, "default")
+            if target_id and self._state.persona_behavior_modes and target_id in self._state.persona_behavior_modes:
+                return self._state.persona_behavior_modes[target_id]
             return self._state.behavior_mode  # Fallback to global
 
     def _input_loop(self) -> None:

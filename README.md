@@ -806,6 +806,7 @@ adaptive-synth-eval/
 ├── contracts/examples/          # Example simulation contracts
 │   ├── chatbot_test_contract.yaml
 │   ├── browser_chatbot_test.yaml
+│   ├── multi_persona_demo.yaml
 │   ├── one_week_chat_history.yaml
 │   └── ten_k_conversations.yaml
 ├── docs/                        # Detailed documentation
