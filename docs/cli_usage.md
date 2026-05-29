@@ -113,7 +113,7 @@ target_chatbot:
     response_selector: ".bot-message"
 ```
 
-Browser mode uses Playwright. With `browser_type: edge`, it launches Microsoft Edge via the `msedge` channel and processes chatbot turns sequentially.
+Browser mode uses Playwright. By default it uses `browser_type: chromium`, but you can set it to `browser_type: edge` to launch Microsoft Edge via the `msedge` channel. All chatbot turns are processed sequentially because browser sessions cannot process concurrent turns.
 
 If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os error 396`), switch uv to copy mode:
 

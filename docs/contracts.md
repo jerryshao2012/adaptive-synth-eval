@@ -55,17 +55,19 @@ target_chatbot:
     headless: false
 ```
 
-Browser mode uses CSS selectors:
+Browser mode uses the following fields:
 
+- `browser_type`: browser engine to launch. Options: `chromium` (default) or `edge` (which launches Microsoft Edge using Playwright's `msedge` channel).
 - `input_selector`: element that receives the user message.
 - `submit_selector`: element clicked to send the message.
 - `response_selector`: bot message elements; the newest matching element is captured.
 - `ready_selector`: optional element to wait for after page load. Defaults to `input_selector`.
 
-Set `browser_type: edge` to launch Microsoft Edge through Playwright's `msedge` channel. Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max_concurrency` is higher, because a single browser chat page cannot safely process concurrent turns.
+Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max_concurrency` is higher, because a single browser chat page cannot safely process concurrent turns.
 
 ## Examples
 
 - `contracts/examples/one_week_chat_history.yaml`: A comprehensive 7-day simulation plan.
 - `contracts/examples/chatbot_test_contract.yaml`: A focused contract for unit testing chatbot client functionality.
+- `contracts/examples/browser_chatbot_test.yaml`: A focused contract for testing browser-driven chatbot integration.
 - `contracts/examples/ten_k_conversations.yaml`: A scale test contract for 10,000 conversations.

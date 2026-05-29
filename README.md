@@ -440,6 +440,36 @@ The simulation engine includes a persistent, isolated markdown-based memory syst
 
 For full architectural details, see the [Persona Memory Guide](./docs/persona_memory.md).
 
+## 🌐 Browser Chatbot Mode
+
+Instead of communicating over an HTTP API, the simulator can drive the target chatbot directly through a web browser using Playwright. This is extremely useful for chatbots that only expose a web-based chat interface.
+
+To enable browser mode, set `target_chatbot.mode: browser` and define the browser configuration block in your contract:
+
+```yaml
+target_chatbot:
+  enabled: true
+  mode: browser
+  browser:
+    browser_type: chromium  # Options: chromium, edge (launches Edge via msedge channel)
+    url: "https://chat.example.com"
+    input_selector: "textarea"
+    submit_selector: "button[type='submit']"
+    response_selector: ".bot-message"
+    ready_selector: "textarea"        # Optional: wait for this element after page load
+    response_timeout_seconds: 60.0    # Optional (default: 60.0)
+    headless: false                   # Set to true to run browser without GUI
+```
+
+### CSS Selector Reference
+- `input_selector`: The text input/textarea element where the user message is typed.
+- `submit_selector`: The button or element clicked/activated to submit the user message.
+- `response_selector`: The elements containing the chatbot responses. The engine monitors these elements to capture the newest message text once a new turn finishes.
+- `ready_selector`: Optional element to wait for after initial page navigation completes. Defaults to `input_selector` if not specified.
+
+> [!IMPORTANT]
+> **Sequential Concurrency**: Browser mode automatically restricts conversation concurrency to `1` (sequential), overriding any higher `max_concurrency` settings in `traffic_orchestration`. This is to prevent overlapping tabs/pages from corrupting the conversation flow.
+
 ## CLI Commands
 
 ### validate-contract
@@ -748,6 +778,7 @@ If you encounter issues not covered here:
 adaptive-synth-eval/
 ├── contracts/examples/          # Example simulation contracts
 │   ├── chatbot_test_contract.yaml
+│   ├── browser_chatbot_test.yaml
 │   ├── one_week_chat_history.yaml
 │   └── ten_k_conversations.yaml
 ├── docs/                        # Detailed documentation
