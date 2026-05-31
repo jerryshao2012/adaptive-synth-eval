@@ -27,6 +27,22 @@ def test_chatbot_client_returns_mock_response_when_disabled():
     assert response.raw["mock"] is True
 
 
+def test_chatbot_client_returns_error_when_enabled_but_endpoint_missing():
+    with patch.dict(os.environ, {"CHATBOT_ENDPOINT": ""}, clear=False):
+        client = ChatbotClient(enabled=True)
+
+        response = client.send(
+            conversation_id="c1",
+            session_id="s1",
+            turn_id=1,
+            user_message="What is parental leave?",
+        )
+
+    assert response.status_code == 0
+    assert response.error == "Chatbot endpoint is not configured"
+    assert response.raw == {}
+
+
 def test_chatbot_client_init_defaults():
     with patch.dict(os.environ, {"CHATBOT_ENDPOINT": "http://env-endpoint", "CHATBOT_TIMEOUT": "42.0"}):
         client = ChatbotClient(enabled=True)

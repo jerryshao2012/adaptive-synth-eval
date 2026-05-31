@@ -115,7 +115,7 @@ class ChatbotClient:
             f"Sending message - conversation_id: {conversation_id}, session_id: {session_id}, turn_id: {turn_id}")
         logger.debug(f"User message length: {len(user_message)} chars")
 
-        if not self.enabled or not self.endpoint:
+        if not self.enabled:
             logger.warning("Chatbot is disabled or endpoint not configured, returning mock response")
             return ChatbotResponse.from_payload(
                 {
@@ -127,6 +127,11 @@ class ChatbotClient:
                 latency_ms=0.0,
                 status_code=0,
             )
+
+        if not self.endpoint:
+            error = "Chatbot endpoint is not configured"
+            logger.error(error)
+            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
 
         try:
             logger.debug("Attempting to send request with retry logic")

@@ -2,6 +2,7 @@ import asyncio
 import json
 from copy import deepcopy
 
+from adaptive_synth_eval.clients.chatbot import ChatbotResponse
 from adaptive_synth_eval.config.contract import load_contract
 from adaptive_synth_eval.engines.chat_history_simulation import (
     _effective_max_concurrency,
@@ -413,6 +414,84 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
 
     assert summary["stopped_early"] is True
     assert summary["total_turns"] == 1
+
+
+def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(tmp_path, monkeypatch):
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {
+            "enabled": True,
+            "endpoint": "http://chat.example.com",
+        },
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 2,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+            "max_concurrency": 1,
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_stop_all"},
+    }
+    contract_path = tmp_path / "contract_stop_all.json"
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    calls = {"count": 0}
+
+    class _FakeClient:
+        async def send_async(self, **kwargs):
+            calls["count"] += 1
+            return ChatbotResponse.from_payload(
+                {},
+                latency_ms=None,
+                status_code=0,
+                error="Target chatbot unavailable: connection refused",
+            )
+
+        async def close_async(self):
+            return None
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.create_chatbot_client",
+        lambda *args, **kwargs: _FakeClient(),
+    )
+
+    summary = run_simulation(contract, dry_run=False)
+
+    assert summary["stopped_early"] is True
+    assert summary["total_turns"] == 0
+    assert calls["count"] == 1
 
 
 def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkeypatch):

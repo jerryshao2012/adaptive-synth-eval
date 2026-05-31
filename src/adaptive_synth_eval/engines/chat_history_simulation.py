@@ -18,6 +18,19 @@ from adaptive_synth_eval.scoring.response_quality import score_response
 
 logger = setup_logger(__name__)
 
+UNAVAILABLE_ERROR_MARKERS = (
+    "chatbot endpoint is not configured",
+    "connection refused",
+    "failed to establish a new connection",
+    "name or service not known",
+    "timed out",
+    "timeout",
+    "unavailable",
+    "not reachable",
+    "browser has been closed",
+    "page has been closed",
+)
+
 
 def run_simulation(
         contract: SimulationContract,
@@ -80,6 +93,7 @@ async def run_simulation_async(
     realtime_chat_enabled = realtime_chat
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
+    stop_all_requested = asyncio.Event()
     persona_locks = {persona.persona_id: asyncio.Lock() for persona in contract.persona_pool}
     persona_total_convos: dict[str, int] = {}
     for planned in plan:
@@ -101,11 +115,46 @@ async def run_simulation_async(
             realtime_controller.set_active_persona(contract.persona_pool[0].persona_id)
         realtime_controller.start()
 
+    def _request_stop_all() -> None:
+        if not stop_all_requested.is_set():
+            stop_all_requested.set()
+        if realtime_controller:
+            realtime_controller.stop()
+
+    def _is_target_chatbot_unavailable(response) -> bool:
+        if response.error:
+            error_text = response.error.lower()
+            if response.status_code == 0:
+                return True
+            if response.status_code >= 500:
+                return True
+            return any(marker in error_text for marker in UNAVAILABLE_ERROR_MARKERS)
+        return False
+
     async def process_conversation(planned):
+        if stop_all_requested.is_set():
+            return {
+                "conversation_id": planned.conversation_id,
+                "session_id": planned.session_id,
+                "persona_id": planned.persona_id,
+                "scenario_id": planned.scenario_id,
+                "synthetic_day": planned.synthetic_day.isoformat(),
+                "turn_count": 0,
+            }, [], [], [], 0
         async with persona_locks[planned.persona_id]:
             return await _process_conversation_locked(planned)
 
     async def _process_conversation_locked(planned):
+        if stop_all_requested.is_set():
+            return {
+                "conversation_id": planned.conversation_id,
+                "session_id": planned.session_id,
+                "persona_id": planned.persona_id,
+                "scenario_id": planned.scenario_id,
+                "synthetic_day": planned.synthetic_day.isoformat(),
+                "turn_count": 0,
+            }, [], [], [], 0
+
         local_records = []
         local_turn_rows = []
         local_score_rows = []
@@ -130,6 +179,8 @@ async def run_simulation_async(
 
         previous_bot_response = None
         for turn_id in range(1, planned.turn_count + 1):
+            if stop_all_requested.is_set():
+                break
             if realtime_controller and realtime_controller.stop_requested:
                 break
             if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
@@ -204,6 +255,14 @@ async def run_simulation_async(
             )
             if response.error:
                 local_errors += 1
+                if _is_target_chatbot_unavailable(response):
+                    logger.error(
+                        "[%s|turn=%s] Target chatbot is unavailable; stopping all simulation processes.",
+                        planned.conversation_id,
+                        turn.turn_id,
+                    )
+                    _request_stop_all()
+                    break
             previous_bot_response = response.bot_response
 
             if realtime_chat_enabled:
@@ -276,6 +335,8 @@ async def run_simulation_async(
             semaphore = asyncio.Semaphore(max_concurrency)
 
             async def limited_process(planned):
+                if stop_all_requested.is_set():
+                    return await process_conversation(planned)
                 async with semaphore:
                     return await process_conversation(planned)
 
@@ -289,11 +350,15 @@ async def run_simulation_async(
 
             if realtime_controller and realtime_controller.stop_requested:
                 stopped_early = True
+            if stop_all_requested.is_set():
+                stopped_early = True
         else:
             max_concurrency = _effective_max_concurrency(contract)
             semaphore = asyncio.Semaphore(max_concurrency)
 
             async def limited_process(planned):
+                if stop_all_requested.is_set():
+                    return await process_conversation(planned)
                 async with semaphore:
                     return await process_conversation(planned)
 
@@ -304,6 +369,9 @@ async def run_simulation_async(
                 turn_rows.extend(loc_turn_rows)
                 score_rows.extend(loc_score_rows)
                 errors += loc_errs
+
+            if stop_all_requested.is_set():
+                stopped_early = True
     finally:
         close_client_async = getattr(client, "close_async", None)
         close_client = getattr(client, "close", None)
