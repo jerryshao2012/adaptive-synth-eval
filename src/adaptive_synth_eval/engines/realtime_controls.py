@@ -341,6 +341,9 @@ class RealtimeChatController:
 
         status_prefix = "Behavior updated (global)"
         with self._state_cv:
+            if self._personas and not self._state.active_persona_id:
+                return "No active persona selected. Use: persona <persona_id> before style changes."
+
             # Apply to active persona if one is set, otherwise use global fallback
             if self._state.active_persona_id:
                 persona_id = self._state.active_persona_id

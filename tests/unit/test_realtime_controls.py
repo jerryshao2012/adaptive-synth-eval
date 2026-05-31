@@ -42,10 +42,10 @@ def test_realtime_controller_per_persona_behavior_modes():
     }
     controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
 
-    # Initially no active persona, style applies globally
+    # Initially no active persona, style command is rejected
     msg = controller.apply_command("style aggressive")
-    assert "Behavior updated (global)" in msg
-    assert controller.behavior_mode == "aggressive"
+    assert "No active persona selected" in msg
+    assert controller.behavior_mode == "default"
 
     # Set active persona and apply style
     controller.set_active_persona("P1")
@@ -88,21 +88,23 @@ def test_realtime_controller_get_behavior_for_persona():
     assert controller.get_behavior_for_persona() == "default"
     assert controller.get_behavior_for_persona("P1") == "default"
 
-    # Set global behavior
-    controller.apply_command("style aggressive")
-    assert controller.get_behavior_for_persona() == "aggressive"
-    assert controller.get_behavior_for_persona("P1") == "aggressive"
+    # Style command requires an active persona in multi-persona mode
+    msg = controller.apply_command("style aggressive")
+    assert "No active persona selected" in msg
+    assert controller.get_behavior_for_persona("P1") == "default"
 
-    # Set persona-specific behavior for P1
+    # Set persona-specific behavior for P1 and P2 independently
     controller.set_active_persona("P1")
     controller.apply_command("style polite")
+    controller.set_active_persona("P2")
+    controller.apply_command("style aggressive")
 
     # P1 should have its own behavior
     assert controller.get_behavior_for_persona("P1") == "polite"
-    # P2 should fall back to global
+    # P2 should have its own behavior
     assert controller.get_behavior_for_persona("P2") == "aggressive"
-    # Active persona query returns P1's behavior
-    assert controller.get_behavior_for_persona() == "polite"
+    # Active persona query returns P2's behavior
+    assert controller.get_behavior_for_persona() == "aggressive"
 
 
 def test_realtime_controller_status_shows_persona_behavior():
@@ -113,12 +115,9 @@ def test_realtime_controller_status_shows_persona_behavior():
     }
     controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
 
-    # Set global behavior
-    controller.apply_command("style aggressive")
-
-    # Status should show global behavior when no active persona
+    # Status should show default behavior when no active persona
     status = controller._status_text()
-    assert "behavior=aggressive" in status
+    assert "behavior=default" in status
     assert "persona=none" in status
 
     # Set active persona with different behavior
@@ -130,11 +129,26 @@ def test_realtime_controller_status_shows_persona_behavior():
     assert "behavior=polite" in status
     assert "persona=P1" in status
 
-    # Switch to P2 (should use global since P2 has no specific behavior)
+    # Switch to P2 (no override yet, should show default)
     controller.set_active_persona("P2")
     status = controller._status_text()
-    assert "behavior=aggressive" in status  # Falls back to global
+    assert "behavior=default" in status
     assert "persona=P2" in status
+
+
+def test_realtime_controller_style_requires_active_persona_in_multi_persona_mode():
+    personas = {
+        "P1": {"role": "tester"},
+        "P2": {"role": "manager"},
+    }
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
+
+    message = controller.apply_command("style polite")
+
+    assert "No active persona selected" in message
+    assert controller.behavior_mode == "default"
+    assert controller.get_behavior_for_persona("P1") == "default"
+    assert controller.get_behavior_for_persona("P2") == "default"
 
 
 def test_realtime_controller_rejects_unknown_behavior_mode():
