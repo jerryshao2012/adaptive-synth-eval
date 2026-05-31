@@ -151,6 +151,61 @@ def test_realtime_controller_style_requires_active_persona_in_multi_persona_mode
     assert controller.get_behavior_for_persona("P2") == "default"
 
 
+def test_realtime_controller_notify_conversation_complete_logs_completion():
+    """notify_conversation_complete tracks counts and logs when all convos done."""
+    personas = {"P1": {}, "P2": {}}
+    persona_total_convos = {"P1": 2, "P2": 1}
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas=personas,
+        persona_total_convos=persona_total_convos,
+    )
+
+    # One down for P1 — not all done yet
+    controller.notify_conversation_complete("P1")
+    with controller._state_cv:
+        assert controller._persona_done_convos.get("P1") == 1
+
+    # Second down — all P1 done
+    controller.notify_conversation_complete("P1")
+    with controller._state_cv:
+        assert controller._persona_done_convos.get("P1") == 2
+
+    # P2 done
+    controller.notify_conversation_complete("P2")
+    with controller._state_cv:
+        assert controller._persona_done_convos.get("P2") == 1
+
+
+def test_realtime_controller_persona_switch_shows_remaining_count():
+    """Persona switch message includes remaining conversations and 'already completed' note."""
+    personas = {"P1": {}, "P2": {}, "P3": {}}
+    persona_total_convos = {"P1": 3, "P2": 2, "P3": 1}
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas=personas,
+        persona_total_convos=persona_total_convos,
+    )
+
+    # P3 already has its single conversation done
+    controller.notify_conversation_complete("P3")
+
+    # Switch to P1 — 3 remaining
+    msg = controller.apply_command("persona P1")
+    assert "Persona updated" in msg
+    assert "3/3" in msg
+
+    # Complete one P1 convo, then switch — 2 remaining
+    controller.notify_conversation_complete("P1")
+    msg = controller.apply_command("persona P2")
+    assert "2/2" in msg
+
+    # Switch to P3 — already completed
+    msg = controller.apply_command("persona P3")
+    assert "already completed" in msg.lower()
+    assert "1" in msg
+
+
 def test_realtime_controller_rejects_unknown_behavior_mode():
     controller = RealtimeChatController(initial_delay_seconds=0.5)
 

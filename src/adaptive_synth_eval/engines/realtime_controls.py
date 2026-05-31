@@ -119,12 +119,15 @@ class RealtimeChatController:
             max_delay_seconds: float = 5.0,
             personas: dict[str, Any] | None = None,
             single_persona_mode: bool = False,
+            persona_total_convos: dict[str, int] | None = None,
     ) -> None:
         self._delay_step_seconds = delay_step_seconds
         self._min_delay_seconds = min_delay_seconds
         self._max_delay_seconds = max_delay_seconds
         self._personas = personas or {}
         self._single_persona_mode = single_persona_mode
+        self._persona_total_convos: dict[str, int] = persona_total_convos or {}
+        self._persona_done_convos: dict[str, int] = {}
         if self._single_persona_mode:
             self.command_help = (
                 "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
@@ -173,6 +176,15 @@ class RealtimeChatController:
     def set_active_persona(self, persona_id: str | None) -> None:
         with self._state_cv:
             self._state.active_persona_id = persona_id
+
+    def notify_conversation_complete(self, persona_id: str) -> None:
+        """Track per-persona conversation completion and log when all finish."""
+        with self._state_cv:
+            self._persona_done_convos[persona_id] = self._persona_done_convos.get(persona_id, 0) + 1
+            done = self._persona_done_convos[persona_id]
+            total = self._persona_total_convos.get(persona_id, 0)
+        if total > 0 and done >= total:
+            logger.info("[%s] All %d conversation(s) completed.", persona_id, total)
 
     def start(self) -> bool:
         """Start background command listener if stdin supports interactive input."""
@@ -332,7 +344,17 @@ class RealtimeChatController:
             return f"Unknown persona: {requested}. Available: {available}"
         with self._state_cv:
             self._state.active_persona_id = match
-        return self._status_text(prefix="Persona updated")
+        status = self._status_text(prefix="Persona updated")
+        total = self._persona_total_convos.get(match, 0)
+        if total > 0:
+            with self._state_cv:
+                done = self._persona_done_convos.get(match, 0)
+            remaining = total - done
+            if remaining <= 0:
+                status += f" — Note: all {total} conversation(s) for {match} have already completed."
+            else:
+                status += f" — {remaining}/{total} conversation(s) still running for {match}."
+        return status
 
     def _set_behavior_mode(self, requested: str) -> str:
         if requested not in self.SUPPORTED_BEHAVIORS:

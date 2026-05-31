@@ -393,6 +393,9 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
         def set_active_persona(self, persona_id):
             self.active_persona_id = persona_id
 
+        def notify_conversation_complete(self, persona_id):
+            pass
+
         def get_behavior_for_persona(self, persona_id=None):
             return self.behavior_mode
 
@@ -642,6 +645,9 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
         def wait_for_turn_delay(self):
             return not self.stop_requested
 
+        def notify_conversation_complete(self, persona_id):
+            pass
+
         def get_behavior_for_persona(self, persona_id=None):
             return self.behavior_mode
 
@@ -743,6 +749,9 @@ def test_realtime_controller_defaults_to_first_planned_persona_before_start(tmp_
 
         def wait_for_turn_delay(self):
             return not self.stop_requested
+
+        def notify_conversation_complete(self, persona_id):
+            pass
 
         def get_behavior_for_persona(self, persona_id=None):
             return self.behavior_mode

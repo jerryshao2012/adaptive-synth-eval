@@ -81,6 +81,9 @@ async def run_simulation_async(
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
     persona_locks = {persona.persona_id: asyncio.Lock() for persona in contract.persona_pool}
+    persona_total_convos: dict[str, int] = {}
+    for planned in plan:
+        persona_total_convos[planned.persona_id] = persona_total_convos.get(planned.persona_id, 0) + 1
 
     if interactive_realtime_controls and not realtime_chat:
         logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
@@ -90,6 +93,7 @@ async def run_simulation_async(
         realtime_controller = RealtimeChatController(
             personas=personas,
             single_persona_mode=single_persona_mode,
+            persona_total_convos=persona_total_convos,
         )
         if matched_persona_id:
             realtime_controller.set_active_persona(matched_persona_id)
@@ -260,6 +264,9 @@ async def run_simulation_async(
 
         # Summarize conversation and update long-term recall
         await asyncio.to_thread(simulator.save_conversation_summary_to_long_term_recall)
+
+        if realtime_controller:
+            realtime_controller.notify_conversation_complete(planned.persona_id)
 
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
 
