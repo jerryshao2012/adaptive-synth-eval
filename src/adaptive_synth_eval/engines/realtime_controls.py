@@ -378,8 +378,8 @@ class RealtimeChatController:
         """
         with self._state_cv:
             target_id = persona_id or self._state.active_persona_id
-            if target_id and self._state.persona_behavior_modes and target_id in self._state.persona_behavior_modes:
-                return self._state.persona_behavior_modes[target_id]
+            if target_id and self._state.persona_behavior_modes:
+                return self._state.persona_behavior_modes.get(target_id, self._state.behavior_mode)
             return self._state.behavior_mode  # Fallback to global
 
     def _input_loop(self) -> None:

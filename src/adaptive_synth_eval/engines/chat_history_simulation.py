@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import cast
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
@@ -94,6 +93,8 @@ async def run_simulation_async(
         )
         if matched_persona_id:
             realtime_controller.set_active_persona(matched_persona_id)
+        elif plan:
+            realtime_controller.set_active_persona(plan[0].persona_id)
         realtime_controller.start()
 
     async def process_conversation(planned):
@@ -108,8 +109,6 @@ async def run_simulation_async(
 
         persona = personas[planned.persona_id]
         scenario = scenarios[planned.scenario_id]
-        if realtime_controller:
-            realtime_controller.set_active_persona(planned.persona_id)
 
         memory_file = writer.run_dir / "personas" / f"{planned.persona_id}_memory.md"
         simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
@@ -131,12 +130,6 @@ async def run_simulation_async(
                 break
             if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
                 break
-
-            if realtime_controller and realtime_controller.active_persona_id:
-                active_pid = realtime_controller.active_persona_id
-                if active_pid is not None and active_pid != simulator.persona.persona_id and active_pid in personas:
-                    new_persona = personas[cast(str, active_pid)]
-                    simulator.switch_persona(new_persona)
 
             # Get behavior mode for the current persona (persona-specific or global fallback)
             behavior_override = (
@@ -166,15 +159,20 @@ async def run_simulation_async(
                 len(turn.user_message),
             )
 
+            should_render = True
+            if realtime_controller and realtime_controller.active_persona_id:
+                should_render = simulator.persona.persona_id == realtime_controller.active_persona_id
+
             if realtime_chat_enabled:
-                await asyncio.to_thread(
-                    display_persona_message,
-                    conversation_id=planned.conversation_id,
-                    persona_id=simulator.persona.persona_id,
-                    scenario_id=planned.scenario_id,
-                    turn_id=turn.turn_id,
-                    human_message=turn.user_message,
-                )
+                if should_render:
+                    await asyncio.to_thread(
+                        display_persona_message,
+                        conversation_id=planned.conversation_id,
+                        persona_id=simulator.persona.persona_id,
+                        scenario_id=planned.scenario_id,
+                        turn_id=turn.turn_id,
+                        human_message=turn.user_message,
+                    )
 
             logger.info(
                 "[%s|turn=%s] Sending request to chatbot and waiting for response...",
@@ -205,10 +203,11 @@ async def run_simulation_async(
             previous_bot_response = response.bot_response
 
             if realtime_chat_enabled:
-                await asyncio.to_thread(
-                    display_bot_message,
-                    bot_message=response.bot_response,
-                )
+                if should_render:
+                    await asyncio.to_thread(
+                        display_bot_message,
+                        bot_message=response.bot_response,
+                    )
 
             score = score_response(
                 user_message=turn.user_message,
@@ -266,18 +265,23 @@ async def run_simulation_async(
 
     try:
         if realtime_chat_enabled:
-            # Keep live transcript ordering stable for single-persona runs.
-            for planned in plan:
-                conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = await process_conversation(planned)
+            max_concurrency = _effective_max_concurrency(contract)
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def limited_process(planned):
+                async with semaphore:
+                    return await process_conversation(planned)
+
+            results = await asyncio.gather(*(limited_process(planned) for planned in plan))
+            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in results:
                 conversation_rows.append(conv_row)
                 records.extend(loc_recs)
                 turn_rows.extend(loc_turn_rows)
                 score_rows.extend(loc_score_rows)
                 errors += loc_errs
 
-                if realtime_controller and realtime_controller.stop_requested:
-                    stopped_early = True
-                    break
+            if realtime_controller and realtime_controller.stop_requested:
+                stopped_early = True
         else:
             max_concurrency = _effective_max_concurrency(contract)
             semaphore = asyncio.Semaphore(max_concurrency)

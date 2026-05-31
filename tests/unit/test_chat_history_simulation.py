@@ -659,3 +659,104 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
     )
 
     assert observed["seeded_before_start"] is True
+
+
+def test_realtime_controller_defaults_to_first_planned_persona_before_start(tmp_path, monkeypatch):
+    contract_path = tmp_path / "contract_first_persona_realtime.json"
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {"enabled": False},
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            },
+            {
+                "persona_id": "P002",
+                "role": "manager",
+                "location": "Canada",
+                "seniority": "senior",
+                "communication_style": "direct",
+                "hr_familiarity": "high",
+                "privacy_sensitivity": "medium",
+            },
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 2,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [
+                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
+            ],
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_first_persona_realtime"},
+    }
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    observed = {"seeded_before_start": False}
+
+    class _FakeController:
+        def __init__(self, *args, **kwargs):
+            self.stop_requested = False
+            self.behavior_mode = "default"
+            self.active_persona_id = None
+
+        def set_active_persona(self, persona_id):
+            self.active_persona_id = persona_id
+
+        def start(self):
+            observed["seeded_before_start"] = self.active_persona_id == "P001"
+            return True
+
+        def stop(self):
+            self.stop_requested = True
+
+        def wait_if_paused(self):
+            return not self.stop_requested
+
+        def wait_for_turn_delay(self):
+            return not self.stop_requested
+
+        def get_behavior_for_persona(self, persona_id=None):
+            return self.behavior_mode
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
+        _FakeController,
+    )
+
+    run_simulation(
+        contract,
+        dry_run=True,
+        realtime_chat=True,
+        interactive_realtime_controls=True,
+    )
+
+    assert observed["seeded_before_start"] is True
