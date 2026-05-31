@@ -64,7 +64,15 @@ def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
     summary = run_simulation(contract, dry_run=True)
 
     assert summary["total_conversations"] == 2
-    assert (tmp_path / "outputs" / "runs" / "run1" / "generation_report.md").exists()
+    assert summary["elapsed_seconds"] >= 0
+    run_dir = tmp_path / "outputs" / "runs" / "run1"
+    assert (run_dir / "generation_report.md").exists()
+
+    run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
+    assert run_summary["elapsed_seconds"] >= 0
+
+    generation_report = (run_dir / "generation_report.md").read_text(encoding="utf-8")
+    assert "Elapsed seconds:" in generation_report
 
 
 def test_effective_max_concurrency_is_one_for_browser_chatbot(tmp_path):
@@ -477,6 +485,90 @@ def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(tmp_
                 latency_ms=None,
                 status_code=0,
                 error="Target chatbot unavailable: connection refused",
+            )
+
+        async def close_async(self):
+            return None
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.create_chatbot_client",
+        lambda *args, **kwargs: _FakeClient(),
+    )
+
+    summary = run_simulation(contract, dry_run=False)
+
+    assert summary["stopped_early"] is True
+    assert summary["total_turns"] == 0
+    assert calls["count"] == 1
+
+
+def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(tmp_path, monkeypatch):
+    """HTTP 200 with an error body (e.g. 403/CosmosDB key expired) must also stop all processes."""
+    contract_payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target_chatbot": {
+            "enabled": True,
+            "endpoint": "http://chat.example.com",
+        },
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 2,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+            "max_concurrency": 1,
+            "random_seed": 3,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_stop_200_error"},
+    }
+    contract_path = tmp_path / "contract_stop_200.json"
+    contract_path.write_text(json.dumps(contract_payload))
+    contract = load_contract(contract_path)
+
+    calls = {"count": 0}
+    error_body = (
+        "Error processing request: Status code: 403 Sub-status: 4018\n"
+        '{\"Errors\":[\"Access to your account is currently revoked because the '
+        'correspondent key is either disabled or expired.\"]}'
+    )
+
+    class _FakeClient:
+        async def send_async(self, **kwargs):
+            calls["count"] += 1
+            # HTTP 200 but error content in the response body
+            return ChatbotResponse.from_payload(
+                {"response": error_body},
+                latency_ms=605.0,
+                status_code=200,
             )
 
         async def close_async(self):

@@ -41,6 +41,7 @@ class ArtifactWriter:
             f"- Total turns: {summary.get('total_turns')}",
             f"- Errors: {summary.get('errors')}",
             f"- Dry run: {summary.get('dry_run')}",
+            f"- Elapsed seconds: {summary.get('elapsed_seconds')}",
         ]
         path = self.run_dir / "generation_report.md"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")

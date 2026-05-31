@@ -31,6 +31,17 @@ UNAVAILABLE_ERROR_MARKERS = (
     "page has been closed",
 )
 
+# Patterns matched against the response *body* when HTTP status appears successful
+# but the chatbot is reporting a backend failure (e.g. HTTP 200 with error payload).
+UNAVAILABLE_BODY_MARKERS = (
+    "error processing request",
+    "access to your account is currently revoked",
+    "key is either disabled or expired",
+    "cosmos db",
+    "service unavailable",
+    "internal server error",
+)
+
 
 def run_simulation(
         contract: SimulationContract,
@@ -63,6 +74,7 @@ async def run_simulation_async(
         interactive_realtime_controls: bool = False,
         persona_filter: str | None = None,
 ) -> dict:
+    run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
     plan = build_run_plan(contract.traffic, contract.time_window)
@@ -128,8 +140,23 @@ async def run_simulation_async(
                 return True
             if response.status_code >= 500:
                 return True
-            return any(marker in error_text for marker in UNAVAILABLE_ERROR_MARKERS)
+            if any(marker in error_text for marker in UNAVAILABLE_ERROR_MARKERS):
+                return True
+        # Also catch cases where HTTP 200 is returned but the body signals an error
+        if response.bot_response:
+            body_text = response.bot_response.lower()
+            if any(marker in body_text for marker in UNAVAILABLE_BODY_MARKERS):
+                return True
         return False
+
+    def _unavailability_detail(response) -> str:
+        """Return a short human-readable detail string for the stop log."""
+        if response.error:
+            return f"error={response.error!r}, status={response.status_code}"
+        if response.bot_response:
+            first_line = response.bot_response.splitlines()[0][:200]
+            return f"status={response.status_code}, body={first_line!r}"
+        return f"status={response.status_code}"
 
     async def process_conversation(planned):
         if stop_all_requested.is_set():
@@ -253,13 +280,14 @@ async def run_simulation_async(
                 response.status_code,
                 response.error or "none",
             )
-            if response.error:
+            if response.error or _is_target_chatbot_unavailable(response):
                 local_errors += 1
                 if _is_target_chatbot_unavailable(response):
                     logger.error(
-                        "[%s|turn=%s] Target chatbot is unavailable; stopping all simulation processes.",
+                        "[%s|turn=%s] Target chatbot is unavailable; stopping all simulation processes. Detail: %s",
                         planned.conversation_id,
                         turn.turn_id,
+                        _unavailability_detail(response),
                     )
                     _request_stop_all()
                     break
@@ -382,6 +410,7 @@ async def run_simulation_async(
         if realtime_controller:
             realtime_controller.stop()
 
+    elapsed_seconds = round(time.perf_counter() - run_start, 2)
     summary = {
         "run_id": run_id,
         "total_conversations": len(plan),
@@ -389,6 +418,7 @@ async def run_simulation_async(
         "errors": errors,
         "dry_run": dry_run,
         "stopped_early": stopped_early,
+        "elapsed_seconds": elapsed_seconds,
         "output_dir": str(writer.run_dir),
     }
     writer.write_json("contract.normalized.json", contract_to_dict(contract))
