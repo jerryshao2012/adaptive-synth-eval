@@ -97,8 +97,8 @@ async def run_simulation_async(
         )
         if matched_persona_id:
             realtime_controller.set_active_persona(matched_persona_id)
-        elif plan:
-            realtime_controller.set_active_persona(plan[0].persona_id)
+        elif contract.persona_pool:
+            realtime_controller.set_active_persona(contract.persona_pool[0].persona_id)
         realtime_controller.start()
 
     async def process_conversation(planned):

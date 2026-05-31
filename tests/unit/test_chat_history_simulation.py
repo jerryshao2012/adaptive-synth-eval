@@ -667,7 +667,7 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
     assert observed["seeded_before_start"] is True
 
 
-def test_realtime_controller_defaults_to_first_planned_persona_before_start(tmp_path, monkeypatch):
+def test_realtime_controller_defaults_to_first_contract_persona_before_start(tmp_path, monkeypatch):
     contract_path = tmp_path / "contract_first_persona_realtime.json"
     contract_payload = {
         "simulation_suite": {
