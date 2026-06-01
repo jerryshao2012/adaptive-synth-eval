@@ -76,8 +76,8 @@ scenario_catalog:
 traffic_orchestration:
   total_conversations: 15
   conversation_turns:
-    min: 3
-    max: 5
+    min: 10
+    max: 30
   # Mix demonstrates how different personas interact with different scenarios
   mix:
     # New employee asking about benefits (most common)

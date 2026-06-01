@@ -411,6 +411,145 @@ async def run_simulation_async(
             realtime_controller.stop()
 
     elapsed_seconds = round(time.perf_counter() - run_start, 2)
+
+    # Simulator LLM Token Statistics
+    simulator_prompt_tokens = sum(
+        rec.generation_metadata.get("simulator_prompt_tokens", 0)
+        for rec in records
+        if rec.generation_metadata
+    )
+    simulator_completion_tokens = sum(
+        rec.generation_metadata.get("simulator_completion_tokens", 0)
+        for rec in records
+        if rec.generation_metadata
+    )
+    simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
+
+    avg_prompt_tokens_convo = round(simulator_prompt_tokens / len(plan), 2) if plan else 0.0
+    avg_completion_tokens_convo = round(simulator_completion_tokens / len(plan), 2) if plan else 0.0
+    avg_total_tokens_convo = round(simulator_total_tokens / len(plan), 2) if plan else 0.0
+
+    tokens_stats = {
+        "simulator_prompt_tokens": simulator_prompt_tokens,
+        "simulator_completion_tokens": simulator_completion_tokens,
+        "simulator_total_tokens": simulator_total_tokens,
+        "avg_prompt_tokens_per_convo": avg_prompt_tokens_convo,
+        "avg_completion_tokens_per_convo": avg_completion_tokens_convo,
+        "avg_total_tokens_per_convo": avg_total_tokens_convo,
+    }
+
+    # Scale Projections
+    convo_count = len(plan)
+    rate = convo_count / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    time_1k = round(1000 / rate, 2) if rate > 0 else 0.0
+    time_10k = round(10000 / rate, 2) if rate > 0 else 0.0
+    time_100k = round(100000 / rate, 2) if rate > 0 else 0.0
+
+    scale_projections = {
+        "conversations_per_second": round(rate, 4),
+        "time_for_1k_conversations_seconds": time_1k,
+        "time_for_10k_conversations_seconds": time_10k,
+        "time_for_100k_conversations_seconds": time_100k,
+    }
+
+    # Production Realism
+    # 1. Mix Distribution Realism
+    total_mix_weight = sum(item.weight for item in contract.traffic.mix) if contract.traffic.mix else 1.0
+    mix_targets = {}
+    for item in contract.traffic.mix:
+        key = f"{item.persona_id} + {item.scenario_id}"
+        mix_targets[key] = (item.weight / total_mix_weight)
+
+    actual_mix_counts = {}
+    for planned in plan:
+        key = f"{planned.persona_id} + {planned.scenario_id}"
+        actual_mix_counts[key] = actual_mix_counts.get(key, 0) + 1
+
+    mix_realism = []
+    for key, target_pct in mix_targets.items():
+        actual_count = actual_mix_counts.get(key, 0)
+        actual_pct = actual_count / len(plan) if plan else 0.0
+        mix_realism.append({
+            "mix": key,
+            "target_pct": round(target_pct * 100, 2),
+            "actual_pct": round(actual_pct * 100, 2),
+            "actual_count": actual_count,
+        })
+
+    # 2. Persona Distribution Realism
+    persona_weights = {}
+    for item in contract.traffic.mix:
+        persona_weights[item.persona_id] = persona_weights.get(item.persona_id, 0.0) + item.weight
+    total_persona_weight = sum(persona_weights.values()) or 1.0
+    persona_targets = {pid: w / total_persona_weight for pid, w in persona_weights.items()}
+
+    actual_persona_counts = {}
+    for planned in plan:
+        actual_persona_counts[planned.persona_id] = actual_persona_counts.get(planned.persona_id, 0) + 1
+
+    persona_realism = []
+    for pid, target_pct in persona_targets.items():
+        actual_count = actual_persona_counts.get(pid, 0)
+        actual_pct = actual_count / len(plan) if plan else 0.0
+        persona_realism.append({
+            "persona_id": pid,
+            "target_pct": round(target_pct * 100, 2),
+            "actual_pct": round(actual_pct * 100, 2),
+            "actual_count": actual_count,
+        })
+
+    # 3. Scenario Distribution Realism
+    scenario_weights = {}
+    for item in contract.traffic.mix:
+        scenario_weights[item.scenario_id] = scenario_weights.get(item.scenario_id, 0.0) + item.weight
+    total_scenario_weight = sum(scenario_weights.values()) or 1.0
+    scenario_targets = {sid: w / total_scenario_weight for sid, w in scenario_weights.items()}
+
+    actual_scenario_counts = {}
+    for planned in plan:
+        actual_scenario_counts[planned.scenario_id] = actual_scenario_counts.get(planned.scenario_id, 0) + 1
+
+    scenario_realism = []
+    for sid, target_pct in scenario_targets.items():
+        actual_count = actual_scenario_counts.get(sid, 0)
+        actual_pct = actual_count / len(plan) if plan else 0.0
+        scenario_realism.append({
+            "scenario_id": sid,
+            "target_pct": round(target_pct * 100, 2),
+            "actual_pct": round(actual_pct * 100, 2),
+            "actual_count": actual_count,
+        })
+
+    # 4. Temporal Distribution Realism
+    from adaptive_synth_eval.generation.traffic import _day_weights
+    day_weights = _day_weights(contract.traffic, contract.time_window)
+    total_day_weight = sum(day_weights) or 1.0
+    day_targets = [w / total_day_weight for w in day_weights]
+
+    actual_day_counts = [0] * contract.time_window.num_synthetic_days
+    for planned in plan:
+        day_offset = (planned.synthetic_day - contract.time_window.start_day).days
+        if 0 <= day_offset < len(actual_day_counts):
+            actual_day_counts[day_offset] += 1
+
+    temporal_realism = []
+    for idx, target_pct in enumerate(day_targets):
+        actual_count = actual_day_counts[idx]
+        actual_pct = actual_count / len(plan) if plan else 0.0
+        temporal_realism.append({
+            "day": idx + 1,
+            "target_pct": round(target_pct * 100, 2),
+            "actual_pct": round(actual_pct * 100, 2),
+            "actual_count": actual_count,
+        })
+
+    production_realism = {
+        "mix_realism": mix_realism,
+        "persona_realism": persona_realism,
+        "scenario_realism": scenario_realism,
+        "temporal_realism": temporal_realism,
+    }
+
     summary = {
         "run_id": run_id,
         "total_conversations": len(plan),
@@ -420,6 +559,9 @@ async def run_simulation_async(
         "stopped_early": stopped_early,
         "elapsed_seconds": elapsed_seconds,
         "output_dir": str(writer.run_dir),
+        "tokens": tokens_stats,
+        "scale_projections": scale_projections,
+        "production_realism": production_realism,
     }
     writer.write_json("contract.normalized.json", contract_to_dict(contract))
     writer.write_json("run_plan.json", [item.__dict__ for item in plan])

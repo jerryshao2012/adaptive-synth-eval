@@ -242,8 +242,8 @@ def _parse_traffic(payload: dict[str, Any]) -> TrafficOrchestration:
 
 
 def _validate_turns(turns: ConversationTurns) -> None:
-    if turns.min < 3 or turns.max > 8 or turns.min > turns.max:
-        raise ContractError("conversation_turns must be within 3-8 and min must be <= max")
+    if turns.min < 1 or turns.max > 100 or turns.min > turns.max:
+        raise ContractError("conversation_turns must be within 1-100 and min must be <= max")
 
 
 def _validate_references(personas: list[Persona], scenarios: list[Scenario], traffic: TrafficOrchestration) -> None:

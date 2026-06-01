@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from adaptive_synth_eval.clients.llm import LLMClient
+from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.generation.variability import apply_typos, choose_failure_modes
 
@@ -293,8 +294,14 @@ class UserSimulator:
             user_message=message,
             planned_failure_modes=self.planned_failure_modes,
             applied_failure_modes=applied,
-            generation_metadata={"persona_role": self.persona.role, "scenario_intent": self.scenario.intent,
-                                 "dynamic": result.error != "llm_disabled", "behavior_mode": behavior_mode},
+            generation_metadata={
+                "persona_role": self.persona.role,
+                "scenario_intent": self.scenario.intent,
+                "dynamic": result.error != "llm_disabled",
+                "behavior_mode": behavior_mode,
+                "simulator_prompt_tokens": count_tokens(prompt),
+                "simulator_completion_tokens": count_tokens(message),
+            },
         )
 
     async def generate_turn_async(

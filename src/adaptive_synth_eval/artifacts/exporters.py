@@ -42,7 +42,123 @@ class ArtifactWriter:
             f"- Errors: {summary.get('errors')}",
             f"- Dry run: {summary.get('dry_run')}",
             f"- Elapsed seconds: {summary.get('elapsed_seconds')}",
+            "",
         ]
+
+        def format_duration(seconds: float) -> str:
+            if seconds <= 0:
+                return "N/A"
+            if seconds < 60:
+                return f"{seconds:.2f} seconds"
+            elif seconds < 3600:
+                return f"{seconds:.2f} seconds (~{seconds / 60:.2f} mins)"
+            else:
+                return f"{seconds:.2f} seconds (~{seconds / 3600:.2f} hours)"
+
+        # Time / Speed at Scale Projections
+        scale = summary.get("scale_projections", {})
+        if scale:
+            lines.extend([
+                "## Time / Speed to Generate at Scale",
+                f"- **Conversations generated per second**: {scale.get('conversations_per_second')}",
+                "",
+                "| Projected Volume | Extrapolated Time |",
+                "| :--- | :--- |",
+                f"| 1,000 conversations | {format_duration(scale.get('time_for_1k_conversations_seconds', 0.0))} |",
+                f"| 10,000 conversations (Month at scale) | {format_duration(scale.get('time_for_10k_conversations_seconds', 0.0))} |",
+                f"| 100,000 conversations | {format_duration(scale.get('time_for_100k_conversations_seconds', 0.0))} |",
+                "",
+            ])
+
+        # Token & Cost Projections
+        tokens = summary.get("tokens", {})
+        if tokens:
+            avg_prompt = tokens.get("avg_prompt_tokens_per_convo", 0.0)
+            avg_completion = tokens.get("avg_completion_tokens_per_convo", 0.0)
+
+            def calc_cost(prompt_rate, completion_rate, multiplier):
+                cost_per_convo = (avg_prompt * prompt_rate / 1_000_000) + (avg_completion * completion_rate / 1_000_000)
+                return f"${cost_per_convo * multiplier:.4f}"
+
+            cost_lightweight_1k = calc_cost(0.15, 0.60, 1000)
+            cost_lightweight_10k = calc_cost(0.15, 0.60, 10000)
+            cost_premium_1k = calc_cost(2.50, 10.00, 1000)
+            cost_premium_10k = calc_cost(2.50, 10.00, 10000)
+            cost_highend_1k = calc_cost(3.00, 15.00, 1000)
+            cost_highend_10k = calc_cost(3.00, 15.00, 10000)
+
+            lines.extend([
+                "## Simulator Token Usage & Estimated Cost",
+                "",
+                "| Metric | Prompt Tokens | Completion Tokens | Total Tokens |",
+                "| :--- | :--- | :--- | :--- |",
+                f"| **Total Run Usage** | {tokens.get('simulator_prompt_tokens'):,} | {tokens.get('simulator_completion_tokens'):,} | {tokens.get('simulator_total_tokens'):,} |",
+                f"| **Average per Convo** | {tokens.get('avg_prompt_tokens_per_convo'):,} | {tokens.get('avg_completion_tokens_per_convo'):,} | {tokens.get('avg_total_tokens_per_convo'):,} |",
+                "",
+                "### Cost Extrapolations (USD)",
+                "*Note: Cost calculations are based on Simulator LLM token usage and the specified API pricing tiers.*",
+                "",
+                "| Model Pricing Tier | Cost per 1K Convos | Cost per 10K Convos (Month) |",
+                "| :--- | :--- | :--- |",
+                f"| **Lightweight (e.g., GPT-4o-mini)**<br>*(Input: $0.15/1M, Output: $0.60/1M)* | {cost_lightweight_1k} | {cost_lightweight_10k} |",
+                f"| **Premium (e.g., GPT-4o)**<br>*(Input: $2.50/1M, Output: $10.00/1M)* | {cost_premium_1k} | {cost_premium_10k} |",
+                f"| **High-End (e.g., Claude 3.5 Sonnet)**<br>*(Input: $3.00/1M, Output: $15.00/1M)* | {cost_highend_1k} | {cost_highend_10k} |",
+                "",
+            ])
+
+        # Production Realism Analysis
+        realism = summary.get("production_realism", {})
+        if realism:
+            lines.extend(["## Production Realism Analysis", ""])
+
+            # Persona Realism Table
+            lines.extend([
+                "### Persona Distribution Realism",
+                "",
+                "| Persona ID | Target % | Actual % | Actual Count |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for p in realism.get("persona_realism", []):
+                lines.append(
+                    f"| {p.get('persona_id')} | {p.get('target_pct')}% | {p.get('actual_pct')}% | {p.get('actual_count')} |")
+            lines.append("")
+
+            # Scenario Realism Table
+            lines.extend([
+                "### Scenario Distribution Realism",
+                "",
+                "| Scenario ID | Target % | Actual % | Actual Count |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for s in realism.get("scenario_realism", []):
+                lines.append(
+                    f"| {s.get('scenario_id')} | {s.get('target_pct')}% | {s.get('actual_pct')}% | {s.get('actual_count')} |")
+            lines.append("")
+
+            # Mix Realism Table
+            lines.extend([
+                "### Persona-Scenario Mix Realism",
+                "",
+                "| Mix | Target % | Actual % | Actual Count |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for m in realism.get("mix_realism", []):
+                lines.append(
+                    f"| {m.get('mix')} | {m.get('target_pct')}% | {m.get('actual_pct')}% | {m.get('actual_count')} |")
+            lines.append("")
+
+            # Temporal Realism Table
+            lines.extend([
+                "### Temporal (Daily) Distribution Realism",
+                "",
+                "| Synthetic Day | Target % | Actual % | Actual Count |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for t in realism.get("temporal_realism", []):
+                lines.append(
+                    f"| Day {t.get('day')} | {t.get('target_pct')}% | {t.get('actual_pct')}% | {t.get('actual_count')} |")
+            lines.append("")
+
         path = self.run_dir / "generation_report.md"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
