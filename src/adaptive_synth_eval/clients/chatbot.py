@@ -10,7 +10,7 @@ import requests
 from dotenv import load_dotenv
 
 from adaptive_synth_eval.clients.logger_utils import setup_logger
-from adaptive_synth_eval.clients.retry_utils import retry_on_rate_limit
+from adaptive_synth_eval.clients.retry_utils import is_transient_error, retry_on_exception
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +19,12 @@ logger = setup_logger(__name__)
 
 # Module-level defaults (still can be overridden)
 DEFAULT_TIMEOUT = "60.0"
+
+
+class RetryableChatbotError(Exception):
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,13 @@ class ChatbotClient:
             enabled: bool = True,
             auth: dict[str, Any] | None = None,
             timeout_seconds: float | None = None,
+            retry_max_retries: int | None = None,
+            retry_initial_backoff: float | None = None,
+            retry_max_backoff: float | None = None,
+            retry_backoff_multiplier: float | None = None,
+            retry_jitter: bool | None = None,
+            retry_on_timeout: bool = True,
+            retry_on_http_5xx: bool = False,
     ):
         logger.info("Initializing ChatbotClient")
         self.endpoint = endpoint or os.getenv("CHATBOT_ENDPOINT")
@@ -85,6 +98,9 @@ class ChatbotClient:
             self.timeout_seconds = float(os.getenv("CHATBOT_TIMEOUT", DEFAULT_TIMEOUT))
         logger.debug(f"Request timeout: {self.timeout_seconds}s")
 
+        self.retry_on_timeout = retry_on_timeout
+        self.retry_on_http_5xx = retry_on_http_5xx
+
         # Optional Chatbot specific configs
         self.chatbot_model = os.getenv("CHATBOT_MODEL")
         if self.chatbot_model:
@@ -99,6 +115,17 @@ class ChatbotClient:
         self.source_doc_ref = os.getenv("CHATBOT_SOURCE_DOCUMENT_REFERENCE")
         if self.source_doc_ref:
             logger.debug(f"Source document reference: {self.source_doc_ref}")
+
+        self._send_with_retry = retry_on_exception(
+            self._send_once,
+            max_retries=retry_max_retries,
+            initial_backoff=retry_initial_backoff,
+            max_backoff=retry_max_backoff,
+            backoff_multiplier=retry_backoff_multiplier,
+            jitter=retry_jitter,
+            should_retry=self._is_chatbot_retryable_error,
+            retry_label="Chatbot transient",
+        )
 
         logger.info("ChatbotClient initialized successfully")
 
@@ -147,6 +174,13 @@ class ChatbotClient:
                 logger.error(f"Request returned error: {result.error}")
             return result
         except Exception as exc:
+            if isinstance(exc, RetryableChatbotError):
+                return ChatbotResponse.from_payload(
+                    {},
+                    latency_ms=None,
+                    status_code=exc.status_code or 0,
+                    error=str(exc),
+                )
             logger.exception(f"Exception occurred while sending message: {exc}")
             return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=str(exc))
 
@@ -169,8 +203,14 @@ class ChatbotClient:
             metadata=metadata,
         )
 
-    @retry_on_rate_limit(max_retries=3, initial_backoff=1.0, max_backoff=30.0)
-    def _send_with_retry(
+    def _is_chatbot_retryable_error(self, error: Exception) -> bool:
+        if isinstance(error, RetryableChatbotError):
+            return True
+        if self.retry_on_timeout and is_transient_error(error):
+            return True
+        return False
+
+    def _send_once(
             self,
             *,
             conversation_id: str,
@@ -243,6 +283,9 @@ class ChatbotClient:
         if error:
             logger.error(f"Request failed with error: {error}")
             logger.debug(f"Response content: {response.text[:500]}")
+
+            if self.retry_on_http_5xx and status_code in {429, 500, 502, 503, 504}:
+                raise RetryableChatbotError(error, status_code=status_code)
 
         return ChatbotResponse.from_payload(body, latency_ms=round(latency_ms, 2), status_code=status_code,
                                             error=error)

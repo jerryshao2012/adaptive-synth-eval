@@ -249,14 +249,23 @@ class UserSimulator:
         result = self.llm_client.complete(prompt)
 
         if result.error:
-            logger.warning(
-                f"⚠️  LLM FAILED FOR PERSONA SIMULATION - Using fallback message\n"
-                f"   Provider: {self.llm_client.model_provider or 'none'}\n"
-                f"   Error: {result.error}\n"
-                f"   Persona: {self.persona.persona_id}\n"
-                f"   Turn: {turn_id}\n"
-                f"   Message will be templated instead of dynamically generated!"
-            )
+            if result.error == "content_filter_blocked":
+                logger.warning(
+                    "LLM content filter block during persona simulation; using fallback message "
+                    "(provider=%s, persona=%s, turn=%s)",
+                    self.llm_client.model_provider or "none",
+                    self.persona.persona_id,
+                    turn_id,
+                )
+            else:
+                logger.warning(
+                    f"⚠️  LLM FAILED FOR PERSONA SIMULATION - Using fallback message\n"
+                    f"   Provider: {self.llm_client.model_provider or 'none'}\n"
+                    f"   Error: {result.error}\n"
+                    f"   Persona: {self.persona.persona_id}\n"
+                    f"   Turn: {turn_id}\n"
+                    f"   Message will be templated instead of dynamically generated!"
+                )
             message = self._fallback_message(turn_id, behavior_mode=behavior_mode)
         else:
             message = result.content
@@ -346,6 +355,12 @@ class UserSimulator:
         style_instruction = self._style_instruction(behavior_mode)
         if style_instruction:
             prompt += f"\n\nRuntime behavior mode: {behavior_mode}. {style_instruction}"
+
+        prompt += (
+            "\n\nSafety requirements for your response: keep content workplace-safe and respectful; "
+            "do not include hateful, harassing, discriminatory, sexual, or violent language; "
+            "do not use profanity or slurs."
+        )
 
         return prompt
 

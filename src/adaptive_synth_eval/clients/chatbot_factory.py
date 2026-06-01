@@ -17,4 +17,11 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
         enabled=enabled,
         auth=config.auth,
         timeout_seconds=config.timeout_seconds,
+        retry_max_retries=config.retry_max_retries,
+        retry_initial_backoff=config.retry_initial_backoff_seconds,
+        retry_max_backoff=config.retry_max_backoff_seconds,
+        retry_backoff_multiplier=config.retry_backoff_multiplier,
+        retry_jitter=config.retry_jitter,
+        retry_on_timeout=config.retry_on_timeout,
+        retry_on_http_5xx=config.retry_on_http_5xx,
     )

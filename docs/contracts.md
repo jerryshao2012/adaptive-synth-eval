@@ -29,12 +29,29 @@ This is particularly useful for the `target_chatbot.endpoint` field to avoid har
 target_chatbot:
   enabled: true
   endpoint: "${CHATBOT_ENDPOINT:-https://api.example.com/v1/chat}"
+  retry_max_retries: 2
+  retry_initial_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 20.0
+  retry_backoff_multiplier: 2.0
+  retry_jitter: true
+  retry_on_timeout: true
+  retry_on_http_5xx: false
   auth:
     type: bearer
     env_var: CHATBOT_API_TOKEN
 ```
 
 When `CHATBOT_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
+
+Retry fields are optional and control how API chatbot requests handle transient failures before the simulation marks the chatbot as unavailable:
+
+- `retry_max_retries`: number of retry attempts after the first failed attempt.
+- `retry_initial_backoff_seconds`: base delay before the first retry.
+- `retry_max_backoff_seconds`: upper bound for exponential backoff.
+- `retry_backoff_multiplier`: multiplier for each retry delay.
+- `retry_jitter`: randomize delays to reduce synchronized bursts.
+- `retry_on_timeout`: retry transport-level timeout/connection errors.
+- `retry_on_http_5xx`: retry HTTP `429/500/502/503/504` responses.
 
 ## Browser Chatbot Mode
 

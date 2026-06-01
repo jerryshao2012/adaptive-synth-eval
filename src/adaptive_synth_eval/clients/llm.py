@@ -10,6 +10,8 @@ import httpx
 from dotenv import load_dotenv
 from pydantic import SecretStr
 
+from adaptive_synth_eval.clients.retry_utils import wrap_model_with_rate_limiting
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file if it exists
@@ -123,6 +125,9 @@ class LLMClient:
             else:
                 raise ValueError(f"Unsupported model provider: {self.model_provider}")
 
+            # Add retry and optional proactive shaping to simulator LLM requests.
+            self._model = wrap_model_with_rate_limiting(self._model)
+
         except ImportError as e:
             raise ImportError(
                 f"Required package for {self.model_provider} not installed. "
@@ -182,6 +187,21 @@ class LLMClient:
             )
 
         except Exception as e:
+            if self._is_content_filter_error(e):
+                error_msg = f"LLM blocked by content filter ({self.model_provider}): {type(e).__name__}"
+                logger.warning(error_msg)
+                return LLMResult(
+                    content="",
+                    raw={
+                        "mock": True,
+                        "prompt": prompt,
+                        "provider": self.model_provider,
+                        "exception": type(e).__name__,
+                        "error_code": "content_filter",
+                    },
+                    error="content_filter_blocked",
+                )
+
             error_msg = f"LLM error ({self.model_provider}): {type(e).__name__}: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return LLMResult(
@@ -189,3 +209,14 @@ class LLMClient:
                 raw={"mock": True, "prompt": prompt, "provider": self.model_provider, "exception": type(e).__name__},
                 error=error_msg,
             )
+
+    @staticmethod
+    def _is_content_filter_error(error: Exception) -> bool:
+        text = str(error).lower()
+        markers = [
+            "content_filter",
+            "content filter",
+            "responsibleaipolicyviolation",
+            "response was filtered",
+        ]
+        return any(marker in text for marker in markers)

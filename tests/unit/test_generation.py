@@ -185,3 +185,17 @@ def test_user_simulator_with_markdown_memory(tmp_path):
     assert simulator2.memory.demographics["email"] == "test@example.com"
     assert simulator2.memory.preferences["stated_preference"] == "standard dental coverage"
     assert len(simulator2.memory.long_term_recall) == 1
+
+
+def test_llm_client_content_filter_error_returns_classified_fallback():
+    client = LLMClient(enabled=True, model_provider="azure_openai")
+
+    class _BlockedModel:
+        def invoke(self, prompt):
+            raise RuntimeError("ResponsibleAIPolicyViolation: content_filter")
+
+    with patch.object(client, "_get_model", return_value=_BlockedModel()):
+        result = client.complete("test prompt")
+
+    assert result.error == "content_filter_blocked"
+    assert result.raw.get("error_code") == "content_filter"

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import time
 from functools import wraps
 from typing import Any, Callable, TypeVar, List, Tuple
 
+import httpx
+import requests
 import tiktoken
 from dotenv import load_dotenv
 
@@ -60,6 +63,142 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in rate_limit_indicators)
 
 
+def is_transient_error(error: Exception) -> bool:
+    """Check if an error is transient and should be retried."""
+    if is_rate_limit_error(error):
+        return True
+
+    if isinstance(
+            error,
+            (
+                    requests.exceptions.ReadTimeout,
+                    requests.exceptions.ConnectTimeout,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError,
+                    httpx.ReadTimeout,
+                    httpx.ConnectTimeout,
+                    httpx.TimeoutException,
+                    httpx.NetworkError,
+                    TimeoutError,
+                    socket.timeout,
+                    ConnectionResetError,
+                    ConnectionAbortedError,
+                    ConnectionRefusedError,
+            ),
+    ):
+        return True
+
+    error_str = str(error).lower()
+    transient_indicators = [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection aborted",
+        "temporary failure",
+        "temporarily unavailable",
+        "service unavailable",
+        "try again",
+        "http 502",
+        "http 503",
+        "http 504",
+    ]
+
+    if any(marker in error_str for marker in ["content filter", "content_filter", "responsibleai"]):
+        return False
+
+    return any(indicator in error_str for indicator in transient_indicators)
+
+
+def retry_on_exception(
+        func: Callable[..., T] | None = None,
+        *,
+        max_retries: int | None = None,
+        initial_backoff: float | None = None,
+        max_backoff: float | None = None,
+        backoff_multiplier: float | None = None,
+        jitter: bool | None = None,
+        should_retry: Callable[[Exception], bool] | None = None,
+        retry_label: str = "Retryable",
+) -> Callable[..., T]:
+    """Decorator to retry function calls when should_retry(error) is True."""
+    retries = max_retries if max_retries is not None else MAX_RETRIES
+    init_backoff = initial_backoff if initial_backoff is not None else INITIAL_BACKOFF
+    max_bo = max_backoff if max_backoff is not None else MAX_BACKOFF
+    mult = backoff_multiplier if backoff_multiplier is not None else BACKOFF_MULTIPLIER
+    jit = jitter if jitter is not None else JITTER_ENABLED
+    retry_predicate = should_retry or is_transient_error
+
+    def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        @wraps(fn)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
+            last_exception: Exception | None = None
+
+            for attempt in range(retries + 1):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+
+                    if not retry_predicate(e):
+                        logger.error(f"Non-retryable error in {fn.__name__}: {e}")
+                        raise
+
+                    if attempt >= retries:
+                        logger.error(
+                            f"{retry_label} error persisted after {retries} retries in {fn.__name__}. "
+                            f"Last error: {e}"
+                        )
+                        raise
+
+                    backoff_time = calculate_backoff(attempt, init_backoff, max_bo, mult, jit)
+                    logger.warning(
+                        f"{retry_label} error in {fn.__name__} (attempt {attempt + 1}/{retries + 1}). "
+                        f"Retrying in {backoff_time:.2f}s... Error: {e}"
+                    )
+                    time.sleep(backoff_time)
+
+            raise last_exception  # type: ignore[misc]
+
+        @wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
+            last_exception: Exception | None = None
+
+            for attempt in range(retries + 1):
+                try:
+                    return await fn(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+
+                    if not retry_predicate(e):
+                        logger.error(f"Non-retryable error in {fn.__name__}: {e}")
+                        raise
+
+                    if attempt >= retries:
+                        logger.error(
+                            f"{retry_label} error persisted after {retries} retries in {fn.__name__}. "
+                            f"Last error: {e}"
+                        )
+                        raise
+
+                    backoff_time = calculate_backoff(attempt, init_backoff, max_bo, mult, jit)
+                    logger.warning(
+                        f"{retry_label} error in {fn.__name__} (attempt {attempt + 1}/{retries + 1}). "
+                        f"Retrying in {backoff_time:.2f}s... Error: {e}"
+                    )
+                    await asyncio.sleep(backoff_time)
+
+            raise last_exception  # type: ignore[misc]
+
+        import inspect
+        if inspect.iscoroutinefunction(fn):
+            return async_wrapper  # type: ignore[return-value]
+        return sync_wrapper
+
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
 def calculate_backoff(attempt: int, initial: float, max_wait: float, multiplier: float, jitter: bool) -> float:
     """Calculate backoff time with optional jitter."""
     # Exponential backoff: initial * (multiplier ^ attempt)
@@ -84,7 +223,7 @@ def retry_on_rate_limit(
 ) -> Callable[..., T]:
     """
     Decorator to retry function calls on rate limit errors with exponential backoff.
-    
+
     Args:
         func: Function to wrap (used when decorator is applied without arguments)
         max_retries: Maximum number of retry attempts (default: MODEL_MAX_RETRIES env var or 5)
@@ -92,101 +231,47 @@ def retry_on_rate_limit(
         max_backoff: Maximum backoff time in seconds (default: MODEL_MAX_BACKOFF env var or 60.0)
         backoff_multiplier: Multiplier for exponential backoff (default: MODEL_BACKOFF_MULTIPLIER env var or 2.0)
         jitter: Whether to add randomness to backoff (default: MODEL_RETRY_JITTER env var or true)
-    
+
     Returns:
         Wrapped function with retry logic
-        
+
     Example:
         @retry_on_rate_limit(max_retries=3, initial_backoff=2.0)
         def call_model():
             return model.invoke(messages)
     """
-    # Use environment defaults if not specified
-    retries = max_retries if max_retries is not None else MAX_RETRIES
-    init_backoff = initial_backoff if initial_backoff is not None else INITIAL_BACKOFF
-    max_bo = max_backoff if max_backoff is not None else MAX_BACKOFF
-    mult = backoff_multiplier if backoff_multiplier is not None else BACKOFF_MULTIPLIER
-    jit = jitter if jitter is not None else JITTER_ENABLED
+    return retry_on_exception(
+        func,
+        max_retries=max_retries,
+        initial_backoff=initial_backoff,
+        max_backoff=max_backoff,
+        backoff_multiplier=backoff_multiplier,
+        jitter=jitter,
+        should_retry=is_rate_limit_error,
+        retry_label="Rate limit",
+    )
 
-    def decorator(fn: Callable[..., T]) -> Callable[..., T]:
-        @wraps(fn)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            last_exception: Exception | None = None
 
-            for attempt in range(retries + 1):  # +1 for the initial attempt
-                try:
-                    return fn(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-
-                    # Don't retry if it's not a rate limit error
-                    if not is_rate_limit_error(e):
-                        logger.error(f"Non-retryable error in {fn.__name__}: {e}")
-                        raise
-
-                    # If we've exhausted retries, raise the last exception
-                    if attempt >= retries:
-                        logger.error(
-                            f"Rate limit error persisted after {retries} retries in {fn.__name__}. "
-                            f"Last error: {e}"
-                        )
-                        raise
-
-                    # Calculate backoff and wait
-                    backoff_time = calculate_backoff(attempt, init_backoff, max_bo, mult, jit)
-                    logger.warning(
-                        f"Rate limit hit in {fn.__name__} (attempt {attempt + 1}/{retries + 1}). "
-                        f"Retrying in {backoff_time:.2f}s... Error: {e}"
-                    )
-                    time.sleep(backoff_time)
-
-            # This should never be reached, but just in case
-            raise last_exception  # type: ignore[misc]
-
-        @wraps(fn)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
-            last_exception: Exception | None = None
-
-            for attempt in range(retries + 1):  # +1 for the initial attempt
-                try:
-                    return await fn(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-
-                    # Don't retry if it's not a rate limit error
-                    if not is_rate_limit_error(e):
-                        logger.error(f"Non-retryable error in {fn.__name__}: {e}")
-                        raise
-
-                    # If we've exhausted retries, raise the last exception
-                    if attempt >= retries:
-                        logger.error(
-                            f"Rate limit error persisted after {retries} retries in {fn.__name__}. "
-                            f"Last error: {e}"
-                        )
-                        raise
-
-                    # Calculate backoff and wait
-                    backoff_time = calculate_backoff(attempt, init_backoff, max_bo, mult, jit)
-                    logger.warning(
-                        f"Rate limit hit in {fn.__name__} (attempt {attempt + 1}/{retries + 1}). "
-                        f"Retrying in {backoff_time:.2f}s... Error: {e}"
-                    )
-                    await asyncio.sleep(backoff_time)
-
-            # This should never be reached, but just in case
-            raise last_exception  # type: ignore[misc]
-
-        # Return appropriate wrapper based on whether function is async
-        import inspect
-        if inspect.iscoroutinefunction(fn):
-            return async_wrapper  # type: ignore[return-value]
-        return sync_wrapper
-
-    # Handle both @retry_on_rate_limit and @retry_on_rate_limit(...) usage
-    if func is not None:
-        return decorator(func)
-    return decorator
+def retry_on_transient(
+        func: Callable[..., T] | None = None,
+        *,
+        max_retries: int | None = None,
+        initial_backoff: float | None = None,
+        max_backoff: float | None = None,
+        backoff_multiplier: float | None = None,
+        jitter: bool | None = None,
+) -> Callable[..., T]:
+    """Decorator to retry function calls on transient errors."""
+    return retry_on_exception(
+        func,
+        max_retries=max_retries,
+        initial_backoff=initial_backoff,
+        max_backoff=max_backoff,
+        backoff_multiplier=backoff_multiplier,
+        jitter=jitter,
+        should_retry=is_transient_error,
+        retry_label="Transient",
+    )
 
 
 def wrap_model_with_rate_limiting(model: Any) -> Any:
@@ -195,8 +280,8 @@ def wrap_model_with_rate_limiting(model: Any) -> Any:
     """
     # 1. Reactive Retries (Decorator)
     # Wrap invoke methods with retry logic using object.__setattr__ to bypass Pydantic validation
-    retry_wrapped_invoke = retry_on_rate_limit(model.invoke)
-    retry_wrapped_ainvoke = retry_on_rate_limit(model.ainvoke)
+    retry_wrapped_invoke = retry_on_transient(model.invoke)
+    retry_wrapped_ainvoke = retry_on_transient(model.ainvoke)
 
     object.__setattr__(model, 'invoke', retry_wrapped_invoke)
     object.__setattr__(model, 'ainvoke', retry_wrapped_ainvoke)

@@ -1,6 +1,8 @@
 import os
 from unittest.mock import patch, Mock
 
+import requests
+
 from adaptive_synth_eval.clients.chatbot import ChatbotClient, ChatbotResponse, extract_bot_text
 
 
@@ -108,3 +110,63 @@ def test_extract_bot_text_all_keys():
     assert extract_bot_text({"text": "val5"}) == "val5"
     assert extract_bot_text({"llm_response": "val6"}) == "val6"
     assert extract_bot_text({"unknown": "val7"}) == ""
+
+
+@patch("adaptive_synth_eval.clients.chatbot.requests.post")
+def test_chatbot_client_retries_read_timeout_then_succeeds(mock_post):
+    success_response = Mock()
+    success_response.status_code = 200
+    success_response.ok = True
+    success_response.json.return_value = {"response": "recovered"}
+
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("read timed out"),
+        success_response,
+    ]
+
+    client = ChatbotClient(
+        endpoint="http://test",
+        enabled=True,
+        retry_max_retries=1,
+        retry_initial_backoff=0.0,
+        retry_max_backoff=0.0,
+        retry_jitter=False,
+        retry_on_timeout=True,
+    )
+
+    res = client.send(
+        conversation_id="c1",
+        session_id="s1",
+        turn_id=1,
+        user_message="test message",
+    )
+
+    assert res.status_code == 200
+    assert res.bot_response == "recovered"
+    assert mock_post.call_count == 2
+
+
+@patch("adaptive_synth_eval.clients.chatbot.requests.post")
+def test_chatbot_client_timeout_exhaustion_returns_error(mock_post):
+    mock_post.side_effect = requests.exceptions.ReadTimeout("read timed out")
+
+    client = ChatbotClient(
+        endpoint="http://test",
+        enabled=True,
+        retry_max_retries=1,
+        retry_initial_backoff=0.0,
+        retry_max_backoff=0.0,
+        retry_jitter=False,
+        retry_on_timeout=True,
+    )
+
+    res = client.send(
+        conversation_id="c1",
+        session_id="s1",
+        turn_id=1,
+        user_message="test message",
+    )
+
+    assert res.status_code == 0
+    assert "timed out" in (res.error or "")
+    assert mock_post.call_count == 2

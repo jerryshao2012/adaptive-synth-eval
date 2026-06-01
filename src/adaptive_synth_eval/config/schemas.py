@@ -33,6 +33,13 @@ class TargetChatbot:
     mode: str = "api"
     auth: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 60.0
+    retry_max_retries: int = 2
+    retry_initial_backoff_seconds: float = 1.0
+    retry_max_backoff_seconds: float = 20.0
+    retry_backoff_multiplier: float = 2.0
+    retry_jitter: bool = True
+    retry_on_timeout: bool = True
+    retry_on_http_5xx: bool = False
     browser: BrowserChatbot | None = None
 
 
