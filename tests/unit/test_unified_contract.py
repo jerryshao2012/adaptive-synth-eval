@@ -11,21 +11,21 @@ from adaptive_synth_eval.unified_eval.config.contract import (
     parse_unified_contract,
 )
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "mock_unified_quickstart.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "multi_persona_demo.yaml"
 
 
 def test_load_example_contract():
     contract = load_unified_contract(EXAMPLE)
-    assert contract.suite.suite_id == "mock_unified_quickstart"
-    assert len(contract.persona_pool) == 1
-    assert len(contract.scenario_catalog) == 1
-    assert len(contract.adversarial_scenario_catalog) == 1
-    assert len(contract.eval_plan.entries) == 1
+    assert contract.suite.suite_id == "multi_persona_demo_suite"
+    assert len(contract.persona_pool) == 3
+    assert len(contract.scenario_catalog) == 4
+    assert len(contract.adversarial_scenario_catalog) == 4
+    assert len(contract.eval_plan.entries) == 6
 
 
 def test_llm_for_inherits_top_level():
     contract = load_unified_contract(EXAMPLE)
-    # in mock_unified_quickstart.yaml, no component overrides are configured, so all components inherit top-level
+    # in multi_persona_demo.yaml, no component overrides are configured, so all components inherit top-level
     assert contract.llm_for("judge").provider == "mock"
     assert contract.llm_for("planner").provider == contract.llm.provider
 
@@ -78,3 +78,21 @@ def _base_payload() -> dict:
             }],
         },
     }
+
+
+def test_adversarial_scenarios_parsed_from_scenario_catalog():
+    payload = _base_payload()
+    # Omit adversarial_scenario_catalog
+    payload.pop("adversarial_scenario_catalog")
+    # Define adversarial fields in scenario_catalog scenario
+    payload["scenario_catalog"][0]["scenario_type"] = "toxicity"
+    payload["scenario_catalog"][0]["scenario_text"] = "inline probe"
+    # Update eval plan to point adversarial entry to S1
+    payload["eval_plan"]["entries"][0]["adversarial_scenario_id"] = "S1"
+
+    contract = parse_unified_contract(payload)
+    assert len(contract.scenario_catalog) == 1
+    assert len(contract.adversarial_scenario_catalog) == 1
+    assert contract.adversarial_scenario_catalog[0].scenario_id == "S1"
+    assert contract.adversarial_scenario_catalog[0].scenario_type == "toxicity"
+    assert contract.adversarial_scenario_catalog[0].scenario_text == "inline probe"

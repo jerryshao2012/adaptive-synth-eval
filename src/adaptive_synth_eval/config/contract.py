@@ -207,6 +207,15 @@ def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:
 
 
 def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
+    is_adversarial = "scenario_type" in payload and "scenario_text" in payload
+    if is_adversarial:
+        payload = dict(payload)
+        payload.setdefault("domain", None)
+        payload.setdefault("intent", None)
+        payload.setdefault("expected_retrieval_topics", [])
+        payload.setdefault("failure_injection", {})
+        payload.setdefault("success_criteria", {})
+
     required = [
         "scenario_id",
         "domain",
@@ -222,13 +231,20 @@ def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
         )
     return Scenario(
         scenario_id=str(payload["scenario_id"]),
-        domain=str(payload["domain"]),
-        intent=str(payload["intent"]),
+        domain=str(payload["domain"]) if payload.get("domain") is not None else None,
+        intent=str(payload["intent"]) if payload.get("intent") is not None else None,
         expected_retrieval_topics=list(payload["expected_retrieval_topics"]),
         failure_injection=FailureInjection.from_dict(payload.get("failure_injection")),
         success_criteria=cast(dict[str, Any], payload["success_criteria"]) if isinstance(payload["success_criteria"],
                                                                                          dict) else {},
         context=payload.get("context"),
+        scenario_type=str(payload["scenario_type"]) if payload.get("scenario_type") is not None else None,
+        scenario_text=str(payload["scenario_text"]) if payload.get("scenario_text") is not None else None,
+        hijack_target=str(payload["hijack_target"]) if payload.get("hijack_target") is not None else None,
+        failure_threshold=int(payload["failure_threshold"]) if payload.get("failure_threshold") is not None else None,
+        judge_overrides=cast(dict[str, Any], payload.get("judge_overrides")) or {},
+        fresh_start_after_refusals=int(payload["fresh_start_after_refusals"]) if payload.get(
+            "fresh_start_after_refusals") is not None else None,
     )
 
 

@@ -49,7 +49,6 @@ _REQUIRED_TOP = [
     "time_window",
     "persona_pool",
     "scenario_catalog",
-    "adversarial_scenario_catalog",
     "eval_plan",
 ]
 
@@ -98,7 +97,20 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
 
     personas = [_parse_persona(_apply_persona_aliases(item, warnings)) for item in payload["persona_pool"]]
     scenarios = [_parse_scenario(item, warnings) for item in payload["scenario_catalog"]]
-    adv_scenarios = [_parse_adversarial(item) for item in payload["adversarial_scenario_catalog"]]
+
+    # Extract adversarial scenarios defined directly in scenario_catalog
+    adv_scenarios = []
+    for item in payload.get("scenario_catalog", []):
+        if "scenario_type" in item and "scenario_text" in item:
+            adv_scenarios.append(_parse_adversarial(item))
+
+    # Also parse from adversarial_scenario_catalog if present
+    if "adversarial_scenario_catalog" in payload:
+        for item in payload["adversarial_scenario_catalog"]:
+            # Avoid duplicate scenario IDs
+            if not any(a.scenario_id == item["scenario_id"] for a in adv_scenarios):
+                adv_scenarios.append(_parse_adversarial(item))
+
     eval_plan = _parse_eval_plan(payload["eval_plan"], warnings)
     scoring = _parse_scoring(payload.get("scoring", {}))
 

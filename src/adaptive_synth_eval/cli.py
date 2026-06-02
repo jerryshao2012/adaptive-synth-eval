@@ -29,7 +29,7 @@ def detect_mode_from_file(path_str: str) -> str:
         if not isinstance(payload, dict):
             raise ContractError("Contract must be a JSON/YAML object/dictionary")
 
-        is_unified = "suite" in payload and "eval_plan" in payload and "adversarial_scenario_catalog" in payload
+        is_unified = "suite" in payload and "eval_plan" in payload
         is_synth = "simulation_suite" in payload and "traffic_orchestration" in payload
 
         if is_unified and is_synth:

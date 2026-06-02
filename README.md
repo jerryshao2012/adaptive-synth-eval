@@ -187,7 +187,7 @@ To make these settings permanent:
 ### 1. Validate a Unified Contract
 
 ```bash
-uv run ase validate-contract contracts/examples/mock_unified_quickstart.yaml
+uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
 ```
 
 ### 2. Run a Dry-Run Unified Simulation
@@ -196,7 +196,7 @@ Test your contract without making real API calls:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/mock_unified_quickstart.yaml \
+  --contract contracts/examples/multi_persona_demo.yaml \
   --dry-run
 ```
 
@@ -206,7 +206,7 @@ Export conversations in a readable format with Persona/Bot labels:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/mock_unified_quickstart.yaml \
+  --contract contracts/examples/multi_persona_demo.yaml \
   --dry-run \
   --output-conversations
 ```
@@ -219,7 +219,7 @@ Stream conversations live in your terminal:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/mock_unified_quickstart.yaml \
+  --contract contracts/examples/multi_persona_demo.yaml \
   --dry-run \
   --realtime-chat
 ```

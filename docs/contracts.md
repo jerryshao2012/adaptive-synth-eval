@@ -84,7 +84,7 @@ Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max
 
 ## Unified Contracts
 
-Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red-teaming turns. A unified contract uses the `suite` block instead of `simulation_suite`, and requires `eval_plan` and `adversarial_scenario_catalog` blocks. For details on unified contract structures, see [Unified Evaluation Guide](unified_evaluation.md).
+Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red-teaming turns. A unified contract uses the `suite` block instead of `simulation_suite`, and requires the `eval_plan` block. To define adversarial scenarios, you can either configure them under the main `scenario_catalog` block alongside synthetic parameters, or use a separate optional `adversarial_scenario_catalog` block. For details on unified contract structures, see [Unified Evaluation Guide](unified_evaluation.md).
 
 ## Available Examples
 
@@ -100,35 +100,20 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
   ```
 
-### 2. `mock_unified_quickstart.yaml` (Unified)
-- **Purpose**: Fast, dependency-free dry run demonstrating interleaved synthetic and adversarial turns.
-- **Run Limit**: 2 conversations, 3 turns each.
-- **Schedule**: `min_each` with 1 synthetic turn and 1 adversarial turn guaranteed.
+### 2. `multi_persona_demo.yaml` (Unified)
+- **Purpose**: A comprehensive unified evaluation contract illustrating multi-persona usage and all four adversarial scenario types (toxicity, prompt-injection, PII leak, and persona-hijack).
+- **Run Limit**: 15 conversations, 3-5 turns each.
+- **Key Features**:
+  - 3 personas: New employee, Manager, and Contractor using domain-neutral schema fields.
+  - 4 scenarios: Benefits enrollment (with inline PII leak checks), Leave policy (with inline persona-hijack checks), Toxicity testing, and Prompt injection.
+  - Interleaving modes: `phased`, `min_each`, and `bernoulli` schedules.
 - **Validation**:
   ```bash
-  uv run ase validate-contract contracts/examples/mock_unified_quickstart.yaml
+  uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
   ```
 - **Execution**:
   ```bash
-  uv run ase run --contract contracts/examples/mock_unified_quickstart.yaml --dry-run --output-conversations
-  ```
-
-### 3. `hr_policy_unified.yaml` (Unified)
-- **Purpose**: A comprehensive HR-themed unified contract testing standard HR scenarios alongside policy boundaries and PII leaks.
-- **Run Limit**: 4 conversations, 3-6 turns each.
-- **Schedule**: `phased` schedule with 2 warmup synthetic turns, followed by adversarial probes.
-- **Validation**:
-  ```bash
-  uv run ase validate-contract contracts/examples/hr_policy_unified.yaml
-  ```
-
-### 4. `adversarial_heavy.yaml` (Unified)
-- **Purpose**: A red-teaming heavy evaluation designed to focus primarily on red-teaming target chatbots.
-- **Run Limit**: 4 conversations, 4-6 turns each.
-- **Schedule**: `bernoulli` with `p_synth: 0.1` (90% adversarial probe chance).
-- **Validation**:
-  ```bash
-  uv run ase validate-contract contracts/examples/adversarial_heavy.yaml
+  uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run
   ```
 
 ### Additional Examples
