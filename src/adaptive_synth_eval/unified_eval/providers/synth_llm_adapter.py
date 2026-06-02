@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from unified_eval.providers.llm_factory import SynthChatFn
+from adaptive_synth_eval.unified_eval.providers.llm_factory import SynthChatFn
 
 
 @dataclass

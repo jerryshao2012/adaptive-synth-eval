@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 
-from unified_eval.config.schemas import Schedule
+from adaptive_synth_eval.unified_eval.config.schemas import Schedule
 
 
 def plan_turn_modes(schedule: Schedule, turn_count: int, rng: random.Random) -> list[str]:

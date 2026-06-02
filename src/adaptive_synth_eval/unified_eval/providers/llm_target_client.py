@@ -12,8 +12,8 @@ import time
 from typing import Any
 
 from adaptive_synth_eval.clients.chatbot import ChatbotResponse
-from unified_eval.config.schemas import LLMSpec
-from unified_eval.providers.retry import retry_call
+from adaptive_synth_eval.unified_eval.config.schemas import LLMSpec
+from adaptive_synth_eval.unified_eval.providers.retry import retry_call
 
 
 class LLMTargetClient:

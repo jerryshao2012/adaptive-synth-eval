@@ -178,6 +178,12 @@ def _load_payload(path: Path) -> dict[str, Any]:
 
 
 def _parse_persona(payload: dict[str, Any]) -> Persona:
+    payload = dict(payload)
+    if "domain_familiarity" in payload:
+        payload["hr_familiarity"] = payload.get("domain_familiarity")
+    if "data_sensitivity" in payload:
+        payload["privacy_sensitivity"] = payload.get("data_sensitivity")
+
     required = [
         "persona_id",
         "role",

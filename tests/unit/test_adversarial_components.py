@@ -1,6 +1,6 @@
-from adversarial_response_engine.core.token_budget import TokenBudgetManager
-from adversarial_response_engine.engine.attack_agent import AttackAgent
-from adversarial_response_engine.engine.components import SafetyJudge
+from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
+from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import AttackAgent
+from adaptive_synth_eval.adversarial_response_engine.engine.components import SafetyJudge
 
 
 def test_adversarial_imports_and_construct():

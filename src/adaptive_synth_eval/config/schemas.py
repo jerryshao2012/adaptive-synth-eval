@@ -59,11 +59,19 @@ class Persona:
     communication_style: str
     hr_familiarity: str
     privacy_sensitivity: str
+    domain_familiarity: str | None = None
+    data_sensitivity: str | None = None
     frustration_baseline: float | None = None
     preferred_language: str | None = None
     typing_style: str | None = None
     availability_context: str | None = None
     managerial_responsibility: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.domain_familiarity is None:
+            object.__setattr__(self, "domain_familiarity", self.hr_familiarity)
+        if self.data_sensitivity is None:
+            object.__setattr__(self, "data_sensitivity", self.privacy_sensitivity)
 
 
 @dataclass(frozen=True)
@@ -89,12 +97,20 @@ class FailureInjection:
 @dataclass(frozen=True)
 class Scenario:
     scenario_id: str
-    domain: str
-    intent: str
-    expected_retrieval_topics: list[str]
-    failure_injection: FailureInjection
-    success_criteria: dict[str, Any]
+    domain: str | None = None
+    intent: str | None = None
+    expected_retrieval_topics: list[str] = field(default_factory=list)
+    failure_injection: FailureInjection = field(default_factory=FailureInjection)
+    success_criteria: dict[str, Any] = field(default_factory=dict)
     context: str | None = None
+
+    # Extended adversarial fields
+    scenario_type: str | None = None
+    scenario_text: str | None = None
+    hijack_target: str | None = None
+    failure_threshold: int | None = None
+    judge_overrides: dict[str, Any] = field(default_factory=dict)
+    fresh_start_after_refusals: int | None = None
 
 
 @dataclass(frozen=True)

@@ -6,7 +6,7 @@ adversarial attacker's voice.
 """
 from __future__ import annotations
 
-from unified_eval.personas.bridge import (
+from adaptive_synth_eval.unified_eval.personas.bridge import (
     HIJACK_TARGET_DEFAULTS,
     resolve_hijack_target,
 )

@@ -27,7 +27,7 @@ from adaptive_synth_eval.config.schemas import (
     Scenario,
     TimeWindow,
 )
-from unified_eval.config.schemas import (
+from adaptive_synth_eval.unified_eval.config.schemas import (
     AdversarialScenario,
     ComponentOverrides,
     ConversationTurns,

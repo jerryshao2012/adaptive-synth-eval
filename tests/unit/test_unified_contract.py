@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from adaptive_synth_eval.config.contract import ContractError
-from unified_eval.config.contract import (
+from adaptive_synth_eval.unified_eval.config.contract import (
     load_unified_contract,
     parse_unified_contract,
 )

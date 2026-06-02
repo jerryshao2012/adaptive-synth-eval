@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from unified_eval.config.contract import load_unified_contract
-from unified_eval.orchestrator.runner import run_unified
+from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
+from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "mock_unified_quickstart.yaml"
 
@@ -56,5 +56,5 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
 
 def _with_output_dir(contract, base_dir: Path):
     from dataclasses import replace
-    from unified_eval.config.schemas import OutputConfig
+    from adaptive_synth_eval.unified_eval.config.schemas import OutputConfig
     return replace(contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id))

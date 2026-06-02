@@ -9,20 +9,20 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from adversarial_response_engine.core.models import AttackMemory
-from adversarial_response_engine.core.token_budget import TokenBudgetManager
-from unified_eval.config.contract import contract_to_dict
-from unified_eval.config.schemas import UnifiedContract
-from unified_eval.orchestrator.coin_flip import make_conversation_rng
-from unified_eval.orchestrator.conversation import (
+from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
+from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
+from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
+from adaptive_synth_eval.unified_eval.config.schemas import UnifiedContract
+from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import make_conversation_rng
+from adaptive_synth_eval.unified_eval.orchestrator.conversation import (
     ConversationResult,
     run_conversation,
 )
-from unified_eval.output.writer import UnifiedArtifactWriter
-from unified_eval.providers.budget_meter import BudgetMeter
-from unified_eval.providers.llm_factory import build_component_llms
-from unified_eval.providers.llm_target_client import LLMTargetClient
-from unified_eval.providers.target_adapter import create_chatbot_client
+from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
+from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
+from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
+from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
+from adaptive_synth_eval.unified_eval.providers.target_adapter import create_chatbot_client
 
 
 def run_unified(
@@ -299,7 +299,7 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
     """For --dry-run: replace top-level llm with mock; clear per-component overrides.
     Target LLM (if any) is also mocked so no API key is required.
     """
-    from unified_eval.config.schemas import (
+    from adaptive_synth_eval.unified_eval.config.schemas import (
         ComponentOverrides,
         LLMSpec,
         UnifiedContract as _UC,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from adversarial_response_engine.core.token_budget import TokenBudgetManager, TokenUsage
+from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager, TokenUsage
 
 # USD per 1M tokens. Keep this small and explicit; users can override via contract
 # if their pricing is different. (Numbers as of 2026-06; double-check against the

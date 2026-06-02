@@ -8,36 +8,36 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
-from adaptive_synth_eval.config.schemas import Persona, Scenario
-from adaptive_synth_eval.generation.turns import UserSimulator
-from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
-from adversarial_response_engine.core.models import (
+from adaptive_synth_eval.adversarial_response_engine.core.models import (
     AttackMemory,
     SessionState,
     TurnRecord,
 )
-from adversarial_response_engine.engine.attack_agent import AttackAgent
-from adversarial_response_engine.engine.components import (
+from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import AttackAgent
+from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     AdaptationPlanner,
     RuleBasedSessionPolicyController,
     SafetyJudge,
     SessionPolicyController,
     TurnGenerator,
 )
-from adversarial_response_engine.engine.config import PolicyConfig
-from adversarial_response_engine.providers.llm_client import LLMClient as AREClient
-from unified_eval.config.schemas import (
+from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
+from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
+from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
+from adaptive_synth_eval.config.schemas import Persona, Scenario
+from adaptive_synth_eval.generation.turns import UserSimulator
+from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
+from adaptive_synth_eval.unified_eval.config.schemas import (
     AdversarialScenario,
     EvalPlanEntry,
     UnifiedContract,
 )
-from unified_eval.orchestrator.coin_flip import plan_turn_modes
-from unified_eval.orchestrator.display import display_bot_turn, display_user_turn
-from unified_eval.personas.bridge import resolve_hijack_target
-from unified_eval.providers.llm_factory import ProvidedLLM
-from unified_eval.providers.synth_llm_adapter import SynthLLMAdapter
-from unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
+from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import plan_turn_modes
+from adaptive_synth_eval.unified_eval.orchestrator.display import display_bot_turn, display_user_turn
+from adaptive_synth_eval.unified_eval.personas.bridge import resolve_hijack_target
+from adaptive_synth_eval.unified_eval.providers.llm_factory import ProvidedLLM
+from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLLMAdapter
+from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
 
 
 def _build_session_policy(contract, llms, token_budget, meter):

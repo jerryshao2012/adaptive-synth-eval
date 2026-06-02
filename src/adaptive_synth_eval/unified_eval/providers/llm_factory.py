@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from adversarial_response_engine.providers.llm_backends import (
+from adaptive_synth_eval.adversarial_response_engine.providers.llm_backends import (
     LLMCallFn,
     make_azure_openai_backend,
     make_bedrock_backend,
@@ -21,8 +21,8 @@ from adversarial_response_engine.providers.llm_backends import (
     make_mock_backend,
     make_openai_backend,
 )
-from unified_eval.config.schemas import LLMSpec
-from unified_eval.providers.retry import retry_call
+from adaptive_synth_eval.unified_eval.config.schemas import LLMSpec
+from adaptive_synth_eval.unified_eval.providers.retry import retry_call
 
 
 def _with_retry(

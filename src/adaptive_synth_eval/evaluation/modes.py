@@ -7,8 +7,8 @@ from typing import Any, Callable
 # Load loaders and runners lazily to prevent circular imports or premature loading
 from adaptive_synth_eval.config.contract import load_contract as load_synth_contract
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation as run_synth_simulation
-from unified_eval.config.contract import load_unified_contract
-from unified_eval.orchestrator.runner import run_unified
+from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
+from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
 
 @dataclass(frozen=True)
