@@ -4,6 +4,10 @@ from unittest.mock import patch, Mock
 import requests
 
 from adaptive_synth_eval.clients.chatbot import ChatbotClient, ChatbotResponse, extract_bot_text
+from adaptive_synth_eval.clients.browser_chatbot import BrowserChatbotClient
+from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
+from adaptive_synth_eval.clients.retry_utils import is_transient_error, retry_on_transient
+from adaptive_synth_eval.config.schemas import BrowserChatbot, TargetChatbot
 
 
 def test_chatbot_response_extracts_known_text_fields():
@@ -170,3 +174,65 @@ def test_chatbot_client_timeout_exhaustion_returns_error(mock_post):
     assert res.status_code == 0
     assert "timed out" in (res.error or "")
     assert mock_post.call_count == 2
+
+
+# Chatbot Factory Tests Merged
+def test_create_chatbot_client_defaults_to_api_client():
+    config = TargetChatbot(
+        enabled=True,
+        endpoint="https://api.example.com/chat",
+        retry_max_retries=4,
+        retry_initial_backoff_seconds=0.2,
+        retry_max_backoff_seconds=2.0,
+        retry_backoff_multiplier=1.5,
+        retry_jitter=False,
+        retry_on_timeout=True,
+        retry_on_http_5xx=True,
+    )
+
+    client = create_chatbot_client(config)
+
+    assert isinstance(client, ChatbotClient)
+    assert client.endpoint == "https://api.example.com/chat"
+    assert client.retry_on_timeout is True
+    assert client.retry_on_http_5xx is True
+
+
+def test_create_chatbot_client_uses_browser_client_for_browser_mode():
+    config = TargetChatbot(
+        enabled=True,
+        mode="browser",
+        browser=BrowserChatbot(
+            url="https://chat.example.com",
+            input_selector="textarea",
+            submit_selector="button[type='submit']",
+            response_selector=".bot-message",
+            browser_type="edge",
+            headless=True,
+        ),
+    )
+
+    client = create_chatbot_client(config)
+
+    assert isinstance(client, BrowserChatbotClient)
+    assert client.browser_config.browser_type == "edge"
+
+
+# Retry Utils Tests Merged
+def test_retry_on_transient_retries_timeout_once_then_succeeds():
+    calls = {"count": 0}
+
+    @retry_on_transient(max_retries=1, initial_backoff=0.0, max_backoff=0.0, jitter=False)
+    def flaky_call():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise requests.exceptions.ReadTimeout("timed out")
+        return "ok"
+
+    assert flaky_call() == "ok"
+    assert calls["count"] == 2
+
+
+def test_is_transient_error_does_not_retry_content_filter():
+    error = RuntimeError("blocked by content filter policy")
+    assert is_transient_error(error) is False
