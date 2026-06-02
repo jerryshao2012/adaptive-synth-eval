@@ -3,6 +3,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+
 from adaptive_synth_eval.config.contract import ContractError, contract_to_dict, load_contract
 
 
