@@ -64,7 +64,7 @@ uv tool install --editable .
 ### 1. Validate a Contract
 
 ```bash
-uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
+uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
 ```
 
 ### 2. Run a Dry-Run Simulation
@@ -72,7 +72,7 @@ uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
 Test your contract without making real chatbot API calls:
 
 ```bash
-uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
 ```
 
 ### 3. Stream Realtime Chat
@@ -80,7 +80,7 @@ uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run
 Watch conversations unfold live in your terminal with interactive controls (speed up, pause, switch personas, alter user styles):
 
 ```bash
-uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run --realtime-chat
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run --realtime-chat
 ```
 
 ### 4. Summarize a Run
@@ -108,7 +108,7 @@ Detailed guides covering all components and configuration reference are availabl
 
 ```text
 adaptive-synth-eval/
-├── contracts/examples/      # Example simulation contracts (e.g. multi_persona_demo.yaml)
+├── contracts/examples/      # Example simulation contracts (e.g. unified_evaluation_demo.yaml)
 ├── docs/                    # Detailed markdown documentation
 ├── outputs/runs/            # Generated simulation output runs
 ├── src/adaptive_synth_eval/ # Main source package (cli, clients, engines, generation, scoring)

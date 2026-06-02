@@ -156,9 +156,9 @@ If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os e
 $env:UV_LINK_MODE='copy'
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 
-uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-chat
-uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-chat --persona DEMO_P1
-uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-chat --persona DEMO_P2
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
 ```
 
 ## Corporate Environment Setup

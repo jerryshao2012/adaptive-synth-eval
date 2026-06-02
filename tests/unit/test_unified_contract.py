@@ -11,7 +11,7 @@ from adaptive_synth_eval.unified_eval.config.contract import (
     parse_unified_contract,
 )
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "multi_persona_demo.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
 
 
 def test_load_example_contract():
@@ -25,7 +25,7 @@ def test_load_example_contract():
 
 def test_llm_for_inherits_top_level():
     contract = load_unified_contract(EXAMPLE)
-    # in multi_persona_demo.yaml, no component overrides are configured, so all components inherit top-level
+    # in unified_evaluation_demo.yaml, no component overrides are configured, so all components inherit top-level
     assert contract.llm_for("judge").provider == "mock"
     assert contract.llm_for("planner").provider == contract.llm.provider
 

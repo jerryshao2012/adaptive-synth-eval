@@ -100,7 +100,7 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
   ```
 
-### 2. `multi_persona_demo.yaml` (Unified)
+### 2. `unified_evaluation_demo.yaml` (Unified)
 - **Purpose**: A comprehensive unified evaluation contract illustrating multi-persona usage and all four adversarial scenario types (toxicity, prompt-injection, PII leak, and persona-hijack).
 - **Run Limit**: 15 conversations, 3-5 turns each.
 - **Key Features**:
@@ -109,11 +109,11 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   - Interleaving modes: `phased`, `min_each`, and `bernoulli` schedules.
 - **Validation**:
   ```bash
-  uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
+  uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
   ```
 - **Execution**:
   ```bash
-  uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run
+  uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
   ```
 
 ### Additional Examples
@@ -153,8 +153,8 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   - Target chatbot disabled (synthetic-only generation)
 - **Use Case**: Performance benchmarking, scalability testing, load testing the generation pipeline, validating system behavior under high-volume conditions
 
-#### 8. `multi_persona_demo.yaml`
-- **Purpose**: Demonstrates multi-persona capabilities with 3 distinct user types interacting with 2 different scenarios
+#### 8. `unified_evaluation_demo.yaml`
+- **Purpose**: Demonstrates unified adversarial and synthetic capabilities with 3 distinct user types interacting with 2 different scenarios
 - **Key Features**:
   - 3 diverse personas:
     - DEMO_P1: New employee from Toronto (junior, confused_but_polite, low HR familiarity)

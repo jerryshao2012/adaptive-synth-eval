@@ -9,7 +9,7 @@ from pathlib import Path
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "multi_persona_demo.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
 
 
 def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):

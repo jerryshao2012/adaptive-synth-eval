@@ -1,9 +1,9 @@
-# Unified Multi-Persona Demo Contract
+# Unified Evaluation Demo Contract
 # Interleaves normal synthetic questions with adversarial probes across multiple personas.
 #
 # Usage:
-#   uv run ase validate-contract contracts/examples/multi_persona_demo.yaml
-#   uv run ase run --contract contracts/examples/multi_persona_demo.yaml --dry-run
+#   uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
+#   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
 
 suite:
   suite_id: multi_persona_demo_suite
