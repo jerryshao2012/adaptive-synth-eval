@@ -160,3 +160,65 @@ uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-
 uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-chat --persona DEMO_P1
 uv run ase run --contract contracts/examples/multi_persona_demo.yaml --realtime-chat --persona DEMO_P2
 ```
+
+## Corporate Environment Setup
+
+If you're working behind a corporate proxy or firewall, you may need additional configuration:
+
+### SSL Certificate Configuration
+
+Corporate networks often use custom SSL certificates for traffic inspection. To configure these:
+
+1. **Obtain your corporate CA certificate** (usually provided by IT as a `.pem` or `.crt` file)
+2. **Set environment variables** to trust the corporate certificate:
+
+   **Linux/macOS (Bash/Zsh):**
+   ```bash
+   export REQUESTS_CA_BUNDLE=/path/to/your/corporate-ca.pem
+   export SSL_CERT_FILE=/path/to/your/corporate-ca.pem
+   export CURL_CA_BUNDLE=/path/to/your/corporate-ca.pem
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   $env:REQUESTS_CA_BUNDLE = "C:\path\to\your\corporate-ca.pem"
+   $env:SSL_CERT_FILE = "C:\path\to\your\corporate-ca.pem"
+   $env:CURL_CA_BUNDLE = "C:\path\to\your\corporate-ca.pem"
+   ```
+
+   **For Git operations:**
+   ```bash
+   git config --global http.sslCAInfo /path/to/your/corporate-ca.pem
+   ```
+
+### Proxy Configuration
+
+If your network requires authenticated proxy access:
+
+**Linux/macOS (Bash/Zsh):**
+```bash
+export HTTP_PROXY="http://username:password@proxy.company.com:8080/"
+export HTTPS_PROXY="http://username:password@proxy.company.com:8080/"
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:HTTP_PROXY = "http://username:password@proxy.company.com:8080/"
+$env:HTTPS_PROXY = "http://username:password@proxy.company.com:8080/"
+```
+
+> **Note:** If your username contains special characters (like backslashes in domain usernames), URL-encode them:
+> ```powershell
+> $username = [uri]::EscapeDataString("DOMAIN\\username")
+> $password = [uri]::EscapeDataString("your-password")
+> $env:HTTP_PROXY = "http://${username}:${password}@proxy.company.com:8080/"
+> ```
+
+### Persistent Configuration
+Add the settings to your shell profile (`~/.bashrc`, `~/.zshrc`) on Linux/macOS, or environment properties on Windows.
+
+### Troubleshooting Corporate Network Issues
+- **SSL errors**: Verify the CA certificate path is correct and the file exists.
+- **Connection timeouts**: Check proxy address and port with IT.
+- **Authentication failures**: Ensure credentials are URL-encoded.
+- **uv sync fails**: Set `UV_HTTP_TIMEOUT=300` for longer timeouts.

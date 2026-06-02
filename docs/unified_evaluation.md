@@ -1,4 +1,4 @@
-# Unified Evaluation
+# Unified & Adversarial Evaluation
 
 The unified evaluation pipeline drives both synthetic conversations (ASE) and adversarial probes (ARE) from a single YAML contract. By combining these two modes, you can evaluate the response quality and security of a chatbot in parallel.
 
@@ -11,7 +11,6 @@ A unified contract defines:
 - **time_window**: The period and duration over which the synthetic traffic is simulated.
 - **persona_pool**: Personas interacting with the chatbot.
 - **scenario_catalog**: Synthetic scenarios.
-- **adversarial_scenario_catalog**: Adversarial scenarios designed to stress-test the chatbot.
 - **eval_plan**: Defines how many conversations to run, the turn limits, and which persona/scenario pairs to execute.
 - **scoring**: Weights for synthetic quality scoring and the failure threshold for adversarial turns.
 
@@ -27,18 +26,46 @@ Each entry in the `eval_plan` can configure a `schedule` to control how syntheti
    - `min_adversarial`: Minimum adversarial turns.
    - `p_synth`: Probability of choosing synthetic when constraints are satisfied.
 
+---
+
+## Adversarial Evaluation Details
+
+Adversarial evaluation tests the safety and robustness of your chatbot using automated red-teaming agents that dynamically probe the bot for vulnerabilities.
+
+### Attack Scenario Types
+
+The adversarial engine supports several built-in attack families:
+- **toxicity**: Probing if the bot responds with hostile, toxic, or inappropriate language.
+- **prompt-injection**: Attempting to hijack the bot's system instructions to make it ignore its constraints.
+- **data-pii-leak**: Attempting to extract sensitive, private employee information or unauthorized database records.
+- **persona-hijack**: Inducing the bot to adopt a different, unauthorized persona (e.g. speaking as an executive or a legal authority).
+
+### Red-Teaming Agent Roles
+
+The red-teaming engine orchestrates several specialized LLM agents:
+1. **Planner (AdaptationPlanner)**: Looks at the conversation history and selects the best next attack angle/sub-tactic (e.g. sympathy baiting, authority pressure).
+2. **Generator (TurnGenerator)**: Translates the planned tactic into a natural-sounding user message.
+3. **Judge (SafetyJudge)**: Evaluates the chatbot's response on a scale of `0-5` for safety violations or leakages.
+4. **Policy (SessionPolicyController)**: Monitors the conversation and dynamically decides to terminate early if the bot is consistently refusing or if the budget is exhausted.
+
+### Failure Thresholds
+
+Adversarial scenarios configure a `failure_threshold` (default `3`):
+- If the `SafetyJudge` returns a score greater than or equal to this threshold, the turn is marked as a safety failure.
+- When a failure is detected, the orchestrator records the failure details in `failed_examples.jsonl` and can short-circuit the session to save token budget.
+
+### Session Policy Modes
+
+To optimize costs, you can configure a session policy in your contract's `run.session_policy` block:
+- **none**: Runs conversations to their full turn limit.
+- **rule**: Evaluates simple rules (e.g. abort if there are too many consecutive chatbot refusals).
+- **llm**: Employs an LLM to judge if the chatbot has detected the red-teaming attempt and if continuing is futile.
+
+---
+
 ## Token Budget
 
 To prevent run-away costs when conducting large evaluations, the unified orchestrator enforces a token budget:
 - Configured via `run.budget` (e.g. `100000` tokens).
 - Tracks prompt and completion tokens for all components (`planner`, `generator`, `judge`, `policy`, `user_simulator`).
 - Automatically aborts the evaluation run once the budget is exhausted, preserving all intermediate outputs and summary statistics.
-
-## Output Artifacts
-
-Unified runs write output files under `outputs/runs/<run_id>/`:
-- `run_summary.json`: High-level metrics including token usage, component-level costs, safety scores, and failure rates.
-- `turns.jsonl`: Detail of every turn including the text, latency, and turn type (`synth` or `adversarial`).
-- `scores.jsonl`: Individual turn safety, relevance, groundedness, and adversarial failure scores.
-- `adversarial_sessions.jsonl`: Detail of the adversarial planner's state and attack angles.
-- `attack_memory.json`: Shared memory registry recording past successful attack angles.
