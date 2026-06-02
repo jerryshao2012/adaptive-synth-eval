@@ -222,13 +222,21 @@ class ChatbotClient:
         logger.debug(f"Preparing request to endpoint: {self.endpoint}")
 
         headers = {"Content-Type": "application/json"}
-        if self.auth.get("type") == "bearer" and self.auth.get("env_var"):
-            token = os.getenv(str(self.auth["env_var"]))
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-                logger.debug("Authorization header added")
+        auth_type = self.auth.get("type")
+        env_var_name = self.auth.get("env_var")
+        if auth_type and env_var_name:
+            auth_val = os.getenv(str(env_var_name))
+            if auth_val:
+                if auth_type == "bearer":
+                    headers["Authorization"] = f"Bearer {auth_val}"
+                    logger.debug("Authorization bearer header added")
+                elif auth_type == "api_key":
+                    header_name = self.auth.get("header_name", "x-api-key")
+                    headers[header_name] = auth_val
+                    logger.debug(f"API key header ({header_name}) added")
             else:
-                logger.warning(f"Auth token not found in environment variable: {self.auth['env_var']}")
+                logger.warning(f"Auth credential not found in environment variable: {env_var_name}")
+
 
         # Unified payload: support legacy params and config-driven parameters
         payload: dict[str, Any] = {

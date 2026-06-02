@@ -116,7 +116,24 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
   ```
 
+### 3. `tfsa_aws_unified_evaluation.yaml` (Unified)
+- **Purpose**: A unified evaluation contract targeting a Tax-Free Savings Account (TFSA) chatbot deployed on AWS.
+- **Run Limit**: 12 conversations, 3-6 turns each.
+- **Key Features**:
+  - AWS-deployed endpoint protected with API Key (`type: api_key`, `header_name: x-api-key`).
+  - TFSA customer personas: Novice saver, Experienced investor, Self-employed contractor.
+  - Scenarios: Eligibility & limits, Withdrawals, PII Leak (protecting SIN), Persona Hijack (certified advisor boundaries), Toxicity, and Prompt injection.
+- **Validation**:
+  ```bash
+  uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation.yaml
+  ```
+- **Execution**:
+  ```bash
+  uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --dry-run
+  ```
+
 ### Additional Examples
+
 
 #### 5. `one_week_chat_history.yaml`
 - **Purpose**: A comprehensive 7-day simulation plan simulating realistic HR chatbot usage over a week
@@ -167,3 +184,13 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   - Real-time chat enabled with target chatbot
   - Max concurrency: 3, batch size: 15
 - **Use Case**: Showcasing how different user types (roles, seniority, locations, communication styles) interact with the same chatbot, demonstrating persona diversity and realistic traffic mixing
+
+#### 9. `tfsa_aws_unified_evaluation.yaml`
+- **Purpose**: Demonstrates unified synthetic and adversarial capabilities on a Tax-Free Savings Account (TFSA) chatbot.
+- **Key Features**:
+  - Simulates 12 conversations with lengths between 3 and 6 turns.
+  - Endpoint configuration includes API key authentication via `type: api_key`, protecting an AWS-deployed service.
+  - 3 custom personas targeting different demographics: novice savers, experienced investors, and contractors.
+  - Scenarios cover Canadian TFSA rules (eligibility, limits, withdrawal timing) alongside security/safety guardrails (PII leakage, professional persona hijacking, toxicity, and prompt injections).
+- **Use Case**: Testing safety boundary compliance, content filtering, and specific regulatory rules on tax-advantaged account domains.
+

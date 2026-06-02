@@ -3,8 +3,8 @@ from unittest.mock import patch, Mock
 
 import requests
 
-from adaptive_synth_eval.clients.chatbot import ChatbotClient, ChatbotResponse, extract_bot_text
 from adaptive_synth_eval.clients.browser_chatbot import BrowserChatbotClient
+from adaptive_synth_eval.clients.chatbot import ChatbotClient, ChatbotResponse, extract_bot_text
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.retry_utils import is_transient_error, retry_on_transient
 from adaptive_synth_eval.config.schemas import BrowserChatbot, TargetChatbot
@@ -82,6 +82,48 @@ def test_chatbot_client_send_success(mock_post):
     assert res.bot_response == "mocked success"
     assert res.retrieved_policy_ids == ["p1"]
     mock_post.assert_called_once()
+
+
+@patch("adaptive_synth_eval.clients.chatbot.requests.post")
+def test_chatbot_client_send_api_key_auth(mock_post):
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.ok = True
+    mock_response.json.return_value = {"response": "success"}
+    mock_post.return_value = mock_response
+
+    # Test default header name (x-api-key)
+    with patch.dict(os.environ, {"MY_API_KEY_ENV": "secret-key"}):
+        client = ChatbotClient(
+            endpoint="http://test",
+            enabled=True,
+            auth={"type": "api_key", "env_var": "MY_API_KEY_ENV"}
+        )
+        client.send(
+            conversation_id="c1",
+            session_id="s1",
+            turn_id=1,
+            user_message="test",
+        )
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["x-api-key"] == "secret-key"
+
+    # Test custom header name
+    mock_post.reset_mock()
+    with patch.dict(os.environ, {"MY_API_KEY_ENV": "secret-key"}):
+        client = ChatbotClient(
+            endpoint="http://test",
+            enabled=True,
+            auth={"type": "api_key", "env_var": "MY_API_KEY_ENV", "header_name": "custom-auth-header"}
+        )
+        client.send(
+            conversation_id="c1",
+            session_id="s1",
+            turn_id=1,
+            user_message="test",
+        )
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["custom-auth-header"] == "secret-key"
 
 
 @patch("adaptive_synth_eval.clients.chatbot.requests.post")
