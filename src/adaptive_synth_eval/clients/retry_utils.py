@@ -68,6 +68,23 @@ def is_transient_error(error: Exception) -> bool:
     if is_rate_limit_error(error):
         return True
 
+    # Check for transient class names (handles OpenAI, Anthropic, etc. without explicit import)
+    transient_class_names = {
+        "APITimeoutError",
+        "APIConnectionError",
+        "RateLimitError",
+        "InternalServerError",
+        "ServiceUnavailableError",
+        "OverloadedError",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ConnectionError",
+        "Timeout",
+        "TimeoutException",
+    }
+    if type(error).__name__ in transient_class_names:
+        return True
+
     if isinstance(
             error,
             (
@@ -101,6 +118,9 @@ def is_transient_error(error: Exception) -> bool:
         "http 502",
         "http 503",
         "http 504",
+        "429",
+        "500",
+        "overloaded",
     ]
 
     if any(marker in error_str for marker in ["content filter", "content_filter", "responsibleai"]):
@@ -272,6 +292,26 @@ def retry_on_transient(
         should_retry=is_transient_error,
         retry_label="Transient",
     )
+
+
+def retry_call(
+        fn: Callable[[], T],
+        *,
+        max_attempts: int = 3,
+        initial_backoff: float = 1.0,
+        max_backoff: float = 30.0,
+        label: str = "llm_call",
+) -> T:
+    """Call fn() with exponential backoff on transient failures."""
+    wrapped = retry_on_exception(
+        fn,
+        max_retries=max_attempts - 1,
+        initial_backoff=initial_backoff,
+        max_backoff=max_backoff,
+        should_retry=is_transient_error,
+        retry_label=label,
+    )
+    return wrapped()
 
 
 def wrap_model_with_rate_limiting(model: Any) -> Any:

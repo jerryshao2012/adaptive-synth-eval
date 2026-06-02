@@ -7,7 +7,7 @@ import os
 import random
 from typing import Callable, Dict, Any, Optional
 
-from .clients.chatbot import ChatbotClient
+from adaptive_synth_eval.clients.chatbot import ChatbotClient
 
 
 class ChatbotClientAdapter:

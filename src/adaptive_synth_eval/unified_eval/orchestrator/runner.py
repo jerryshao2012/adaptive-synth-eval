@@ -22,7 +22,7 @@ from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
 from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
 from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
-from adaptive_synth_eval.unified_eval.providers.target_adapter import create_chatbot_client
+from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 
 
 def run_unified(
