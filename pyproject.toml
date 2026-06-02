@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Synthetic HR chatbot ChatHistory generation CLI"
 requires-python = ">=3.11"
 dependencies = [
+  "anthropic>=0.40.0",
+  "openai>=1.0.0",
   "pytest>=9.0.3",
   "python-dotenv>=1.2.2",
   "PyYAML>=6.0",
@@ -28,6 +30,10 @@ name = "Developer"
 [project.scripts]
 adaptive-synth-eval = "adaptive_synth_eval.cli:entrypoint"
 ase = "adaptive_synth_eval.cli:entrypoint"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]

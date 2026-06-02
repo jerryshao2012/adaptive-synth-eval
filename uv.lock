@@ -7,6 +7,7 @@ name = "adaptive-synth-eval"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "azure-identity" },
     { name = "httpx" },
     { name = "jsonpatch" },
@@ -14,6 +15,7 @@ dependencies = [
     { name = "langchain-anthropic" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
+    { name = "openai" },
     { name = "playwright" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
@@ -27,6 +29,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=0.40.0" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jsonpatch", specifier = ">=1.33" },
@@ -34,6 +37,7 @@ requires-dist = [
     { name = "langchain-anthropic", specifier = ">=0.3.0" },
     { name = "langchain-ollama", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.3.0" },
+    { name = "openai", specifier = ">=1.0.0" },
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.47" },
     { name = "pydantic", specifier = ">=2.0.0" },

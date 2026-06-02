@@ -184,19 +184,19 @@ To make these settings permanent:
 
 ## Quick Start
 
-### 1. Validate a Contract
+### 1. Validate a Unified Contract
 
 ```bash
-uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
+uv run ase validate-contract contracts/examples/mock_unified_quickstart.yaml
 ```
 
-### 2. Run a Dry-Run Simulation
+### 2. Run a Dry-Run Unified Simulation
 
 Test your contract without making real API calls:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/chatbot_test_contract.yaml \
+  --contract contracts/examples/mock_unified_quickstart.yaml \
   --dry-run
 ```
 
@@ -206,7 +206,7 @@ Export conversations in a readable format with Persona/Bot labels:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/chatbot_test_contract.yaml \
+  --contract contracts/examples/mock_unified_quickstart.yaml \
   --dry-run \
   --output-conversations
 ```
@@ -219,14 +219,15 @@ Stream conversations live in your terminal:
 
 ```bash
 uv run ase run \
-  --contract contracts/examples/chatbot_test_contract.yaml \
+  --contract contracts/examples/mock_unified_quickstart.yaml \
+  --dry-run \
   --realtime-chat
 ```
 
 ### 5. Summarize Previous Runs
 
 ```bash
-uv run ase summarize --run-id chatbot_test_run
+uv run ase summarize --run-id unified_run_12345
 ```
 
 Outputs are written under `outputs/runs/<run_id>/`.
@@ -644,13 +645,14 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 
 Comprehensive guides are available in the [`docs/`](./docs) directory:
 
-- [**Contract Specification**](./docs/contracts.md) - Detailed contract schema and configuration options
+- [**Unified Evaluation Guide**](./docs/unified_evaluation.md) - Interleaving synthetic & adversarial runs
+- [**Adversarial Red-Teaming Guide**](./docs/adversarial_evaluation.md) - Red-teaming attack models and judges
+- [**Contract Specification**](./docs/contracts.md) - Detailed contract schema, configuration options, and examples
 - [**CLI Usage Guide**](./docs/cli_usage.md) - Complete CLI reference and examples
 - [**Persona Memory System**](./docs/persona_memory.md) - How persona memory works and persists across runs
 - [**LLM User Simulation**](./docs/user_simulation_llm.md) - Setting up and configuring LLM providers
 - [**Failure Injection**](./docs/failure_injection.md) - Configuring ambiguity, typos, frustration, and edge cases
 - [**Chat History Schema**](./docs/chat_history_schema.md) - Output format specifications
-- [**Adversarial Agent Review**](./docs/adversarial_agent_review.md) - Security and robustness testing
 - [**Team Handoff Guide**](./docs/team_handoff.md) - Onboarding and collaboration tips
 
 ## Testing

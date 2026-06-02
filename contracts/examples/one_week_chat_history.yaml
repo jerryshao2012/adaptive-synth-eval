@@ -65,8 +65,8 @@ scenario_catalog:
 traffic_orchestration:
   total_conversations: 5040
   conversation_turns:
-    min: 10
-    max: 30
+    min: 3
+    max: 8
   mix:
     - persona_id: P001
       scenario_id: S001

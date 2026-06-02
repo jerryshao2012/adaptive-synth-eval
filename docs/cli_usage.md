@@ -61,6 +61,14 @@ This generates a `conversations.txt` file in the output directory with each conv
 - Alternating "Persona (Turn N):" and "Bot (Turn N):" messages
 - Error indicators if any occurred
 
+### Unified-Only Options (Unified Contracts Only)
+The following options are valid only when running with a unified contract. If passed with a synthetic-only contract, the CLI will return a `ContractError` (exit code 2):
+- `--scenario <id>`: Filter the run to only a specific synthetic scenario ID.
+- `--adversarial-scenario <id>`: Filter the run to only a specific adversarial scenario ID.
+- `--max-concurrency <n>`: Override the `eval_plan.max_concurrency` config for this run.
+- `--run-id <id>`: Explicitly override the output run ID.
+
+
 See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
 
 Stream Persona/Bot chat to the console in real time:

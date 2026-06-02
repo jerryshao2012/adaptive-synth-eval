@@ -170,16 +170,19 @@ class GeneratedTurn:
 
 class UserSimulator:
     def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None,
-                 memory_file: Path | None = None):
+                 memory_file: Path | None = None, llm_client: Any | None = None):
         self.persona = persona
         self.scenario = scenario
         self.turn_count = turn_count
         self.rng = random.Random(seed)
         self.history: list[dict[str, str]] = []
         self.planned_failure_modes = scenario.failure_injection.planned_modes()
-        # Enable LLM client if a provider is configured in environment variables
-        llm_client = LLMClient(enabled=False)  # Check if provider is available
-        self.llm_client = LLMClient(enabled=llm_client.model_provider is not None)
+        if llm_client is not None:
+            self.llm_client = llm_client
+        else:
+            # Enable LLM client if a provider is configured in environment variables
+            _llm_client = LLMClient(enabled=False)  # Check if provider is available
+            self.llm_client = LLMClient(enabled=_llm_client.model_provider is not None)
         self.memory_file = memory_file
         self.memory = None
 
