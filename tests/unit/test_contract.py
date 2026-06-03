@@ -184,3 +184,49 @@ def test_contract_to_dict_serializes_browser_chatbot_config(tmp_path):
     serialized = contract_to_dict(contract)
 
     assert serialized["target"]["browser"]["url"] == "https://chat.example.com"
+
+
+def test_load_contract_parses_agentcore_target_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["target"] = {
+        "enabled": True,
+        "mode": "agentcore",
+        "agentcore": {
+            "region": "us-east-1",
+            "agent_runtime_arn": "arn:aws:bedrock-agentcore:us-east-1:123:runtime/r1",
+            "qualifier": "DEFAULT",
+            "payload_prompt_key": "prompt",
+            "runtime_session_id_prefix": "ase_tfsa_",
+        },
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+
+    contract = load_contract(path)
+
+    assert contract.target.mode == "agentcore"
+    assert contract.target.agentcore is not None
+    assert contract.target.agentcore.region == "us-east-1"
+    assert contract.target.agentcore.agent_runtime_arn.endswith("runtime/r1")
+
+
+def test_contract_to_dict_serializes_agentcore_target_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["target"] = {
+        "enabled": True,
+        "mode": "agentcore",
+        "agentcore": {
+            "region": "us-east-1",
+            "agent_runtime_arn": "arn:aws:bedrock-agentcore:us-east-1:123:runtime/r1",
+            "payload_prompt_key": "prompt",
+            "runtime_session_id_prefix": "ase_tfsa_",
+        },
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+
+    serialized = contract_to_dict(contract)
+
+    assert serialized["target"]["agentcore"]["region"] == "us-east-1"
+    assert serialized["target"]["agentcore"]["runtime_session_id_prefix"] == "ase_tfsa_"

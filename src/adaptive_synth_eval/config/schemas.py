@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -27,6 +28,15 @@ class BrowserChatbot:
 
 
 @dataclass(frozen=True)
+class AgentCoreTarget:
+    region: str = "us-east-1"
+    agent_runtime_arn: str | None = None
+    qualifier: str | None = None
+    payload_prompt_key: str = "prompt"
+    runtime_session_id_prefix: str = "ase_"
+
+
+@dataclass(frozen=True)
 class TargetChatbot:
     enabled: bool = True
     endpoint: str | None = None
@@ -41,6 +51,7 @@ class TargetChatbot:
     retry_on_timeout: bool = True
     retry_on_http_5xx: bool = False
     browser: BrowserChatbot | None = None
+    agentcore: AgentCoreTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -87,7 +98,7 @@ class FailureInjection:
     @classmethod
     def from_dict(cls, payload: dict[str, Any] | None) -> "FailureInjection":
         payload = payload or {}
-        allowed = cls.__dataclass_fields__.keys()
+        allowed = {f.name for f in dataclasses.fields(cls)}
         return cls(**{key: float(payload.get(key, 0.0)) for key in allowed})
 
     def planned_modes(self) -> list[str]:

@@ -31,12 +31,14 @@ llm:
 
 target:
   enabled: true
-  endpoint: "${CHATBOT_ENDPOINT:-https://api.aws.example.com/v1/tfsa-chat}"
+  mode: agentcore
   timeout_seconds: 60.0
-  auth:
-    type: api_key
-    env_var: TFSA_CHATBOT_API_KEY
-    header_name: x-api-key
+  agentcore:
+    region: "${AWS_REGION:-us-east-1}"
+    agent_runtime_arn: "${TFSA_AGENTCORE_RUNTIME_ARN}"
+    qualifier: "${TFSA_AGENTCORE_QUALIFIER:-DEFAULT}"
+    payload_prompt_key: prompt
+    runtime_session_id_prefix: ase_tfsa_
 
 time_window:
   start_day: "2026-06-01"

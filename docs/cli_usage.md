@@ -159,6 +159,13 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
+
+aws configure
+aws sts get-caller-identity
+$env:AWS_CA_BUNDLE="path\to\cert.pem"
+uv run --no-sync ase run --contract .\contracts\examples\tfsa_aws_unified_evaluation.yaml --realtime-chat
+uv run --no-sync ase run --contract .\contracts\examples\tfsa_aws_unified_evaluation.yaml --realtime-chat --persona DEMO_P1
+uv run --no-sync ase run --contract .\contracts\examples\tfsa_aws_unified_evaluation.yaml --realtime-chat --persona DEMO_P2
 ```
 
 ## Corporate Environment Setup

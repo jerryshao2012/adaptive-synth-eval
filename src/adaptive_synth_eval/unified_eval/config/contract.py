@@ -273,7 +273,7 @@ def _parse_eval_plan(payload: dict[str, Any], warnings: list[str]) -> EvalPlan:
     turns = ConversationTurns(min=int(turns_payload["min"]), max=int(turns_payload["max"]))
     entries = [_parse_entry(item, warnings) for item in payload["entries"]]
     raw_total = payload.get("total_conversations")
-    total_conversations = int(raw_total) if raw_total is not None else None
+    total_conversations = int(raw_total) if raw_total is not None and isinstance(raw_total, (int, float, str)) else None
     return EvalPlan(
         total_conversations=total_conversations,
         conversation_turns=turns,
@@ -294,7 +294,7 @@ def _parse_entry(payload: dict[str, Any], warnings: list[str]) -> EvalPlanEntry:
 
     if isinstance(schedule_payload, dict):
         schedule = _parse_schedule(schedule_payload)
-    elif legacy_ratio is not None:
+    elif legacy_ratio is not None and isinstance(legacy_ratio, (int, float, str)):
         # Backwards-compat: old `synth_to_adversarial_ratio` becomes Bernoulli schedule.
         ratio = float(legacy_ratio)
         if not 0.0 <= ratio <= 1.0:
@@ -379,12 +379,14 @@ def _target_to_dict(target) -> dict[str, Any]:
     out = target.__dict__.copy()
     if target.browser is not None:
         out["browser"] = target.browser.__dict__
+    if target.agentcore is not None:
+        out["agentcore"] = target.agentcore.__dict__
     return out
 
 
 # ----- env var resolution (ported from ARE config, supports ${VAR} and ${VAR:-default}) -----
 
-_ENV_PATTERN = re.compile(r"\$\{([^}]+)\}")
+_ENV_PATTERN = re.compile(r"\$\{([^}]+)}")
 
 
 def _resolve_env_vars(obj: Any) -> Any:

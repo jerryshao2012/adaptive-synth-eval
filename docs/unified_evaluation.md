@@ -14,6 +14,15 @@ A unified contract defines:
 - **eval_plan**: Defines how many conversations to run, the turn limits, and which persona/scenario pairs to execute.
 - **scoring**: Weights for synthetic quality scoring and the failure threshold for adversarial turns.
 
+## Target Modes In Unified Runs
+
+Unified evaluation supports the same target surface used by synth mode:
+- `mode: api` (default): calls an HTTP endpoint.
+- `mode: browser`: drives a web chat UI through Playwright.
+- `mode: agentcore`: invokes an AWS Bedrock AgentCore runtime through `boto3` (`invoke_agent_runtime`).
+
+When using AgentCore, configure `target.agentcore.region` and `target.agentcore.agent_runtime_arn`.
+
 ## Schedule Modes
 
 Each entry in the `eval_plan` can configure a `schedule` to control how synthetic (synth) and adversarial (probe) turns are interleaved:

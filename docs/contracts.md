@@ -82,6 +82,37 @@ Browser mode uses the following fields:
 
 Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max_concurrency` is higher, because a single browser chat page cannot safely process concurrent turns.
 
+## AWS AgentCore Target Mode
+
+When your chatbot is deployed to AWS Bedrock AgentCore runtime, configure the target in `agentcore` mode.
+
+```yaml
+target:
+  enabled: true
+  mode: agentcore
+  timeout_seconds: 60
+  agentcore:
+    region: "${AWS_REGION:-us-east-1}"
+    agent_runtime_arn: "${TFSA_AGENTCORE_RUNTIME_ARN}"
+    qualifier: "${TFSA_AGENTCORE_QUALIFIER:-DEFAULT}"
+    payload_prompt_key: prompt
+    runtime_session_id_prefix: ase_
+```
+
+AgentCore mode uses the following fields:
+
+- `region`: AWS region where the runtime exists.
+- `agent_runtime_arn`: full AgentCore runtime ARN.
+- `qualifier`: optional endpoint qualifier (for example `DEFAULT`).
+- `payload_prompt_key`: payload key used to pass user text (defaults to `prompt`).
+- `runtime_session_id_prefix`: prefix used to derive stable 33+ character runtime session IDs from ASE conversation/session IDs.
+
+Authentication for AgentCore mode comes from the active AWS credentials/profile used by `boto3`.
+```bash
+aws configure
+aws sts get-caller-identity
+```
+
 ## Unified Contracts
 
 Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red-teaming turns. A unified contract uses the `suite` block instead of `simulation_suite`, and requires the `eval_plan` block. To define adversarial scenarios, you can either configure them under the main `scenario_catalog` block alongside synthetic parameters, or use a separate optional `adversarial_scenario_catalog` block. For details on unified contract structures, see [Unified Evaluation Guide](unified_evaluation.md).
@@ -120,7 +151,7 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
 - **Purpose**: A unified evaluation contract targeting a Tax-Free Savings Account (TFSA) chatbot deployed on AWS.
 - **Run Limit**: 12 conversations, 3-6 turns each.
 - **Key Features**:
-  - AWS-deployed endpoint protected with API Key (`type: api_key`, `header_name: x-api-key`).
+  - AWS Bedrock AgentCore runtime target (`mode: agentcore`) with configurable runtime ARN and qualifier.
   - TFSA customer personas: Novice saver, Experienced investor, Self-employed contractor.
   - Scenarios: Eligibility & limits, Withdrawals, PII Leak (protecting SIN), Persona Hijack (certified advisor boundaries), Toxicity, and Prompt injection.
 - **Validation**:

@@ -3,11 +3,12 @@ from unittest.mock import patch, Mock
 
 import requests
 
+from adaptive_synth_eval.clients.agentcore_chatbot import AgentCoreChatbotClient
 from adaptive_synth_eval.clients.browser_chatbot import BrowserChatbotClient
 from adaptive_synth_eval.clients.chatbot import ChatbotClient, ChatbotResponse, extract_bot_text
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.retry_utils import is_transient_error, retry_on_transient
-from adaptive_synth_eval.config.schemas import BrowserChatbot, TargetChatbot
+from adaptive_synth_eval.config.schemas import AgentCoreTarget, BrowserChatbot, TargetChatbot
 
 
 def test_chatbot_response_extracts_known_text_fields():
@@ -258,6 +259,73 @@ def test_create_chatbot_client_uses_browser_client_for_browser_mode():
 
     assert isinstance(client, BrowserChatbotClient)
     assert client.browser_config.browser_type == "edge"
+
+
+def test_create_chatbot_client_uses_agentcore_client_for_agentcore_mode():
+    config = TargetChatbot(
+        enabled=True,
+        mode="agentcore",
+        agentcore=AgentCoreTarget(
+            region="us-east-1",
+            agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/r1",
+            qualifier="DEFAULT",
+            payload_prompt_key="prompt",
+            runtime_session_id_prefix="ase_tfsa_",
+        ),
+    )
+
+    client = create_chatbot_client(config)
+
+    assert isinstance(client, AgentCoreChatbotClient)
+    assert client.region == "us-east-1"
+
+
+def test_agentcore_client_send_success_parses_response_payload():
+    mock_stream = Mock()
+    mock_stream.read.return_value = b'{"response":"TFSA limit is $7,000 for 2026"}'
+
+    mock_agentcore_client = Mock()
+    mock_agentcore_client.invoke_agent_runtime.return_value = {
+        "response": mock_stream,
+        "ResponseMetadata": {"HTTPStatusCode": 200},
+    }
+
+    client = AgentCoreChatbotClient(
+        enabled=True,
+        region="us-east-1",
+        agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/r1",
+        payload_prompt_key="prompt",
+        runtime_session_id_prefix="ase_tfsa_",
+        retry_max_retries=0,
+    )
+    client._client = mock_agentcore_client
+
+    response = client.send(
+        conversation_id="conv_abc",
+        session_id="sess_short",
+        turn_id=1,
+        user_message="What is TFSA limit for 2026?",
+    )
+
+    assert response.status_code == 200
+    assert "TFSA limit" in response.bot_response
+    invoke_kwargs = mock_agentcore_client.invoke_agent_runtime.call_args.kwargs
+    assert invoke_kwargs["agentRuntimeArn"].startswith("arn:aws:bedrock-agentcore")
+    assert len(invoke_kwargs["runtimeSessionId"]) >= 33
+
+
+def test_agentcore_client_returns_error_when_runtime_arn_missing():
+    client = AgentCoreChatbotClient(enabled=True, agent_runtime_arn=None)
+
+    response = client.send(
+        conversation_id="conv_abc",
+        session_id="sess_short",
+        turn_id=1,
+        user_message="Hello",
+    )
+
+    assert response.status_code == 0
+    assert response.error == "AgentCore runtime ARN is not configured"
 
 
 # Retry Utils Tests Merged

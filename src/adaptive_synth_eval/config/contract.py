@@ -11,6 +11,7 @@ from typing import Any, cast
 import yaml
 
 from adaptive_synth_eval.config.schemas import (
+    AgentCoreTarget,
     BrowserChatbot,
     BurstPattern,
     ConversationTurns,
@@ -87,6 +88,8 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
     target_data = contract.target.__dict__.copy()
     if contract.target.browser is not None:
         target_data["browser"] = contract.target.browser.__dict__
+    if contract.target.agentcore is not None:
+        target_data["agentcore"] = contract.target.agentcore.__dict__
     return {
         "simulation_suite": contract.simulation_suite.__dict__,
         "target": target_data,
@@ -121,14 +124,14 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
 
 def _resolve_env_vars(value: str) -> str:
     """Resolve environment variable references in a string.
-    
+
     Supports ${VAR_NAME} syntax with optional default values:
     - ${VAR_NAME} - replaced with env var value or empty string if not set
     - ${VAR_NAME:-default} - replaced with env var value or 'default' if not set
-    
+
     Args:
         value: String potentially containing ${VAR} references
-        
+
     Returns:
         String with environment variables resolved
     """
@@ -149,10 +152,10 @@ def _resolve_env_vars(value: str) -> str:
 
 def _resolve_env_vars_in_dict(obj: Any) -> Any:
     """Recursively resolve environment variables in a dictionary structure.
-    
+
     Args:
         obj: Dictionary, list, or primitive value
-        
+
     Returns:
         Same structure with all string values having env vars resolved
     """
@@ -201,9 +204,11 @@ def _parse_persona(payload: dict[str, Any]) -> Persona:
 def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:
     browser_payload = payload.get("browser")
     browser = BrowserChatbot(**browser_payload) if isinstance(browser_payload, dict) else None
-    field_names = {f.name for f in fields(TargetChatbot)} - {"browser"}
+    agentcore_payload = payload.get("agentcore")
+    agentcore = AgentCoreTarget(**agentcore_payload) if isinstance(agentcore_payload, dict) else None
+    field_names = {f.name for f in fields(TargetChatbot)} - {"browser", "agentcore"}
     values = {key: payload.get(key) for key in field_names if key in payload}
-    return TargetChatbot(**values, browser=browser)
+    return TargetChatbot(**values, browser=browser, agentcore=agentcore)
 
 
 def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
