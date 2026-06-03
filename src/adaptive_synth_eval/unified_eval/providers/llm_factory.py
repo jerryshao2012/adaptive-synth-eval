@@ -113,7 +113,7 @@ def build_llm(
         model = spec.model or "anthropic.claude-haiku-4-5-20251001-v1:0"
         region = spec.bedrock_region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         call_fn = make_bedrock_backend(model=model, region=region, max_tokens=spec.max_tokens)
-        # No ASE-side equivalent of Bedrock today; fall back to mock for synth.
+        # No ASE-side equivalent of native Bedrock today; fall back to mock for synth.
         synth_chat = _make_mock_synth_chat()
 
     elif provider == "ollama":
@@ -195,6 +195,7 @@ def _make_langchain_synth_chat(
         azure_endpoint: str | None = None,
         azure_api_version: str | None = None,
         ollama_base_url: str | None = None,
+        openai_base_url: str | None = None,
 ) -> SynthChatFn:
     """Lazily build a LangChain chat model and adapt .invoke() to a SynthChatFn."""
     model_ref: dict[str, Any] = {"model": None}
@@ -211,10 +212,14 @@ def _make_langchain_synth_chat(
             )
         elif provider_key == "openai":
             from langchain_openai import ChatOpenAI
-            model_ref["model"] = ChatOpenAI(
-                model=model, temperature=temperature,
-                api_key=SecretStr(api_key or ""),
-            )
+            kwargs = {
+                "model": model,
+                "temperature": temperature,
+                "api_key": SecretStr(api_key or ""),
+            }
+            if openai_base_url:
+                kwargs["base_url"] = openai_base_url
+            model_ref["model"] = ChatOpenAI(**kwargs)
         elif provider_key == "azure_openai":
             from langchain_openai import AzureChatOpenAI
             model_ref["model"] = AzureChatOpenAI(

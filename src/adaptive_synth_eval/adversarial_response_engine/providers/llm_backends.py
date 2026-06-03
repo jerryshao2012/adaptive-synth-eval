@@ -275,7 +275,7 @@ def make_bedrock_backend(
         max_tokens: int = 1024,
 ) -> LLMCallFn:
     """
-    AWS Bedrock backend using Claude via boto3.
+    AWS Bedrock backend using Claude via boto3 (native Bedrock API).
 
     Credentials are resolved by boto3 in the standard order:
     env vars (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), ~/.aws/credentials, or IAM role.
@@ -369,7 +369,7 @@ def make_azure_openai_backend(
 
 
 def make_backend_from_env() -> LLMCallFn:
-    """Create a backend from LLM_PROVIDER env var (claude, openai, bedrock, azure-openai, or mock)."""
+    """Create a backend from LLM_PROVIDER env var (claude, openai, bedrock, bedrock-openai, azure-openai, or mock)."""
     provider = os.environ.get("LLM_PROVIDER", "claude").lower()
     model = os.environ.get("LLM_MODEL", "")
 
@@ -378,6 +378,7 @@ def make_backend_from_env() -> LLMCallFn:
     elif provider == "openai":
         return make_openai_backend(model=model or "gpt-4o-mini")
     elif provider == "bedrock":
+        # Use native boto3 Bedrock API
         return make_bedrock_backend(model=model or "anthropic.claude-haiku-4-5-20251001-v1:0")
     elif provider == "azure-openai":
         deployment = model or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
