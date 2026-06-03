@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from adaptive_synth_eval.clients.agentcore_chatbot import AgentCoreChatbotClient
 from adaptive_synth_eval.clients.browser_chatbot import BrowserChatbotClient
 from adaptive_synth_eval.clients.chatbot import ChatbotClient
 from adaptive_synth_eval.config.schemas import TargetChatbot
@@ -12,6 +13,18 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
         if config.browser is None:
             raise ValueError("target.browser is required when target.mode is 'browser'")
         return BrowserChatbotClient(browser_config=config.browser, enabled=enabled)
+
+    if config.mode == "agentcore":
+        if config.agentcore is None:
+            raise ValueError("target.agentcore is required when target.mode is 'agentcore'")
+        return AgentCoreChatbotClient(
+            enabled=enabled,
+            region=config.agentcore.region,
+            agent_runtime_arn=config.agentcore.agent_runtime_arn,
+            qualifier=config.agentcore.qualifier,
+            payload_prompt_key=config.agentcore.payload_prompt_key,
+            runtime_session_id_prefix=config.agentcore.runtime_session_id_prefix,
+        )
 
     return ChatbotClient(
         endpoint=config.endpoint,
