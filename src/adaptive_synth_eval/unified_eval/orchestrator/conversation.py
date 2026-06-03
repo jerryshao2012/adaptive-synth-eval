@@ -25,6 +25,7 @@ from adaptive_synth_eval.adversarial_response_engine.engine.config import Policy
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.config.schemas import Persona, Scenario
+from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.unified_eval.config.schemas import (
@@ -105,6 +106,7 @@ async def run_conversation(
         attack_memory_lock: asyncio.Lock,
         turn_count: int,
         realtime_chat: bool = False,
+        realtime_controller: RealtimeChatController | None = None,
         meter=None,  # BudgetMeter | None
 ) -> ConversationResult:
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
@@ -195,9 +197,23 @@ async def run_conversation(
     for turn_id in range(1, turn_count + 1):
         mode = planned_modes[turn_id - 1]
 
+        # ----- realtime controller checks -----
+        if realtime_controller and realtime_controller.stop_requested:
+            break
+        if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
+            break
+
+        # Get per-persona behavior override from controller (synth turns only).
+        behavior_override = (
+            realtime_controller.get_behavior_for_persona(persona.persona_id)
+            if realtime_controller else None
+        )
+
         # ----- generate user_input -----
         if mode == "synth":
-            last_synth_turn = await simulator.generate_turn_async(turn_id, previous_bot)
+            last_synth_turn = await simulator.generate_turn_async(
+                turn_id, previous_bot, behavior_override=behavior_override
+            )
             user_input = last_synth_turn.user_message
             strategy_meta: dict[str, Any] = {
                 "mode": "synth",
@@ -214,16 +230,20 @@ async def run_conversation(
 
         # ----- stream user turn if realtime -----
         if realtime_chat:
-            await asyncio.to_thread(
-                display_user_turn,
-                conversation_id=conversation_id,
-                persona_id=persona.persona_id,
-                scenario_id=synth_scenario.scenario_id,
-                turn_id=turn_id,
-                user_message=user_input,
-                mode=mode,
-                adv_scenario_type=adv_scenario.scenario_type,
-            )
+            should_render = True
+            if realtime_controller and realtime_controller.active_persona_id:
+                should_render = persona.persona_id == realtime_controller.active_persona_id
+            if should_render:
+                await asyncio.to_thread(
+                    display_user_turn,
+                    conversation_id=conversation_id,
+                    persona_id=persona.persona_id,
+                    scenario_id=synth_scenario.scenario_id,
+                    turn_id=turn_id,
+                    user_message=user_input,
+                    mode=mode,
+                    adv_scenario_type=adv_scenario.scenario_type,
+                )
 
         # ----- send to target chatbot -----
         send_start = time.perf_counter()
@@ -246,7 +266,8 @@ async def run_conversation(
         previous_bot = response.bot_response
 
         if realtime_chat:
-            await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
+            if should_render:
+                await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
 
         # ----- score -----
         if mode == "synth":
@@ -388,6 +409,10 @@ async def run_conversation(
         if policy_action in ("start_new_session", "stop_experiment"):
             break
 
+        # ----- realtime: turn delay -----
+        if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_for_turn_delay):
+            break
+
     # ----- end-of-conversation: persona memory + shared attack memory -----
     await asyncio.to_thread(simulator.save_conversation_summary_to_long_term_recall)
     if attack_memory is not None and session.turns:
@@ -397,6 +422,9 @@ async def run_conversation(
     drop = getattr(target, "drop_conversation", None)
     if callable(drop):
         drop(conversation_id)
+
+    if realtime_controller:
+        realtime_controller.notify_conversation_complete(persona.persona_id)
 
     conv_row = {
         "conversation_id": conversation_id,

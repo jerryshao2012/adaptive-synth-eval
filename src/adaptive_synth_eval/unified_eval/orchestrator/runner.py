@@ -12,6 +12,8 @@ from typing import Any
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
+from adaptive_synth_eval.config.contract import ContractError
+from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.unified_eval.config.schemas import UnifiedContract
 from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import make_conversation_rng
@@ -36,6 +38,7 @@ def run_unified(
         run_id_override: str | None = None,
         realtime_chat: bool = False,
         output_conversations: bool = False,
+        interactive_realtime_controls: bool = False,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
     return asyncio.run(run_unified_async(
@@ -48,6 +51,7 @@ def run_unified(
         run_id_override=run_id_override,
         realtime_chat=realtime_chat,
         output_conversations=output_conversations,
+        interactive_realtime_controls=interactive_realtime_controls,
     ))
 
 
@@ -62,7 +66,9 @@ async def run_unified_async(
         run_id_override: str | None = None,
         realtime_chat: bool = False,
         output_conversations: bool = False,
+        interactive_realtime_controls: bool = False,
 ) -> dict[str, Any]:
+    persona_filter = _resolve_persona_filter(contract, persona_filter)
     run_id = run_id_override or contract.output.run_id or f"unified_run_{int(time.time())}"
     writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
 
@@ -132,6 +138,25 @@ async def run_unified_async(
     )
     semaphore = asyncio.Semaphore(max(1, effective_max_concurrency))
 
+    # Build interactive realtime controller if requested.
+    realtime_controller: RealtimeChatController | None = None
+    if realtime_chat and interactive_realtime_controls:
+        personas_dict = contract.persona_by_id()
+        single_persona_mode = (len(personas_dict) <= 1) or (persona_filter is not None)
+        persona_total_convos: dict[str, int] = {}
+        for p in plan:
+            persona_total_convos[p["persona_id"]] = persona_total_convos.get(p["persona_id"], 0) + 1
+        realtime_controller = RealtimeChatController(
+            personas=personas_dict,
+            single_persona_mode=single_persona_mode,
+            persona_total_convos=persona_total_convos,
+        )
+        if persona_filter:
+            realtime_controller.set_active_persona(persona_filter)
+        elif contract.persona_pool:
+            realtime_controller.set_active_persona(contract.persona_pool[0].persona_id)
+        realtime_controller.start()
+
     async def _one(planned):
         async with semaphore:
             persona_id = planned["persona_id"]
@@ -151,6 +176,7 @@ async def run_unified_async(
                     attack_memory_lock=attack_memory_lock,
                     turn_count=planned["turn_count"],
                     realtime_chat=realtime_chat,
+                    realtime_controller=realtime_controller,
                     meter=meter,
                 )
 
@@ -159,6 +185,9 @@ async def run_unified_async(
         if sequential:
             results: list[ConversationResult] = []
             for planned in plan:
+                if realtime_controller and realtime_controller.stop_requested:
+                    budget_stopped = True
+                    break
                 if not token_budget.can_continue(contract.run.reserve_tokens):
                     budget_stopped = True
                     break
@@ -168,6 +197,8 @@ async def run_unified_async(
             # Concurrent mode: budget can't short-circuit mid-batch, but post-hoc flag it.
             budget_stopped = not token_budget.can_continue(contract.run.reserve_tokens)
     finally:
+        if realtime_controller:
+            realtime_controller.stop()
         close_async = getattr(target, "close_async", None)
         close_sync = getattr(target, "close", None)
         if close_async is not None:
@@ -193,6 +224,24 @@ async def run_unified_async(
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+def _resolve_persona_filter(
+        contract: UnifiedContract,
+        persona_filter: str | None,
+) -> str | None:
+    """Resolve persona_filter to canonical persona_id (case-insensitive)."""
+    if not persona_filter:
+        return None
+
+    personas_by_lower = {p.persona_id.lower(): p.persona_id for p in contract.persona_pool}
+    matched = personas_by_lower.get(persona_filter.lower())
+    if matched is None:
+        raise ContractError(
+            f"Specified persona '{persona_filter}' not found in contract's persona pool: "
+            f"{[p.persona_id for p in contract.persona_pool]}"
+        )
+    return matched
+
 
 def _lazy_weighted_plan(
         contract: UnifiedContract,

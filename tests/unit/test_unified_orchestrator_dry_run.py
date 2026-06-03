@@ -6,6 +6,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
@@ -52,6 +55,41 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
 
     # adversarial_sessions.jsonl exists
     assert (run_dir / "adversarial_sessions.jsonl").exists()
+
+
+def test_unified_persona_filter_is_case_insensitive(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = _with_output_dir(contract, tmp_path)
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="orchestrator_case_insensitive",
+        persona_filter="demo_p1",
+    )
+
+    assert summary["total_conversations"] > 0
+    run_dir = tmp_path / "runs" / "orchestrator_case_insensitive"
+    convo_rows = [
+        json.loads(line)
+        for line in (run_dir / "conversations.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert convo_rows
+    assert {row["persona_id"] for row in convo_rows} == {"DEMO_P1"}
+
+
+def test_unified_persona_filter_raises_for_unknown_persona(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = _with_output_dir(contract, tmp_path)
+
+    with pytest.raises(ContractError, match="Specified persona 'DOES_NOT_EXIST' not found"):
+        run_unified(
+            contract,
+            dry_run=True,
+            run_id_override="orchestrator_invalid_persona",
+            persona_filter="DOES_NOT_EXIST",
+        )
 
 
 def _with_output_dir(contract, base_dir: Path):

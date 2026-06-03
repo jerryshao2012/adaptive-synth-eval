@@ -95,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
                     persona_filter=args.persona,
                 )
             else:
+                interactive_controls = args.interactive_realtime_controls
+                if interactive_controls is None:
+                    interactive_controls = args.realtime_chat
                 summary = mode.run(
                     contract,
                     dry_run=args.dry_run,
@@ -105,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_id_override=args.run_id,
                     realtime_chat=args.realtime_chat,
                     output_conversations=args.output_conversations,
+                    interactive_realtime_controls=interactive_controls,
                 )
 
             logger.info("Run complete: %s", summary['run_id'])
