@@ -23,7 +23,7 @@ def test_cli_runs_dry_run_contract(tmp_path, capsys):
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -78,7 +78,7 @@ def test_cli_logs_elapsed_runtime_in_summary(tmp_path, monkeypatch, capsys):
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -158,7 +158,7 @@ def test_cli_runs_with_realtime_chat_option(tmp_path, capsys):
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -212,7 +212,7 @@ def test_cli_runs_with_interactive_realtime_controls_option(tmp_path, capsys):
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -275,7 +275,7 @@ def test_cli_realtime_chat_enables_interactive_controls_by_default(tmp_path, mon
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -336,7 +336,7 @@ def test_cli_can_disable_interactive_controls_with_no_flag(tmp_path, monkeypatch
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,
@@ -406,7 +406,7 @@ def test_cli_runs_with_persona_option(tmp_path, monkeypatch):
     "run_mode": "synthetic_chat_history_generation",
     "synthetic_flag": true
   },
-  "target_chatbot": {"enabled": false},
+  "target": {"enabled": false},
   "time_window": {
     "start_day": "2026-05-01",
     "num_synthetic_days": 1,

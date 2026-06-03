@@ -5,7 +5,7 @@ Contracts are JSON or YAML and are the source of truth for simulation behavior.
 Required sections:
 
 - `simulation_suite`
-- `target_chatbot`
+- `target`
 - `time_window`
 - `persona_pool`
 - `scenario_catalog`
@@ -23,10 +23,10 @@ Contract files support environment variable substitution using `${VAR_NAME}` syn
 - `${CHATBOT_ENDPOINT}` - replaced with the value of the `CHATBOT_ENDPOINT` environment variable
 - `${CHATBOT_ENDPOINT:-https://default.example.com}` - uses the env var if set, otherwise falls back to the default value
 
-This is particularly useful for the `target_chatbot.endpoint` field to avoid hardcoding endpoints:
+This is particularly useful for the `target.endpoint` field to avoid hardcoding endpoints:
 
 ```yaml
-target_chatbot:
+target:
   enabled: true
   endpoint: "${CHATBOT_ENDPOINT:-https://api.example.com/v1/chat}"
   retry_max_retries: 2
@@ -58,7 +58,7 @@ Retry fields are optional and control how API chatbot requests handle transient 
 The chatbot can also be driven through a generic browser UI instead of an HTTP API. This is useful when the target chatbot only exposes a web chat surface.
 
 ```yaml
-target_chatbot:
+target:
   enabled: true
   mode: browser
   browser:

@@ -4,7 +4,7 @@ simulation_suite:
   run_mode: synthetic_chat_history_generation
   synthetic_flag: true
 
-target_chatbot:
+target:
   enabled: true
   mode: browser
   endpoint: null

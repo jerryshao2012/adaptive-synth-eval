@@ -132,12 +132,12 @@ Persona updated
 Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
 ```
 
-To call a real chatbot endpoint, set `target_chatbot.enabled: true`, provide `target_chatbot.endpoint`, and set the configured auth environment variable.
+To call a real chatbot endpoint, set `target.enabled: true`, provide `target.endpoint`, and set the configured auth environment variable.
 
-To drive a chatbot through a browser UI instead, set `target_chatbot.mode: browser` and provide CSS selectors for the input, submit button, and bot responses:
+To drive a chatbot through a browser UI instead, set `target.mode: browser` and provide CSS selectors for the input, submit button, and bot responses:
 
 ```yaml
-target_chatbot:
+target:
   enabled: true
   mode: browser
   browser:

@@ -22,7 +22,7 @@ def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
                     "run_mode": "synthetic_chat_history_generation",
                     "synthetic_flag": True,
                 },
-                "target_chatbot": {"enabled": False},
+                "target": {"enabled": False},
                 "time_window": {
                     "start_day": "2026-05-01",
                     "num_synthetic_days": 1,
@@ -84,7 +84,7 @@ def test_effective_max_concurrency_is_one_for_browser_chatbot(tmp_path):
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {
+        "target": {
             "enabled": True,
             "mode": "browser",
             "browser": {
@@ -145,7 +145,7 @@ def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):
                     "run_mode": "synthetic_chat_history_generation",
                     "synthetic_flag": True,
                 },
-                "target_chatbot": {"enabled": False},
+                "target": {"enabled": False},
                 "time_window": {
                     "start_day": "2026-05-01",
                     "num_synthetic_days": 1,
@@ -201,7 +201,7 @@ def test_run_simulation_with_output_conversations(tmp_path):
                     "run_mode": "synthetic_chat_history_generation",
                     "synthetic_flag": True,
                 },
-                "target_chatbot": {"enabled": False},
+                "target": {"enabled": False},
                 "time_window": {
                     "start_day": "2026-05-01",
                     "num_synthetic_days": 1,
@@ -260,7 +260,7 @@ def test_run_simulation_realtime_chat_display_multi_persona(tmp_path, monkeypatc
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,
@@ -339,7 +339,7 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,
@@ -432,7 +432,7 @@ def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(tmp_
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {
+        "target": {
             "enabled": True,
             "endpoint": "http://chat.example.com",
         },
@@ -511,7 +511,7 @@ def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(tmp_p
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {
+        "target": {
             "enabled": True,
             "endpoint": "http://chat.example.com",
         },
@@ -594,7 +594,7 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,
@@ -666,7 +666,7 @@ def test_run_simulation_with_persona_filter(tmp_path):
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,
@@ -742,7 +742,7 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,
@@ -847,7 +847,7 @@ def test_realtime_controller_defaults_to_first_contract_persona_before_start(tmp
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 1,

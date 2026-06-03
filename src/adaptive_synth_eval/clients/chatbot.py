@@ -237,7 +237,6 @@ class ChatbotClient:
             else:
                 logger.warning(f"Auth credential not found in environment variable: {env_var_name}")
 
-
         # Unified payload: support legacy params and config-driven parameters
         payload: dict[str, Any] = {
             "conversation_id": conversation_id,

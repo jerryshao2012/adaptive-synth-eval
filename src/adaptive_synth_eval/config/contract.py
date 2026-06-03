@@ -43,7 +43,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
     warnings: list[str] = []
     required_top = [
         "simulation_suite",
-        "target_chatbot",
+        "target",
         "time_window",
         "persona_pool",
         "scenario_catalog",
@@ -54,7 +54,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
             raise ContractError(f"Missing required contract section: {key}")
 
     suite = SimulationSuite(**payload["simulation_suite"])
-    chatbot = _parse_target_chatbot(payload.get("target_chatbot", {}))
+    chatbot = _parse_target_chatbot(payload.get("target", {}))
     window_payload = payload["time_window"]
     window = TimeWindow(
         start_day=date.fromisoformat(str(window_payload["start_day"])),
@@ -73,7 +73,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
     output = OutputConfig(base_dir=base_dir, run_id=output_payload.get("run_id"))
     return SimulationContract(
         simulation_suite=suite,
-        target_chatbot=chatbot,
+        target=chatbot,
         time_window=window,
         persona_pool=personas,
         scenario_catalog=scenarios,
@@ -84,12 +84,12 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
 
 
 def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
-    target_chatbot = contract.target_chatbot.__dict__.copy()
-    if contract.target_chatbot.browser is not None:
-        target_chatbot["browser"] = contract.target_chatbot.browser.__dict__
+    target_data = contract.target.__dict__.copy()
+    if contract.target.browser is not None:
+        target_data["browser"] = contract.target.browser.__dict__
     return {
         "simulation_suite": contract.simulation_suite.__dict__,
-        "target_chatbot": target_chatbot,
+        "target": target_data,
         "time_window": {
             "start_day": contract.time_window.start_day.isoformat(),
             "num_synthetic_days": contract.time_window.num_synthetic_days,

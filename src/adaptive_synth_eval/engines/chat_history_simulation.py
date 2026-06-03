@@ -95,7 +95,7 @@ async def run_simulation_async(
         if not plan:
             logger.warning("No conversations planned for persona '%s' in this run.", matched_persona_id)
 
-    client = create_chatbot_client(contract.target_chatbot, dry_run=dry_run)
+    client = create_chatbot_client(contract.target, dry_run=dry_run)
 
     records: list[ChatHistoryRecord] = []
     conversation_rows = []
@@ -579,6 +579,6 @@ async def run_simulation_async(
 
 
 def _effective_max_concurrency(contract: SimulationContract) -> int:
-    if contract.target_chatbot.mode == "browser":
+    if contract.target.mode == "browser":
         return 1
     return max(1, int(getattr(contract.traffic, "max_concurrency", 5) or 5))

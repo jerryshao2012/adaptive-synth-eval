@@ -8,8 +8,9 @@ from adaptive_synth_eval.config.schemas import TargetChatbot
 def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
     enabled = config.enabled and not dry_run
     if config.mode == "browser":
+
         if config.browser is None:
-            raise ValueError("target_chatbot.browser is required when target_chatbot.mode is 'browser'")
+            raise ValueError("target.browser is required when target.mode is 'browser'")
         return BrowserChatbotClient(browser_config=config.browser, enabled=enabled)
 
     return ChatbotClient(

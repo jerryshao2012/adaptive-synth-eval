@@ -23,7 +23,7 @@ def test_output_conversations():
                 "run_mode": "synthetic_chat_history_generation",
                 "synthetic_flag": True,
             },
-            "target_chatbot": {"enabled": False},
+            "target": {"enabled": False},
             "time_window": {
                 "start_day": "2026-05-01",
                 "num_synthetic_days": 1,

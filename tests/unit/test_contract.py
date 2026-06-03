@@ -15,7 +15,7 @@ def _base_contract(tmp_path):
             "run_mode": "synthetic_chat_history_generation",
             "synthetic_flag": True,
         },
-        "target_chatbot": {"enabled": False},
+        "target": {"enabled": False},
         "time_window": {
             "start_day": "2026-05-01",
             "num_synthetic_days": 7,
@@ -87,7 +87,7 @@ def test_load_contract_rejects_invalid_turn_range(tmp_path):
 def test_load_contract_resolves_env_vars_in_endpoint(tmp_path):
     """Test that environment variables in contract are resolved."""
     payload = _base_contract(tmp_path)
-    payload["target_chatbot"] = {
+    payload["target"] = {
         "enabled": True,
         "endpoint": "${CHATBOT_ENDPOINT:-https://default.example.com}",
         "timeout_seconds": 30.0,
@@ -98,20 +98,20 @@ def test_load_contract_resolves_env_vars_in_endpoint(tmp_path):
     # Test with env var set
     with patch.dict(os.environ, {"CHATBOT_ENDPOINT": "http://custom-endpoint:8080"}):
         contract = load_contract(path)
-        assert contract.target_chatbot.endpoint == "http://custom-endpoint:8080"
+        assert contract.target.endpoint == "http://custom-endpoint:8080"
 
     # Test with env var not set (should use default)
     with patch.dict(os.environ, {}, clear=False):
         if "CHATBOT_ENDPOINT" in os.environ:
             del os.environ["CHATBOT_ENDPOINT"]
         contract = load_contract(path)
-        assert contract.target_chatbot.endpoint == "https://default.example.com"
+        assert contract.target.endpoint == "https://default.example.com"
 
 
 def test_load_contract_resolves_env_vars_without_default(tmp_path):
     """Test that environment variables without defaults resolve to empty string when not set."""
     payload = _base_contract(tmp_path)
-    payload["target_chatbot"] = {
+    payload["target"] = {
         "enabled": True,
         "endpoint": "${CUSTOM_ENDPOINT}",
         "timeout_seconds": 30.0,
@@ -122,19 +122,19 @@ def test_load_contract_resolves_env_vars_without_default(tmp_path):
     # Test with env var set
     with patch.dict(os.environ, {"CUSTOM_ENDPOINT": "http://my-endpoint"}):
         contract = load_contract(path)
-        assert contract.target_chatbot.endpoint == "http://my-endpoint"
+        assert contract.target.endpoint == "http://my-endpoint"
 
     # Test with env var not set (should be empty string)
     with patch.dict(os.environ, {}, clear=False):
         if "CUSTOM_ENDPOINT" in os.environ:
             del os.environ["CUSTOM_ENDPOINT"]
         contract = load_contract(path)
-        assert contract.target_chatbot.endpoint == ""
+        assert contract.target.endpoint == ""
 
 
 def test_load_contract_parses_browser_chatbot_config(tmp_path):
     payload = _base_contract(tmp_path)
-    payload["target_chatbot"] = {
+    payload["target"] = {
         "enabled": True,
         "mode": "browser",
         "browser": {
@@ -153,21 +153,21 @@ def test_load_contract_parses_browser_chatbot_config(tmp_path):
 
     contract = load_contract(path)
 
-    assert contract.target_chatbot.mode == "browser"
-    assert contract.target_chatbot.browser is not None
-    assert contract.target_chatbot.browser.browser_type == "edge"
-    assert contract.target_chatbot.browser.url == "https://chat.example.com"
-    assert contract.target_chatbot.browser.input_selector == "textarea"
-    assert contract.target_chatbot.browser.submit_selector == "button[type='submit']"
-    assert contract.target_chatbot.browser.response_selector == ".bot-message"
-    assert contract.target_chatbot.browser.ready_selector == ".chat-ready"
-    assert contract.target_chatbot.browser.response_timeout_seconds == 45.0
-    assert contract.target_chatbot.browser.headless is True
+    assert contract.target.mode == "browser"
+    assert contract.target.browser is not None
+    assert contract.target.browser.browser_type == "edge"
+    assert contract.target.browser.url == "https://chat.example.com"
+    assert contract.target.browser.input_selector == "textarea"
+    assert contract.target.browser.submit_selector == "button[type='submit']"
+    assert contract.target.browser.response_selector == ".bot-message"
+    assert contract.target.browser.ready_selector == ".chat-ready"
+    assert contract.target.browser.response_timeout_seconds == 45.0
+    assert contract.target.browser.headless is True
 
 
 def test_contract_to_dict_serializes_browser_chatbot_config(tmp_path):
     payload = _base_contract(tmp_path)
-    payload["target_chatbot"] = {
+    payload["target"] = {
         "enabled": True,
         "mode": "browser",
         "browser": {
@@ -183,4 +183,4 @@ def test_contract_to_dict_serializes_browser_chatbot_config(tmp_path):
 
     serialized = contract_to_dict(contract)
 
-    assert serialized["target_chatbot"]["browser"]["url"] == "https://chat.example.com"
+    assert serialized["target"]["browser"]["url"] == "https://chat.example.com"

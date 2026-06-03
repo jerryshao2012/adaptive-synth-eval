@@ -14,7 +14,7 @@ def test_cli_dry_run_end_to_end(tmp_path):
                     "run_mode": "synthetic_chat_history_generation",
                     "synthetic_flag": True,
                 },
-                "target_chatbot": {"enabled": False},
+                "target": {"enabled": False},
                 "time_window": {
                     "start_day": "2026-05-01",
                     "num_synthetic_days": 1,
@@ -152,7 +152,7 @@ def test_cli_rejects_unified_flags_on_synth_contract(tmp_path):
                     "run_mode": "synthetic_chat_history_generation",
                     "synthetic_flag": True,
                 },
-                "target_chatbot": {"enabled": False},
+                "target": {"enabled": False},
                 "time_window": {
                     "start_day": "2026-05-01",
                     "num_synthetic_days": 1,

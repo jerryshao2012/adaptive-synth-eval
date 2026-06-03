@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from adaptive_synth_eval.config.schemas import (
+    ConversationTurns,
+    OutputConfig,
     Persona,
     Scenario,
     TargetChatbot,
@@ -129,12 +130,6 @@ class EvalPlanEntry:
 
 
 @dataclass(frozen=True)
-class ConversationTurns:
-    min: int
-    max: int
-
-
-@dataclass(frozen=True)
 class EvalPlan:
     # Optional: omit to let the token budget drive how many conversations run.
     # When None, the runner behaves as if run.until_budget_exhausted=True.
@@ -150,12 +145,6 @@ class ScoringConfig:
         "groundedness": 1.0, "relevance": 1.0, "safety": 1.0, "clarification": 1.0
     })
     adversarial_failure_threshold: int = 3
-
-
-@dataclass(frozen=True)
-class OutputConfig:
-    base_dir: Path
-    run_id: str | None = None
 
 
 @dataclass(frozen=True)

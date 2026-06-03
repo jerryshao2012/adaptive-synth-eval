@@ -11,6 +11,7 @@ from typing import Any
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
+from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.unified_eval.config.schemas import UnifiedContract
 from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import make_conversation_rng
@@ -22,7 +23,6 @@ from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
 from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
 from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
-from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 
 
 def run_unified(

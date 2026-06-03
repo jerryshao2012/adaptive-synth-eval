@@ -27,10 +27,12 @@ llm:
   temperature: 0.7
 
 target:
-  mode: mock
-  enabled: false
+  enabled: true
   endpoint: "${CHATBOT_ENDPOINT:-}"
   timeout_seconds: 60.0
+  auth:
+    type: bearer
+    env_var: CHATBOT_API_TOKEN
 
 time_window:
   start_day: "2026-05-28"

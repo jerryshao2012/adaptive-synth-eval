@@ -24,7 +24,7 @@ simulation_suite:
   run_mode: synthetic_chat_history_generation
   synthetic_flag: true
 
-target_chatbot:
+target:
   enabled: true
   endpoint: "${CHATBOT_ENDPOINT:-https://default.example.com}"
   auth:
@@ -76,10 +76,10 @@ output:
 
         # Verify the endpoint was resolved from environment variable
         print(f"✓ Contract loaded successfully")
-        print(f"✓ Endpoint from env var: {contract.target_chatbot.endpoint}")
+        print(f"✓ Endpoint from env var: {contract.target.endpoint}")
 
-        assert contract.target_chatbot.endpoint == "http://test-endpoint-from-env:9000", \
-            f"Expected 'http://test-endpoint-from-env:9000', got '{contract.target_chatbot.endpoint}'"
+        assert contract.target.endpoint == "http://test-endpoint-from-env:9000", \
+            f"Expected 'http://test-endpoint-from-env:9000', got '{contract.target.endpoint}'"
 
         print("✓ Environment variable resolution works correctly!")
 
@@ -87,10 +87,10 @@ output:
         del os.environ["CHATBOT_ENDPOINT"]
 
         contract2 = load_contract(contract_path)
-        print(f"✓ Endpoint with default fallback: {contract2.target_chatbot.endpoint}")
+        print(f"✓ Endpoint with default fallback: {contract2.target.endpoint}")
 
-        assert contract2.target_chatbot.endpoint == "https://default.example.com", \
-            f"Expected 'https://default.example.com', got '{contract2.target_chatbot.endpoint}'"
+        assert contract2.target.endpoint == "https://default.example.com", \
+            f"Expected 'https://default.example.com', got '{contract2.target.endpoint}'"
 
         print("✓ Default fallback works correctly!")
         print("\n✅ All tests passed!")

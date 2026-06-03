@@ -156,7 +156,7 @@ class OutputConfig:
 @dataclass(frozen=True)
 class SimulationContract:
     simulation_suite: SimulationSuite
-    target_chatbot: TargetChatbot
+    target: TargetChatbot
     time_window: TimeWindow
     persona_pool: list[Persona]
     scenario_catalog: list[Scenario]
