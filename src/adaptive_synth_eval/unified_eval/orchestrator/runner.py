@@ -181,6 +181,7 @@ async def run_unified_async(
                 )
 
     budget_stopped = False
+    start_time = time.time()
     try:
         if sequential:
             results: list[ConversationResult] = []
@@ -206,6 +207,8 @@ async def run_unified_async(
         elif callable(close_sync):
             await asyncio.to_thread(close_sync)
 
+    elapsed_seconds = round(time.time() - start_time, 2)
+
     summary = _persist_and_summarize(
         contract=contract,
         writer=writer,
@@ -217,6 +220,7 @@ async def run_unified_async(
         output_conversations=output_conversations,
         meter=meter,
         budget_stopped=budget_stopped,
+        elapsed_seconds=elapsed_seconds,
     )
     return summary
 
@@ -385,6 +389,7 @@ def _persist_and_summarize(
         output_conversations: bool = False,
         meter: BudgetMeter | None = None,
         budget_stopped: bool = False,
+        elapsed_seconds: float = 0.0,
 ) -> dict[str, Any]:
     conv_rows = [r.conversation_row for r in results]
     chat_history = [rec for r in results for rec in r.chat_history]
@@ -430,6 +435,42 @@ def _persist_and_summarize(
         meter.summary(stopped_due_to_budget=budget_stopped) if meter is not None else None
     )
 
+    # Calculate token usage statistics from meter (simulator tokens only)
+    simulator_prompt_tokens = 0
+    simulator_completion_tokens = 0
+    if meter is not None:
+        sim_metrics = meter.per_component.get("user_simulator", {})
+        simulator_prompt_tokens = int(sim_metrics.get("prompt_tokens", 0))
+        simulator_completion_tokens = int(sim_metrics.get("completion_tokens", 0))
+    simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
+
+    avg_prompt_tokens_convo = round(simulator_prompt_tokens / len(results), 2) if results else 0.0
+    avg_completion_tokens_convo = round(simulator_completion_tokens / len(results), 2) if results else 0.0
+    avg_total_tokens_convo = round(simulator_total_tokens / len(results), 2) if results else 0.0
+
+    tokens_stats = {
+        "simulator_prompt_tokens": simulator_prompt_tokens,
+        "simulator_completion_tokens": simulator_completion_tokens,
+        "simulator_total_tokens": simulator_total_tokens,
+        "avg_prompt_tokens_per_convo": avg_prompt_tokens_convo,
+        "avg_completion_tokens_per_convo": avg_completion_tokens_convo,
+        "avg_total_tokens_per_convo": avg_total_tokens_convo,
+    }
+
+    # Scale Projections
+    convo_count = len(results)
+    rate = convo_count / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    time_1k = round(1000 / rate, 2) if rate > 0 else 0.0
+    time_10k = round(10000 / rate, 2) if rate > 0 else 0.0
+    time_100k = round(100000 / rate, 2) if rate > 0 else 0.0
+
+    scale_projections = {
+        "conversations_per_second": round(rate, 4),
+        "time_for_1k_conversations_seconds": time_1k,
+        "time_for_10k_conversations_seconds": time_10k,
+        "time_for_100k_conversations_seconds": time_100k,
+    }
+
     summary = {
         "run_id": run_id,
         "total_conversations": len(results),
@@ -438,6 +479,7 @@ def _persist_and_summarize(
         "adversarial_turns": adv_turns,
         "errors": errors,
         "dry_run": dry_run,
+        "elapsed_seconds": elapsed_seconds,
         "output_dir": str(writer.run_dir),
         "max_failure_score": max_failure,
         "failures_at_threshold": failures_at_threshold,
@@ -446,6 +488,8 @@ def _persist_and_summarize(
         "mean_relevance_score": mean_relevance,
         "mean_groundedness_score": mean_grounded,
         "budget": budget_summary,
+        "tokens": tokens_stats,
+        "scale_projections": scale_projections,
     }
     writer.write_unified_summary(summary)
     writer.write_unified_report(summary)
