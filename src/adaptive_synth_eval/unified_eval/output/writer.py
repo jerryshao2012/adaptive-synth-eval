@@ -93,8 +93,8 @@ class UnifiedArtifactWriter(ArtifactWriter):
                 "",
                 "| Metric | Prompt Tokens | Completion Tokens | Total Tokens |",
                 "| :--- | :--- | :--- | :--- |",
-                f"| **Total Run Usage** | {tokens.get('simulator_prompt_tokens'):,} | {tokens.get('simulator_completion_tokens'):,} | {tokens.get('simulator_total_tokens'):,} |",
-                f"| **Average per Convo** | {tokens.get('avg_prompt_tokens_per_convo'):,} | {tokens.get('avg_completion_tokens_per_convo'):,} | {tokens.get('avg_total_tokens_per_convo'):,} |",
+                f"| **Total Run Usage** | {int(tokens.get('simulator_prompt_tokens') or 0):,} | {int(tokens.get('simulator_completion_tokens') or 0):,} | {int(tokens.get('simulator_total_tokens') or 0):,} |",
+                f"| **Average per Convo** | {tokens.get('avg_prompt_tokens_per_convo') or 0.0:,} | {tokens.get('avg_completion_tokens_per_convo') or 0.0:,} | {tokens.get('avg_total_tokens_per_convo') or 0.0:,} |",
                 "",
                 "### Cost Extrapolations (USD)",
                 "*Note: Cost calculations are based on Simulator LLM token usage and the specified API pricing tiers.*",
@@ -104,6 +104,41 @@ class UnifiedArtifactWriter(ArtifactWriter):
                 f"| **Lightweight (e.g., GPT-4o-mini)**<br>*(Input: $0.15/1M, Output: $0.60/1M)* | {cost_lightweight_1k} | {cost_lightweight_10k} |",
                 f"| **Premium (e.g., GPT-4o)**<br>*(Input: $2.50/1M, Output: $10.00/1M)* | {cost_premium_1k} | {cost_premium_10k} |",
                 f"| **High-End (e.g., Claude 3.5 Sonnet)**<br>*(Input: $3.00/1M, Output: $15.00/1M)* | {cost_highend_1k} | {cost_highend_10k} |",
+                "",
+            ])
+
+            # Chatbot Cost Projections
+            avg_cb_prompt = tokens.get("avg_chatbot_prompt_tokens_per_convo", 0.0)
+            avg_cb_completion = tokens.get("avg_chatbot_completion_tokens_per_convo", 0.0)
+
+            def calc_cb_cost(prompt_rate, completion_rate, multiplier):
+                cost_per_convo = (avg_cb_prompt * prompt_rate / 1_000_000) + (
+                            avg_cb_completion * completion_rate / 1_000_000)
+                return f"${cost_per_convo * multiplier:.4f}"
+
+            cb_cost_lightweight_1k = calc_cb_cost(0.15, 0.60, 1000)
+            cb_cost_lightweight_10k = calc_cb_cost(0.15, 0.60, 10000)
+            cb_cost_premium_1k = calc_cb_cost(2.50, 10.00, 1000)
+            cb_cost_premium_10k = calc_cb_cost(2.50, 10.00, 10000)
+            cb_cost_highend_1k = calc_cb_cost(3.00, 15.00, 1000)
+            cb_cost_highend_10k = calc_cb_cost(3.00, 15.00, 10000)
+
+            lines.extend([
+                "## Chatbot Token Usage & Estimated Cost",
+                "",
+                "| Metric | Prompt Tokens | Completion Tokens | Total Tokens |",
+                "| :--- | :--- | :--- | :--- |",
+                f"| **Total Run Usage** | {int(tokens.get('chatbot_prompt_tokens') or 0):,} | {int(tokens.get('chatbot_completion_tokens') or 0):,} | {int(tokens.get('chatbot_total_tokens') or 0):,} |",
+                f"| **Average per Convo** | {tokens.get('avg_chatbot_prompt_tokens_per_convo') or 0.0:,} | {tokens.get('avg_chatbot_completion_tokens_per_convo') or 0.0:,} | {tokens.get('avg_chatbot_total_tokens_per_convo') or 0.0:,} |",
+                "",
+                "### Chatbot Cost Extrapolations (USD)",
+                "*Note: Cost calculations are based on estimated Chatbot token usage and the specified API pricing tiers.*",
+                "",
+                "| Model Pricing Tier | Cost per 1K Convos | Cost per 10K Convos (Month) |",
+                "| :--- | :--- | :--- |",
+                f"| **Lightweight (e.g., GPT-4o-mini)**<br>*(Input: $0.15/1M, Output: $0.60/1M)* | {cb_cost_lightweight_1k} | {cb_cost_lightweight_10k} |",
+                f"| **Premium (e.g., GPT-4o)**<br>*(Input: $2.50/1M, Output: $10.00/1M)* | {cb_cost_premium_1k} | {cb_cost_premium_10k} |",
+                f"| **High-End (e.g., Claude 3.5 Sonnet)**<br>*(Input: $3.00/1M, Output: $15.00/1M)* | {cb_cost_highend_1k} | {cb_cost_highend_10k} |",
                 "",
             ])
 

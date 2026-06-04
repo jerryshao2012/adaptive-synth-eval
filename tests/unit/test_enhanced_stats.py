@@ -34,6 +34,12 @@ def test_write_generation_report_with_enhanced_stats(tmp_path):
             "avg_prompt_tokens_per_convo": 120.0,
             "avg_completion_tokens_per_convo": 30.0,
             "avg_total_tokens_per_convo": 150.0,
+            "chatbot_prompt_tokens": 800,
+            "chatbot_completion_tokens": 200,
+            "chatbot_total_tokens": 1000,
+            "avg_chatbot_prompt_tokens_per_convo": 80.0,
+            "avg_chatbot_completion_tokens_per_convo": 20.0,
+            "avg_chatbot_total_tokens_per_convo": 100.0,
         },
         "scale_projections": {
             "conversations_per_second": 2.0,
@@ -83,6 +89,8 @@ def test_write_generation_report_with_enhanced_stats(tmp_path):
     report_content = report_path.read_text(encoding="utf-8")
     assert "## Time / Speed to Generate at Scale" in report_content
     assert "## Simulator Token Usage & Estimated Cost" in report_content
+    assert "## Chatbot Token Usage & Estimated Cost" in report_content
+    assert "### Chatbot Cost Extrapolations (USD)" in report_content
     assert "## Production Realism Analysis" in report_content
     assert "Lightweight (e.g., GPT-4o-mini)" in report_content
     assert "P001 + S001" in report_content

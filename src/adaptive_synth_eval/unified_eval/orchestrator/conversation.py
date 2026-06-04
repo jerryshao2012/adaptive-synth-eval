@@ -24,6 +24,7 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
+from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.generation.turns import UserSimulator
@@ -194,6 +195,7 @@ async def run_conversation(
     # Plan all turn modes up-front so phased/min_each schedules work deterministically.
     planned_modes = plan_turn_modes(entry.schedule, turn_count, rng)
 
+    chatbot_history_tokens = 0
     for turn_id in range(1, turn_count + 1):
         mode = planned_modes[turn_id - 1]
 
@@ -247,6 +249,7 @@ async def run_conversation(
 
         # ----- send to target chatbot -----
         send_start = time.perf_counter()
+        chatbot_prompt_tokens = chatbot_history_tokens + count_tokens(user_input)
         response = await target.send_async(
             conversation_id=conversation_id,
             session_id=session_id,
@@ -263,6 +266,8 @@ async def run_conversation(
         latency_ms = (time.perf_counter() - send_start) * 1000
         if response.error:
             errors += 1
+        chatbot_completion_tokens = count_tokens(response.bot_response)
+        chatbot_history_tokens += count_tokens(user_input) + chatbot_completion_tokens
         previous_bot = response.bot_response
 
         if realtime_chat:
@@ -381,6 +386,8 @@ async def run_conversation(
                 "turn_type": mode,
                 "strategy": strategy_meta,
                 "adversarial_scenario_id": adv_scenario.scenario_id,
+                "chatbot_prompt_tokens": chatbot_prompt_tokens,
+                "chatbot_completion_tokens": chatbot_completion_tokens,
             },
         )
         chat_history.append(record)

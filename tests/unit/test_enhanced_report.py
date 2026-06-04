@@ -39,6 +39,12 @@ def test_unified_report_with_enhanced_stats():
                 "avg_prompt_tokens_per_convo": 5000.0,
                 "avg_completion_tokens_per_convo": 3000.0,
                 "avg_total_tokens_per_convo": 8000.0,
+                "chatbot_prompt_tokens": 40000,
+                "chatbot_completion_tokens": 20000,
+                "chatbot_total_tokens": 60000,
+                "avg_chatbot_prompt_tokens_per_convo": 4000.0,
+                "avg_chatbot_completion_tokens_per_convo": 2000.0,
+                "avg_chatbot_total_tokens_per_convo": 6000.0,
             }
         }
 
@@ -58,6 +64,8 @@ def test_unified_report_with_enhanced_stats():
         assert "100,000 conversations" in content, "Missing 100K projection"
 
         assert "## Simulator Token Usage & Estimated Cost" in content, "Missing token usage section"
+        assert "## Chatbot Token Usage & Estimated Cost" in content, "Missing chatbot token usage section"
+        assert "### Chatbot Cost Extrapolations (USD)" in content, "Missing chatbot cost extrapolations"
         assert "**Total Run Usage**" in content, "Missing total run usage"
         assert "**Average per Convo**" in content, "Missing average per convo"
         assert "### Cost Extrapolations (USD)" in content, "Missing cost extrapolations"

@@ -439,14 +439,32 @@ def _persist_and_summarize(
     simulator_prompt_tokens = 0
     simulator_completion_tokens = 0
     if meter is not None:
-        sim_metrics = meter.per_component.get("user_simulator", {})
-        simulator_prompt_tokens = int(sim_metrics.get("prompt_tokens", 0))
-        simulator_completion_tokens = int(sim_metrics.get("completion_tokens", 0))
+        sim_meter = meter.components.get("user_simulator")
+        if sim_meter is not None:
+            simulator_prompt_tokens = sim_meter.prompt_tokens
+            simulator_completion_tokens = sim_meter.completion_tokens
     simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
 
     avg_prompt_tokens_convo = round(simulator_prompt_tokens / len(results), 2) if results else 0.0
     avg_completion_tokens_convo = round(simulator_completion_tokens / len(results), 2) if results else 0.0
     avg_total_tokens_convo = round(simulator_total_tokens / len(results), 2) if results else 0.0
+
+    # Calculate estimated chatbot token usage
+    chatbot_prompt_tokens = sum(
+        rec.generation_metadata.get("chatbot_prompt_tokens", 0)
+        for rec in chat_history
+        if rec.generation_metadata
+    )
+    chatbot_completion_tokens = sum(
+        rec.generation_metadata.get("chatbot_completion_tokens", 0)
+        for rec in chat_history
+        if rec.generation_metadata
+    )
+    chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
+
+    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / len(results), 2) if results else 0.0
+    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / len(results), 2) if results else 0.0
+    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / len(results), 2) if results else 0.0
 
     tokens_stats = {
         "simulator_prompt_tokens": simulator_prompt_tokens,
@@ -455,6 +473,12 @@ def _persist_and_summarize(
         "avg_prompt_tokens_per_convo": avg_prompt_tokens_convo,
         "avg_completion_tokens_per_convo": avg_completion_tokens_convo,
         "avg_total_tokens_per_convo": avg_total_tokens_convo,
+        "chatbot_prompt_tokens": chatbot_prompt_tokens,
+        "chatbot_completion_tokens": chatbot_completion_tokens,
+        "chatbot_total_tokens": chatbot_total_tokens,
+        "avg_chatbot_prompt_tokens_per_convo": avg_chatbot_prompt_tokens_convo,
+        "avg_chatbot_completion_tokens_per_convo": avg_chatbot_completion_tokens_convo,
+        "avg_chatbot_total_tokens_per_convo": avg_chatbot_total_tokens_convo,
     }
 
     # Scale Projections

@@ -7,7 +7,7 @@ from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
-from adaptive_synth_eval.clients.utils import display_bot_message, display_persona_message
+from adaptive_synth_eval.clients.utils import count_tokens, display_bot_message, display_persona_message
 from adaptive_synth_eval.config.contract import ContractError, contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
@@ -205,6 +205,7 @@ async def run_simulation_async(
         }
 
         previous_bot_response = None
+        chatbot_history_tokens = 0
         for turn_id in range(1, planned.turn_count + 1):
             if stop_all_requested.is_set():
                 break
@@ -262,6 +263,7 @@ async def run_simulation_async(
                 turn.turn_id,
             )
             chatbot_wait_start = time.perf_counter()
+            chatbot_prompt_tokens = chatbot_history_tokens + count_tokens(turn.user_message)
             response = await client.send_async(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
@@ -280,6 +282,8 @@ async def run_simulation_async(
                 response.status_code,
                 response.error or "none",
             )
+            chatbot_completion_tokens = count_tokens(response.bot_response)
+            chatbot_history_tokens += count_tokens(turn.user_message) + chatbot_completion_tokens
             if response.error or _is_target_chatbot_unavailable(response):
                 local_errors += 1
                 if _is_target_chatbot_unavailable(response):
@@ -307,6 +311,10 @@ async def run_simulation_async(
                 missing_context_expected="missing_information" in turn.applied_failure_modes,
             )
             failure_mode = detect_failure_mode(response.bot_response, response.error, score.safety_score)
+            gen_meta = dict(turn.generation_metadata) if turn.generation_metadata else {}
+            gen_meta["chatbot_prompt_tokens"] = chatbot_prompt_tokens
+            gen_meta["chatbot_completion_tokens"] = chatbot_completion_tokens
+
             record = ChatHistoryRecord(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
@@ -329,7 +337,7 @@ async def run_simulation_async(
                 synthetic_flag=contract.synthetic_flag,
                 retrieved_policy_ids=response.retrieved_policy_ids,
                 response_raw=response.raw,
-                generation_metadata=turn.generation_metadata,
+                generation_metadata=gen_meta,
             )
             local_records.append(record)
             local_turn_rows.append(record.to_dict())
@@ -429,6 +437,23 @@ async def run_simulation_async(
     avg_completion_tokens_convo = round(simulator_completion_tokens / len(plan), 2) if plan else 0.0
     avg_total_tokens_convo = round(simulator_total_tokens / len(plan), 2) if plan else 0.0
 
+    # Chatbot LLM Token Statistics
+    chatbot_prompt_tokens = sum(
+        rec.generation_metadata.get("chatbot_prompt_tokens", 0)
+        for rec in records
+        if rec.generation_metadata
+    )
+    chatbot_completion_tokens = sum(
+        rec.generation_metadata.get("chatbot_completion_tokens", 0)
+        for rec in records
+        if rec.generation_metadata
+    )
+    chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
+
+    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / len(plan), 2) if plan else 0.0
+    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / len(plan), 2) if plan else 0.0
+    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / len(plan), 2) if plan else 0.0
+
     tokens_stats = {
         "simulator_prompt_tokens": simulator_prompt_tokens,
         "simulator_completion_tokens": simulator_completion_tokens,
@@ -436,6 +461,12 @@ async def run_simulation_async(
         "avg_prompt_tokens_per_convo": avg_prompt_tokens_convo,
         "avg_completion_tokens_per_convo": avg_completion_tokens_convo,
         "avg_total_tokens_per_convo": avg_total_tokens_convo,
+        "chatbot_prompt_tokens": chatbot_prompt_tokens,
+        "chatbot_completion_tokens": chatbot_completion_tokens,
+        "chatbot_total_tokens": chatbot_total_tokens,
+        "avg_chatbot_prompt_tokens_per_convo": avg_chatbot_prompt_tokens_convo,
+        "avg_chatbot_completion_tokens_per_convo": avg_chatbot_completion_tokens_convo,
+        "avg_chatbot_total_tokens_per_convo": avg_chatbot_total_tokens_convo,
     }
 
     # Scale Projections
