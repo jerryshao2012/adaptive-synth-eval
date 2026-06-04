@@ -286,7 +286,15 @@ def make_bedrock_backend(
         raise ImportError("Install boto3: pip install boto3") from e
 
     client = boto3.client("bedrock-runtime", region_name=region)
-    provider = model.split(".")[0]
+    # Inference profile IDs can be prefixed (for example, "us.anthropic..."),
+    # and ARNs can include provider names in the resource segment.
+    model_lc = model.lower()
+    if "anthropic." in model_lc:
+        provider = "anthropic"
+    elif "amazon." in model_lc:
+        provider = "amazon"
+    else:
+        provider = model.split(".")[0]
 
     def call(system: str, user: str) -> Dict[str, Any]:
         import json as _json
@@ -296,7 +304,7 @@ def make_bedrock_backend(
         if provider == "anthropic":
             body = _json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens_to_sample": max_tokens,
+                "max_tokens": max_tokens,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             })
