@@ -2,6 +2,8 @@
 
 For convenience, you can use the shorthand command `ase` instead of the full `adaptive-synth-eval` command.
 
+## Installation & Setup
+
 ### Running with uv
 Prefix commands with `uv run ase`:
 ```bash
@@ -20,46 +22,44 @@ ase validate-contract contracts/examples/one_week_chat_history.yaml
 
 ---
 
-Validate a contract:
+## Commands & Examples
 
+### Validating a Contract
+Validate a contract to ensure it matches the schema and is configurationally sound:
 ```bash
 uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
 ```
 
-Generate one week of dry-run ChatHistory:
+### Running Simulations
+The `run` command executes simulation sessions based on a contract.
 
+#### Dry-Run Execution
+Generate one week of dry-run `ChatHistory`:
 ```bash
 uv run ase run --contract contracts/examples/one_week_chat_history.yaml --dry-run
 ```
 
-Generate the 10,000-conversation dataset:
-
+Generate a 10,000-conversation dataset:
 ```bash
 uv run ase run --contract contracts/examples/ten_k_conversations.yaml --dry-run
 ```
 
-Summarize a run:
-
-```bash
-uv run ase summarize --run-id one_week_chat_history
-```
-
 Run a focused chatbot unit test:
-
 ```bash
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
 ```
 
-Output conversations in human-readable format (with Persona/Bot labels):
-
+#### Outputting Conversations
+Output conversations in a human-readable format (with Persona/Bot labels):
 ```bash
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run --output-conversations
 ```
-
 This generates a `conversations.txt` file in the output directory with each conversation formatted as:
 - Conversation metadata (ID, session, persona, scenario, synthetic day)
 - Alternating "Persona (Turn N):" and "Bot (Turn N):" messages
 - Error indicators if any occurred
+
+See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
 
 ### Unified-Only Options (Unified Contracts Only)
 The following options are valid only when running with a unified contract. If passed with a synthetic-only contract, the CLI will return a `ContractError` (exit code 2):
@@ -68,34 +68,39 @@ The following options are valid only when running with a unified contract. If pa
 - `--max-concurrency <n>`: Override the `eval_plan.max_concurrency` config for this run.
 - `--run-id <id>`: Explicitly override the output run ID.
 
+### Summarizing a Run
+Summarize a run's results:
+```bash
+uv run ase summarize --run-id one_week_chat_history
+```
 
-See [docs/example_conversations_output.txt](example_conversations_output.txt) for a sample output.
+---
+
+## Real-Time Chat & Interactive Controls
 
 Stream Persona/Bot chat to the console in real time:
-
 ```bash
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
 ```
 
 Disable interactive runtime controls during realtime chat (controls are enabled by default with `--realtime-chat`):
-
 ```bash
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat --no-interactive-realtime-controls
 ```
 
-How `--realtime-chat` works:
+### How `--realtime-chat` Works
 - It is opt-in and streams conversations directly in the console as alternating Human and Assistant panels.
 - It supports both single-persona and multi-persona simulation pools, processing conversations in a clean sequential order.
 - It does not replace output artifacts; files like `chat_history.jsonl` and `conversations.txt` (when enabled) are still generated normally.
 
-How `--persona <id>` works:
+### How `--persona <id>` Works
 - Limit the terminal simulation session to a single specific persona ID.
 - Useful for running multiple terminals in parallel targeting different personas.
 - Automatically disables the realtime commands `personas`, `persona <id>`, and `switch <id>`.
 
-How `--interactive-realtime-controls` works:
-- It is enabled by default when `--realtime-chat` is enabled.
-- Use `--no-interactive-realtime-controls` to turn it off.
+### How Interactive Realtime Controls Work
+- They are enabled by default when `--realtime-chat` is enabled.
+- Use `--no-interactive-realtime-controls` to turn them off.
 - During the run, type a command and press Enter to control playback.
 - Offers interactive auto-hinting / auto-completion of commands and arguments as you type.
 - In multi-persona mode, the prompt displays the current active persona ID (e.g., `⚡> [P001] `) for continuous visibility.
@@ -113,7 +118,7 @@ How `--interactive-realtime-controls` works:
 - The prompt remains stable while logs stream above it, with the persona ID updating dynamically when switched.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
-**Per-Persona Behavior Example:**
+### Per-Persona Behavior Example
 ```bash
 # Set P001 to aggressive mode
 ⚡> [P001] style aggressive
@@ -132,8 +137,14 @@ Persona updated
 Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
 ```
 
+---
+
+## Target Configurations & Execution Environments
+
+### Chatbot Endpoint Configurations
 To call a real chatbot endpoint, set `target.enabled: true`, provide `target.endpoint`, and set the configured auth environment variable.
 
+### Browser UI Configuration
 To drive a chatbot through a browser UI instead, set `target.mode: browser` and provide CSS selectors for the input, submit button, and bot responses:
 
 ```yaml
@@ -150,6 +161,7 @@ target:
 
 Browser mode uses Playwright. By default it uses `browser_type: chromium`, but you can set it to `browser_type: edge` to launch Microsoft Edge via the `msedge` channel. All chatbot turns are processed sequentially because browser sessions cannot process concurrent turns.
 
+### Windows OneDrive Environment Setup
 If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os error 396`), switch uv to copy mode:
 
 ```powershell
@@ -159,46 +171,49 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
+```
 
-# AWS Bedrock AgentCore Setup and Execution
+---
 
-## Step 1: Configure AWS Credentials
+## AWS Bedrock AgentCore Setup and Execution
+
+### Step 1: Configure AWS Credentials
 ```powershell
 aws configure
 ```
 Sets up your AWS credentials (Access Key ID, Secret Access Key, default region) for accessing AWS Bedrock services. This creates a `~/.aws/credentials` file.
 
-## Step 2: Verify AWS Identity
+### Step 2: Verify AWS Identity
 ```powershell
 aws sts get-caller-identity
 ```
 Confirms that your AWS credentials are valid and displays your AWS account ID, user ARN, and assumed role information.
 
-## Step 3: Configure Corporate SSL Certificate (if needed)
+### Step 3: Configure Corporate SSL Certificate (if needed)
 ```powershell
 $env:AWS_CA_BUNDLE="path\to\cert.pem"
 ```
 In corporate environments with SSL inspection, this tells AWS SDK to trust your organization's CA certificate. Replace the path with your actual certificate location.
 
-## Step 4: Install Package in Development Mode
+### Step 4: Install Package in Development Mode
 ```powershell
 uv pip install -e .
 ```
-Installs the adaptive-synth-eval package in editable mode, allowing you to make code changes without reinstalling.
+Installs the `adaptive-synth-eval` package in editable mode, allowing you to make code changes without reinstalling.
 
-## Step 5: Run TFSA Evaluation (Batch Mode)
+### Step 5: Run TFSA Evaluation (Batch Mode)
 ```powershell
 uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml 
 ```
 Executes the TFSA (Tax-Free Savings Account) evaluation contract against AWS Bedrock AgentCore in batch mode. All conversations are generated first, then evaluated.
 
-## Step 6: Run TFSA Evaluation with Real-time Chat
+### Step 6: Run TFSA Evaluation with Real-time Chat
 ```powershell
 uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat
 ```
 Runs the evaluation with real-time chat display, showing conversations as they happen in the terminal.
 
-## Step 7: Run Specific Persona Evaluations
+### Step 7: Run Specific Persona Evaluations
 ```powershell
 # Novice user persona
 uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P1_NOVICE
@@ -210,14 +225,14 @@ uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --
 uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P3_CONTRACTOR
 ```
 Executes evaluations for specific personas only. Useful for targeted testing or debugging individual persona behaviors.
-```
+
+---
 
 ## Corporate Environment Setup
 
 If you're working behind a corporate proxy or firewall, you may need additional configuration:
 
 ### SSL Certificate Configuration
-
 Corporate networks often use custom SSL certificates for traffic inspection. To configure these:
 
 1. **Obtain your corporate CA certificate** (usually provided by IT as a `.pem` or `.crt` file)
@@ -243,7 +258,6 @@ Corporate networks often use custom SSL certificates for traffic inspection. To 
    ```
 
 ### Proxy Configuration
-
 If your network requires authenticated proxy access:
 
 **Linux/macOS (Bash/Zsh):**
@@ -258,11 +272,13 @@ $env:HTTP_PROXY = "http://username:password@proxy.company.com:8080/"
 $env:HTTPS_PROXY = "http://username:password@proxy.company.com:8080/"
 ```
 
-> **Note:** If your username contains special characters (like backslashes in domain usernames), URL-encode them:
+> [!NOTE]
+> If your username contains special characters (like backslashes in domain usernames), URL-encode them:
 > ```powershell
 > $username = [uri]::EscapeDataString("DOMAIN\\username")
 > $password = [uri]::EscapeDataString("your-password")
 > $env:HTTP_PROXY = "http://${username}:${password}@proxy.company.com:8080/"
+> $env:HTTPS_PROXY = "http://${username}:${password}@proxy.company.com:8080/"
 > ```
 
 ### Persistent Configuration
