@@ -58,6 +58,9 @@ class LLMClient:
         elif os.getenv("OLLAMA_BASE_URL"):
             logger.debug("Detected Ollama provider")
             return "ollama"
+        elif os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
+            logger.debug("Detected AWS Bedrock provider")
+            return "bedrock"
         logger.warning(
             "No LLM provider detected. Configure one of: AZURE_OPENAI_ENDPOINT/DEPLOYMENT, ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL")
         return None
@@ -120,6 +123,15 @@ class LLMClient:
                     temperature=0.7,
                     keep_alive="15m",
                     reasoning=False,
+                )
+
+            elif self.model_provider == "bedrock":
+                from langchain_openai import ChatOpenAI
+
+                self._model = ChatOpenAI(
+                    model=os.getenv("MODEL_NAME", "amazon.nova-micro-v1:0"),
+                    api_key=SecretStr(os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")),
+                    base_url=os.getenv("AWS_BEDROCK_ENDPOINT", "https://bedrock-mantle.us-east-1.api.aws/v1"),
                 )
 
             else:

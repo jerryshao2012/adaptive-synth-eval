@@ -71,6 +71,7 @@ class LLMSpec:
     azure_deployment: str | None = None
     azure_api_version: str | None = None
     bedrock_region: str | None = None
+    bedrock_endpoint: str | None = None  # For bedrock-openai provider
     ollama_base_url: str | None = None
 
 

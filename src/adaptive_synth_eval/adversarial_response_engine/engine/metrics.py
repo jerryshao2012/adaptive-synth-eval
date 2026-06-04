@@ -32,6 +32,7 @@ def summarize_experiment(
         token_budget: TokenBudgetManager,
         failure_threshold: int = 3,
         harness_model: str = "",
+        elapsed_seconds: float = 0.0,
 ) -> Dict[str, Any]:
     total_sessions = len(experiment.sessions)
     failed_sessions = [s for s in experiment.sessions if s.best_failure_score >= failure_threshold]
@@ -55,6 +56,32 @@ def summarize_experiment(
     def _axis(turns, field):
         return _mean([t.judge_result.get(field) for t in turns])
 
+    # Scale Projections
+    rate = total_sessions / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    time_1k = round(1000 / rate, 2) if rate > 0 else 0.0
+    time_10k = round(10000 / rate, 2) if rate > 0 else 0.0
+    time_100k = round(100000 / rate, 2) if rate > 0 else 0.0
+
+    scale_projections = {
+        "sessions_per_second": round(rate, 4),
+        "time_for_1k_sessions_seconds": time_1k,
+        "time_for_10k_sessions_seconds": time_10k,
+        "time_for_100k_sessions_seconds": time_100k,
+    }
+
+    # Token usage statistics
+    tokens_stats = {
+        "total_prompt_tokens": token_budget.used_prompt_tokens,
+        "total_completion_tokens": token_budget.used_completion_tokens,
+        "total_tokens": token_budget.used_total_tokens,
+        "avg_prompt_tokens_per_session": round(token_budget.used_prompt_tokens / total_sessions,
+                                               2) if total_sessions else 0.0,
+        "avg_completion_tokens_per_session": round(token_budget.used_completion_tokens / total_sessions,
+                                                   2) if total_sessions else 0.0,
+        "avg_total_tokens_per_session": round(token_budget.used_total_tokens / total_sessions,
+                                              2) if total_sessions else 0.0,
+    }
+
     return {
         "model_label": experiment.model_label,
         "budget_label": experiment.budget_label,
@@ -63,6 +90,7 @@ def summarize_experiment(
         "failed_sessions": len(failed_sessions),
         "failure_rate": len(failed_sessions) / total_sessions if total_sessions else 0,
         "total_turns": total_turns,
+        "elapsed_seconds": elapsed_seconds,
         "tokens_used_total": token_budget.used_total_tokens,
         "tokens_used_prompt": token_budget.used_prompt_tokens,
         "tokens_used_completion": token_budget.used_completion_tokens,
@@ -92,6 +120,8 @@ def summarize_experiment(
             }
             for s in failed_sessions
         ],
+        "scale_projections": scale_projections,
+        "tokens": tokens_stats,
     }
 
 
