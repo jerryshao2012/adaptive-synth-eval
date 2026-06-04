@@ -280,6 +280,11 @@ $env:HTTPS_PROXY = "http://username:password@proxy.company.com:8080/"
 > $env:HTTP_PROXY = "http://${username}:${password}@proxy.company.com:8080/"
 > $env:HTTPS_PROXY = "http://${username}:${password}@proxy.company.com:8080/"
 > ```
+>  **For Git operations:**
+>  ```bash
+>  git config --global http.proxy "http://${username}:${password}@proxy.company.com:8080/"
+>  git config --global https.proxy "http://${username}:${password}@proxy.company.com:8080/"
+>  ```
 
 ### Persistent Configuration
 Add the settings to your shell profile (`~/.bashrc`, `~/.zshrc`) on Linux/macOS, or environment properties on Windows.
