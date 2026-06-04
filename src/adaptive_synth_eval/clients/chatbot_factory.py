@@ -16,14 +16,23 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
 
     if config.mode == "agentcore":
         if config.agentcore is None:
-            raise ValueError("target.agentcore is required when target.mode is 'agentcore'")
+            raise ValueError(
+                "target.agentcore is required when target.mode is 'agentcore' "
+                "(nest region/agent_runtime_arn/qualifier under target.agentcore)."
+            )
+        ac = config.agentcore
         return AgentCoreChatbotClient(
             enabled=enabled,
-            region=config.agentcore.region,
-            agent_runtime_arn=config.agentcore.agent_runtime_arn,
-            qualifier=config.agentcore.qualifier,
-            payload_prompt_key=config.agentcore.payload_prompt_key,
-            runtime_session_id_prefix=config.agentcore.runtime_session_id_prefix,
+            region=ac.region,
+            agent_runtime_arn=ac.agent_runtime_arn,
+            qualifier=ac.qualifier,
+            payload_prompt_key=ac.payload_prompt_key,
+            runtime_session_id_prefix=ac.runtime_session_id_prefix,
+            retry_max_retries=config.retry_max_retries,
+            retry_initial_backoff=config.retry_initial_backoff_seconds,
+            retry_max_backoff=config.retry_max_backoff_seconds,
+            retry_backoff_multiplier=config.retry_backoff_multiplier,
+            retry_jitter=config.retry_jitter,
         )
 
     return ChatbotClient(

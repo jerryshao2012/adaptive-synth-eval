@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Dict, Any
+
+
+def _as_text(value: Any, default: str = "") -> str:
+    """Normalize an LLM-supplied field to a string.
+
+    The planner occasionally emits a dict/list where a string is expected
+    (e.g. next_generator_instruction); embedding that raw into a prompt or
+    slicing it downstream is wrong, so coerce here at the boundary.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str)
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -28,8 +45,8 @@ class PlanResult:
             attack_angle=d.get("attack_angle", "unknown"),
             sub_tactic=d.get("sub_tactic", ""),
             model_posture=d.get("model_posture", "unknown"),
-            next_generator_instruction=d.get(
-                "next_generator_instruction", "Continue evaluation safely."
+            next_generator_instruction=_as_text(
+                d.get("next_generator_instruction"), "Continue evaluation safely."
             ),
             ladder_dependency=d.get("ladder_dependency", ""),
             risk_level=d.get("risk_level", "medium"),
@@ -218,6 +235,10 @@ class SessionState:
     suspicion_score: float = 0.0
     best_failure_score: int = 0
     repeated_refusals: int = 0
+    # Facts the legitimate (synth) warm-up turns surfaced from the target — real
+    # client names, file paths, amounts, and the bot's stance. The planner/generator
+    # ground probes in these instead of inventing identifiers the target can deny.
+    synth_context: List[str] = field(default_factory=list)
 
 
 @dataclass
