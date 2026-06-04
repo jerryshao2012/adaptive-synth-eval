@@ -160,13 +160,56 @@ uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --real
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
 
+# AWS Bedrock AgentCore Setup and Execution
+
+## Step 1: Configure AWS Credentials
+```powershell
 aws configure
+```
+Sets up your AWS credentials (Access Key ID, Secret Access Key, default region) for accessing AWS Bedrock services. This creates a `~/.aws/credentials` file.
+
+## Step 2: Verify AWS Identity
+```powershell
 aws sts get-caller-identity
+```
+Confirms that your AWS credentials are valid and displays your AWS account ID, user ARN, and assumed role information.
+
+## Step 3: Configure Corporate SSL Certificate (if needed)
+```powershell
 $env:AWS_CA_BUNDLE="path\to\cert.pem"
+```
+In corporate environments with SSL inspection, this tells AWS SDK to trust your organization's CA certificate. Replace the path with your actual certificate location.
+
+## Step 4: Install Package in Development Mode
+```powershell
 uv pip install -e .
+```
+Installs the adaptive-synth-eval package in editable mode, allowing you to make code changes without reinstalling.
+
+## Step 5: Run TFSA Evaluation (Batch Mode)
+```powershell
+uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml 
+```
+Executes the TFSA (Tax-Free Savings Account) evaluation contract against AWS Bedrock AgentCore in batch mode. All conversations are generated first, then evaluated.
+
+## Step 6: Run TFSA Evaluation with Real-time Chat
+```powershell
 uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat
-uv run --no-sync ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona DEMO_P1
-uv run --no-sync ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona DEMO_P2
+```
+Runs the evaluation with real-time chat display, showing conversations as they happen in the terminal.
+
+## Step 7: Run Specific Persona Evaluations
+```powershell
+# Novice user persona
+uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P1_NOVICE
+
+# Experienced investor persona
+uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P2_INVESTOR
+
+# Financial contractor persona
+uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P3_CONTRACTOR
+```
+Executes evaluations for specific personas only. Useful for targeted testing or debugging individual persona behaviors.
 ```
 
 ## Corporate Environment Setup
