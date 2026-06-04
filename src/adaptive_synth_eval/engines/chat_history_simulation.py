@@ -581,6 +581,9 @@ async def run_simulation_async(
         "temporal_realism": temporal_realism,
     }
 
+    configured_max_concurrency = int(getattr(contract.traffic, "max_concurrency", 5) or 5)
+    effective_max_concurrency = _effective_max_concurrency(contract)
+
     summary = {
         "run_id": run_id,
         "total_conversations": len(plan),
@@ -590,6 +593,8 @@ async def run_simulation_async(
         "stopped_early": stopped_early,
         "elapsed_seconds": elapsed_seconds,
         "output_dir": str(writer.run_dir),
+        "configured_max_concurrency": configured_max_concurrency,
+        "effective_max_concurrency": effective_max_concurrency,
         "tokens": tokens_stats,
         "scale_projections": scale_projections,
         "production_realism": production_realism,

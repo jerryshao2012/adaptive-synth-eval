@@ -70,8 +70,12 @@ def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
 
     run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
     assert run_summary["elapsed_seconds"] >= 0
+    assert run_summary["configured_max_concurrency"] == 5
+    assert run_summary["effective_max_concurrency"] == 5
 
     generation_report = (run_dir / "generation_report.md").read_text(encoding="utf-8")
+    assert "Configured max concurrency:" in generation_report
+    assert "Effective max concurrency:" in generation_report
     assert "Elapsed seconds:" in generation_report
 
 
@@ -132,6 +136,68 @@ def test_effective_max_concurrency_is_one_for_browser_chatbot(tmp_path):
     contract = load_contract(contract_path)
 
     assert _effective_max_concurrency(contract) == 1
+
+
+def test_browser_mode_summary_reports_effective_max_concurrency_one(tmp_path):
+    contract_path = tmp_path / "contract_browser.json"
+    payload = {
+        "simulation_suite": {
+            "suite_id": "suite",
+            "target_application": "hr_bot",
+            "run_mode": "synthetic_chat_history_generation",
+            "synthetic_flag": True,
+        },
+        "target": {
+            "enabled": True,
+            "mode": "browser",
+            "browser": {
+                "url": "https://chat.example.com",
+                "input_selector": "textarea",
+                "submit_selector": "button",
+                "response_selector": ".bot-message",
+            },
+        },
+        "time_window": {
+            "start_day": "2026-05-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 60,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P001",
+                "role": "new_employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S001",
+                "domain": "leave",
+                "intent": "understand_eligibility",
+                "expected_retrieval_topics": ["leave"],
+                "failure_injection": {"ambiguity": 0.2},
+                "success_criteria": {"answers_grounded_in_policy": True},
+            }
+        ],
+        "traffic_orchestration": {
+            "total_conversations": 1,
+            "conversation_turns": {"min": 3, "max": 3},
+            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+            "max_concurrency": 7,
+        },
+        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "browser_run"},
+    }
+    contract_path.write_text(json.dumps(payload))
+    contract = load_contract(contract_path)
+
+    summary = run_simulation(contract, dry_run=True)
+
+    assert summary["configured_max_concurrency"] == 7
+    assert summary["effective_max_concurrency"] == 1
 
 
 def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):

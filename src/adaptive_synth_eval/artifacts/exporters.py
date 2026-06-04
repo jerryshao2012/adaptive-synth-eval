@@ -41,6 +41,8 @@ class ArtifactWriter:
             f"- Total turns: {summary.get('total_turns')}",
             f"- Errors: {summary.get('errors')}",
             f"- Dry run: {summary.get('dry_run')}",
+            f"- Configured max concurrency: {summary.get('configured_max_concurrency')}",
+            f"- Effective max concurrency: {summary.get('effective_max_concurrency')}",
             f"- Elapsed seconds: {summary.get('elapsed_seconds')}",
             "",
         ]

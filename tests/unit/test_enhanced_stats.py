@@ -24,6 +24,8 @@ def test_write_generation_report_with_enhanced_stats(tmp_path):
         "total_turns": 30,
         "errors": 0,
         "dry_run": True,
+        "configured_max_concurrency": 5,
+        "effective_max_concurrency": 5,
         "stopped_early": False,
         "elapsed_seconds": 5.0,
         "output_dir": str(writer.run_dir),
@@ -87,6 +89,8 @@ def test_write_generation_report_with_enhanced_stats(tmp_path):
     assert report_path.exists()
 
     report_content = report_path.read_text(encoding="utf-8")
+    assert "Configured max concurrency: 5" in report_content
+    assert "Effective max concurrency: 5" in report_content
     assert "## Time / Speed to Generate at Scale" in report_content
     assert "## Simulator Token Usage & Estimated Cost" in report_content
     assert "## Chatbot Token Usage & Estimated Cost" in report_content

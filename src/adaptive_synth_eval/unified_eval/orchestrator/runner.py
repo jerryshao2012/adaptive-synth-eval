@@ -221,6 +221,7 @@ async def run_unified_async(
         meter=meter,
         budget_stopped=budget_stopped,
         elapsed_seconds=elapsed_seconds,
+        effective_max_concurrency=effective_max_concurrency,
     )
     return summary
 
@@ -390,6 +391,7 @@ def _persist_and_summarize(
         meter: BudgetMeter | None = None,
         budget_stopped: bool = False,
         elapsed_seconds: float = 0.0,
+        effective_max_concurrency: int = 1,
 ) -> dict[str, Any]:
     conv_rows = [r.conversation_row for r in results]
     chat_history = [rec for r in results for rec in r.chat_history]
@@ -505,6 +507,8 @@ def _persist_and_summarize(
         "dry_run": dry_run,
         "elapsed_seconds": elapsed_seconds,
         "output_dir": str(writer.run_dir),
+        "configured_max_concurrency": int(contract.run.max_concurrency or 1),
+        "effective_max_concurrency": int(max(1, effective_max_concurrency)),
         "max_failure_score": max_failure,
         "failures_at_threshold": failures_at_threshold,
         "near_misses": near_misses,

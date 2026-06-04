@@ -19,6 +19,8 @@ def test_unified_report_with_enhanced_stats():
             "adversarial_turns": 20,
             "errors": 0,
             "dry_run": False,
+            "configured_max_concurrency": 5,
+            "effective_max_concurrency": 5,
             "elapsed_seconds": 45.5,
             "max_failure_score": 2,
             "failures_at_threshold": 0,
@@ -57,6 +59,8 @@ def test_unified_report_with_enhanced_stats():
         content = report_path.read_text()
 
         # Check for enhanced sections
+        assert "Configured max concurrency: 5" in content, "Missing configured max concurrency"
+        assert "Effective max concurrency: 5" in content, "Missing effective max concurrency"
         assert "## Time / Speed to Generate at Scale" in content, "Missing scale projections section"
         assert "**Conversations generated per second**" in content, "Missing conversations per second"
         assert "1,000 conversations" in content, "Missing 1K projection"
@@ -70,7 +74,7 @@ def test_unified_report_with_enhanced_stats():
         assert "**Average per Convo**" in content, "Missing average per convo"
         assert "### Cost Extrapolations (USD)" in content, "Missing cost extrapolations"
         assert "Lightweight (e.g., nova-micro-v1:0)" in content, "Missing lightweight tier"
-        assert "Premium (e.g., Claude Haiku 4.5)" in content, "Missing premium tier"
+        assert "Premium (e.g., anthropic claude-haiku-4-5-20251001)" in content, "Missing premium tier"
         assert "High-End (e.g., Claude 3.5 Sonnet)" in content, "Missing high-end tier"
 
         print("✅ All enhanced stats sections present in unified report!")

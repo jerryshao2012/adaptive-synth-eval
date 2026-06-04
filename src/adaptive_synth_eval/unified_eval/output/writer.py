@@ -52,6 +52,8 @@ class UnifiedArtifactWriter(ArtifactWriter):
             f"  - Adversarial turns: {summary.get('adversarial_turns', 0)}",
             f"- Errors: {summary.get('errors', 0)}",
             f"- Dry run: {summary.get('dry_run', False)}",
+            f"- Configured max concurrency: {summary.get('configured_max_concurrency')}",
+            f"- Effective max concurrency: {summary.get('effective_max_concurrency')}",
             f"- Elapsed seconds: {summary.get('elapsed_seconds')}",
             "",
         ]
