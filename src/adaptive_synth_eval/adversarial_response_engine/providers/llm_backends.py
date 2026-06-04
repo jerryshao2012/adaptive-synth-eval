@@ -275,14 +275,10 @@ def make_bedrock_backend(
         max_tokens: int = 1024,
 ) -> LLMCallFn:
     """
-    AWS Bedrock backend using Claude via boto3 (native Bedrock API).
+    AWS Bedrock backend supporting multiple model providers (Anthropic, Amazon).
 
     Credentials are resolved by boto3 in the standard order:
     env vars (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), ~/.aws/credentials, or IAM role.
-
-    Required env vars / config:
-        AWS_DEFAULT_REGION   (or pass region= explicitly)
-        AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY  (or use IAM role)
     """
     try:
         import boto3
@@ -290,15 +286,39 @@ def make_bedrock_backend(
         raise ImportError("Install boto3: pip install boto3") from e
 
     client = boto3.client("bedrock-runtime", region_name=region)
+    provider = model.split(".")[0]
 
     def call(system: str, user: str) -> Dict[str, Any]:
         import json as _json
-        body = _json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        })
+
+        is_nova = "nova" in model
+
+        if provider == "anthropic":
+            body = _json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens_to_sample": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            })
+        elif provider == "amazon":
+            if is_nova:
+                body = _json.dumps({
+                    "system": [{"text": system}],
+                    "messages": [{"role": "user", "content": [{"text": user}]}],
+                    "inferenceConfig": {"max_new_tokens": max_tokens},
+                })
+            else:
+                # Combine system and user prompts for Amazon Titan
+                prompt = f"{system}\n\n{user}"
+                body = _json.dumps({
+                    "inputText": prompt,
+                    "textGenerationConfig": {
+                        "maxTokenCount": max_tokens,
+                    },
+                })
+        else:
+            raise ValueError(f"Unsupported Bedrock provider for model '{model}'")
+
         response = client.invoke_model(
             modelId=model,
             body=body,
@@ -306,13 +326,35 @@ def make_bedrock_backend(
             accept="application/json",
         )
         result = _json.loads(response["body"].read())
-        return {
-            "content": result["content"][0]["text"],
-            "usage": {
-                "prompt_tokens": result["usage"]["input_tokens"],
-                "completion_tokens": result["usage"]["output_tokens"],
-            },
-        }
+
+        if provider == "anthropic":
+            return {
+                "content": result["content"][0]["text"],
+                "usage": {
+                    "prompt_tokens": result["usage"]["input_tokens"],
+                    "completion_tokens": result["usage"]["output_tokens"],
+                },
+            }
+        elif provider == "amazon":
+            if is_nova:
+                return {
+                    "content": result["output"]["message"]["content"][0]["text"],
+                    "usage": {
+                        "prompt_tokens": result["usage"]["inputTokens"],
+                        "completion_tokens": result["usage"]["outputTokens"],
+                    },
+                }
+            else:
+                return {
+                    "content": result["results"][0]["outputText"],
+                    "usage": {
+                        "prompt_tokens": result["inputTextTokenCount"],
+                        "completion_tokens": result["results"][0]["tokenCount"],
+                    },
+                }
+        else:
+            # Should be unreachable
+            raise ValueError(f"Unsupported Bedrock provider for model '{model}'")
 
     return call
 
