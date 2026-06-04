@@ -79,7 +79,7 @@ class UnifiedArtifactWriter(ArtifactWriter):
 
             def calc_cost(prompt_rate, completion_rate, multiplier):
                 cost_per_convo = (avg_prompt * prompt_rate / 1_000_000) + (avg_completion * completion_rate / 1_000_000)
-                return f"${cost_per_convo * multiplier:.4f}"
+                return f"${cost_per_convo * multiplier:.2f}"
 
             cost_lightweight_1k = calc_cost(0.15, 0.60, 1000)
             cost_lightweight_10k = calc_cost(0.15, 0.60, 10000)
@@ -114,7 +114,7 @@ class UnifiedArtifactWriter(ArtifactWriter):
             def calc_cb_cost(prompt_rate, completion_rate, multiplier):
                 cost_per_convo = (avg_cb_prompt * prompt_rate / 1_000_000) + (
                             avg_cb_completion * completion_rate / 1_000_000)
-                return f"${cost_per_convo * multiplier:.4f}"
+                return f"${cost_per_convo * multiplier:.2f}"
 
             cb_cost_lightweight_1k = calc_cb_cost(0.15, 0.60, 1000)
             cb_cost_lightweight_10k = calc_cb_cost(0.15, 0.60, 10000)
