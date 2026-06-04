@@ -109,7 +109,6 @@ async def run_unified_async(
         AttackMemory() if contract.eval_plan.attack_memory in {"shared"} else None
     )
     attack_memory_lock = asyncio.Lock()
-    persona_locks = {p.persona_id: asyncio.Lock() for p in contract.persona_pool}
 
     # Plan conversations.
     # - Cap mode (default): build a finite, weighted, deterministic plan list.
@@ -159,26 +158,24 @@ async def run_unified_async(
 
     async def _one(planned):
         async with semaphore:
-            persona_id = planned["persona_id"]
-            async with persona_locks[persona_id]:
-                return await run_conversation(
-                    entry=planned["entry"],
-                    persona=contract.persona_by_id()[planned["persona_id"]],
-                    synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
-                    adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
-                    contract=contract,
-                    llms=llms,
-                    target=target,
-                    writer=writer,
-                    rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
-                    token_budget=token_budget,
-                    attack_memory=attack_memory,
-                    attack_memory_lock=attack_memory_lock,
-                    turn_count=planned["turn_count"],
-                    realtime_chat=realtime_chat,
-                    realtime_controller=realtime_controller,
-                    meter=meter,
-                )
+            return await run_conversation(
+                entry=planned["entry"],
+                persona=contract.persona_by_id()[planned["persona_id"]],
+                synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
+                adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
+                contract=contract,
+                llms=llms,
+                target=target,
+                writer=writer,
+                rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
+                token_budget=token_budget,
+                attack_memory=attack_memory,
+                attack_memory_lock=attack_memory_lock,
+                turn_count=planned["turn_count"],
+                realtime_chat=realtime_chat,
+                realtime_controller=realtime_controller,
+                meter=meter,
+            )
 
     budget_stopped = False
     start_time = time.time()
@@ -483,6 +480,37 @@ def _persist_and_summarize(
         "avg_chatbot_total_tokens_per_convo": avg_chatbot_total_tokens_convo,
     }
 
+    target_latencies_ms = [
+        row.get("latency_ms")
+        for row in turn_rows
+        if isinstance(row.get("latency_ms"), (int, float))
+    ]
+    conversation_elapsed_seconds = [
+        row.get("elapsed_seconds")
+        for row in conv_rows
+        if isinstance(row.get("elapsed_seconds"), (int, float))
+    ]
+    conversation_target_seconds = [
+        row.get("target_latency_seconds")
+        for row in conv_rows
+        if isinstance(row.get("target_latency_seconds"), (int, float))
+    ]
+    performance_stats = {
+        "target_latency_total_seconds": round(sum(target_latencies_ms) / 1000, 2) if target_latencies_ms else 0.0,
+        "avg_target_latency_per_turn_seconds": round(sum(target_latencies_ms) / len(target_latencies_ms) / 1000, 2)
+        if target_latencies_ms else 0.0,
+        "max_target_latency_per_turn_seconds": round(max(target_latencies_ms) / 1000,
+                                                     2) if target_latencies_ms else 0.0,
+        "avg_conversation_elapsed_seconds": round(sum(conversation_elapsed_seconds) / len(conversation_elapsed_seconds),
+                                                  2)
+        if conversation_elapsed_seconds else 0.0,
+        "max_conversation_elapsed_seconds": round(max(conversation_elapsed_seconds), 2)
+        if conversation_elapsed_seconds else 0.0,
+        "avg_target_latency_per_conversation_seconds": round(
+            sum(conversation_target_seconds) / len(conversation_target_seconds), 2
+        ) if conversation_target_seconds else 0.0,
+    }
+
     # Scale Projections
     convo_count = len(results)
     rate = convo_count / elapsed_seconds if elapsed_seconds > 0 else 0.0
@@ -496,6 +524,15 @@ def _persist_and_summarize(
         "time_for_10k_conversations_seconds": time_10k,
         "time_for_100k_conversations_seconds": time_100k,
     }
+    avg_conversation_elapsed = performance_stats["avg_conversation_elapsed_seconds"]
+    if avg_conversation_elapsed > 0:
+        steady_rate = max(1, int(effective_max_concurrency)) / avg_conversation_elapsed
+        scale_projections.update({
+            "steady_state_conversations_per_second": round(steady_rate, 4),
+            "steady_state_time_for_1k_conversations_seconds": round(1000 / steady_rate, 2),
+            "steady_state_time_for_10k_conversations_seconds": round(10000 / steady_rate, 2),
+            "steady_state_time_for_100k_conversations_seconds": round(100000 / steady_rate, 2),
+        })
 
     summary = {
         "run_id": run_id,
@@ -517,6 +554,7 @@ def _persist_and_summarize(
         "mean_groundedness_score": mean_grounded,
         "budget": budget_summary,
         "tokens": tokens_stats,
+        "performance": performance_stats,
         "scale_projections": scale_projections,
     }
     writer.write_unified_summary(summary)

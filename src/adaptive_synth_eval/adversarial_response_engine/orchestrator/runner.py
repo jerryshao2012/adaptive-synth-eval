@@ -9,35 +9,35 @@ import time
 from dataclasses import asdict
 from typing import Any
 
+from unified_eval.providers.agentcore_target_client import AgentCoreTargetClient
+from unified_eval.providers.target_adapter import create_chatbot_client
+
 from adversarial_response_engine.core.models import AttackMemory
 from adversarial_response_engine.core.token_budget import TokenBudgetManager
-
 from unified_eval.config.contract import contract_to_dict
 from unified_eval.config.schemas import UnifiedContract
+from unified_eval.orchestrator.coin_flip import make_conversation_rng
 from unified_eval.orchestrator.conversation import (
     ConversationResult,
     run_conversation,
 )
-from unified_eval.orchestrator.coin_flip import make_conversation_rng
 from unified_eval.output.writer import UnifiedArtifactWriter
-from unified_eval.providers.agentcore_target_client import AgentCoreTargetClient
 from unified_eval.providers.budget_meter import BudgetMeter
 from unified_eval.providers.llm_factory import build_component_llms
 from unified_eval.providers.llm_target_client import LLMTargetClient
-from unified_eval.providers.target_adapter import create_chatbot_client
 
 
 def run_unified(
-    contract: UnifiedContract,
-    *,
-    dry_run: bool = False,
-    persona_filter: str | None = None,
-    scenario_filter: str | None = None,
-    adversarial_filter: str | None = None,
-    max_concurrency_override: int | None = None,
-    run_id_override: str | None = None,
-    realtime_chat: bool = False,
-    output_conversations: bool = False,
+        contract: UnifiedContract,
+        *,
+        dry_run: bool = False,
+        persona_filter: str | None = None,
+        scenario_filter: str | None = None,
+        adversarial_filter: str | None = None,
+        max_concurrency_override: int | None = None,
+        run_id_override: str | None = None,
+        realtime_chat: bool = False,
+        output_conversations: bool = False,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
     return asyncio.run(run_unified_async(
@@ -54,16 +54,16 @@ def run_unified(
 
 
 async def run_unified_async(
-    contract: UnifiedContract,
-    *,
-    dry_run: bool = False,
-    persona_filter: str | None = None,
-    scenario_filter: str | None = None,
-    adversarial_filter: str | None = None,
-    max_concurrency_override: int | None = None,
-    run_id_override: str | None = None,
-    realtime_chat: bool = False,
-    output_conversations: bool = False,
+        contract: UnifiedContract,
+        *,
+        dry_run: bool = False,
+        persona_filter: str | None = None,
+        scenario_filter: str | None = None,
+        adversarial_filter: str | None = None,
+        max_concurrency_override: int | None = None,
+        run_id_override: str | None = None,
+        realtime_chat: bool = False,
+        output_conversations: bool = False,
 ) -> dict[str, Any]:
     run_id = run_id_override or contract.output.run_id or f"unified_run_{int(time.time())}"
     writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
@@ -113,7 +113,6 @@ async def run_unified_async(
         AttackMemory() if contract.eval_plan.attack_memory in {"shared"} else None
     )
     attack_memory_lock = asyncio.Lock()
-    persona_locks = {p.persona_id: asyncio.Lock() for p in contract.persona_pool}
 
     # Plan conversations.
     # - Cap mode (default): build a finite, weighted, deterministic plan list.
@@ -121,8 +120,8 @@ async def run_unified_async(
     #   so weights are honored even when the budget runs out before the safety cap.
     # Auto-enable budget mode when the contract omits total_conversations.
     budget_mode = (
-        contract.run.until_budget_exhausted
-        or contract.eval_plan.total_conversations is None
+            contract.run.until_budget_exhausted
+            or contract.eval_plan.total_conversations is None
     )
     sequential = realtime_chat or budget_mode
     if budget_mode:
@@ -144,25 +143,23 @@ async def run_unified_async(
 
     async def _one(planned):
         async with semaphore:
-            persona_id = planned["persona_id"]
-            async with persona_locks[persona_id]:
-                return await run_conversation(
-                    entry=planned["entry"],
-                    persona=contract.persona_by_id()[planned["persona_id"]],
-                    synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
-                    adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
-                    contract=contract,
-                    llms=llms,
-                    target=target,
-                    writer=writer,
-                    rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
-                    token_budget=token_budget,
-                    attack_memory=attack_memory,
-                    attack_memory_lock=attack_memory_lock,
-                    turn_count=planned["turn_count"],
-                    realtime_chat=realtime_chat,
-                    meter=meter,
-                )
+            return await run_conversation(
+                entry=planned["entry"],
+                persona=contract.persona_by_id()[planned["persona_id"]],
+                synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
+                adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
+                contract=contract,
+                llms=llms,
+                target=target,
+                writer=writer,
+                rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
+                token_budget=token_budget,
+                attack_memory=attack_memory,
+                attack_memory_lock=attack_memory_lock,
+                turn_count=planned["turn_count"],
+                realtime_chat=realtime_chat,
+                meter=meter,
+            )
 
     budget_stopped = False
     try:
@@ -205,10 +202,10 @@ async def run_unified_async(
 # --------------------------------------------------------------------------- #
 
 def _lazy_weighted_plan(
-    contract: UnifiedContract,
-    persona_filter: str | None,
-    scenario_filter: str | None,
-    adversarial_filter: str | None,
+        contract: UnifiedContract,
+        persona_filter: str | None,
+        scenario_filter: str | None,
+        adversarial_filter: str | None,
 ):
     """Yield plan rows by per-iteration weighted draw.
 
@@ -245,12 +242,12 @@ def _lazy_weighted_plan(
 
 
 def _build_plan(
-    contract: UnifiedContract,
-    *,
-    persona_filter: str | None,
-    scenario_filter: str | None,
-    adversarial_filter: str | None,
-    unlimited: bool = False,
+        contract: UnifiedContract,
+        *,
+        persona_filter: str | None,
+        scenario_filter: str | None,
+        adversarial_filter: str | None,
+        unlimited: bool = False,
 ) -> list[dict[str, Any]]:
     entries = list(contract.eval_plan.entries)
     if persona_filter:
@@ -335,17 +332,17 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
 
 
 def _persist_and_summarize(
-    *,
-    contract: UnifiedContract,
-    writer: UnifiedArtifactWriter,
-    results: list[ConversationResult],
-    plan: list[dict[str, Any]],
-    run_id: str,
-    dry_run: bool,
-    attack_memory: AttackMemory | None,
-    output_conversations: bool = False,
-    meter: BudgetMeter | None = None,
-    budget_stopped: bool = False,
+        *,
+        contract: UnifiedContract,
+        writer: UnifiedArtifactWriter,
+        results: list[ConversationResult],
+        plan: list[dict[str, Any]],
+        run_id: str,
+        dry_run: bool,
+        attack_memory: AttackMemory | None,
+        output_conversations: bool = False,
+        meter: BudgetMeter | None = None,
+        budget_stopped: bool = False,
 ) -> dict[str, Any]:
     conv_rows = [r.conversation_row for r in results]
     chat_history = [rec for r in results for rec in r.chat_history]
@@ -364,7 +361,7 @@ def _persist_and_summarize(
     )
     near_misses = sum(
         1 for row in turn_rows if row.get("turn_type") == "adversarial" and (
-            row.get("failure_score") and 0 < row["failure_score"] < contract.scoring.adversarial_failure_threshold
+                row.get("failure_score") and 0 < row["failure_score"] < contract.scoring.adversarial_failure_threshold
         )
     )
 

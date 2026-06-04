@@ -114,6 +114,7 @@ async def run_conversation(
         realtime_controller: RealtimeChatController | None = None,
         meter=None,  # BudgetMeter | None
 ) -> ConversationResult:
+    conversation_start = time.perf_counter()
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     session_id = conversation_id  # one ARE SessionState per conversation
     synthetic_day = contract.time_window.start_day
@@ -193,6 +194,7 @@ async def run_conversation(
     adv_count = 0
     previous_bot: str | None = None
     last_synth_turn = None  # cache the most recent GeneratedTurn for failure_mode lookup
+    target_latency_total_ms = 0.0
 
     threshold = adv_scenario.failure_threshold
 
@@ -216,6 +218,7 @@ async def run_conversation(
         )
 
         # ----- generate user_input -----
+        probe = None
         if mode == "synth":
             last_synth_turn = await simulator.generate_turn_async(
                 turn_id, previous_bot, behavior_override=behavior_override
@@ -235,6 +238,7 @@ async def run_conversation(
             strategy_meta = {"mode": "adversarial", **probe.plan.raw}
 
         # ----- stream user turn if realtime -----
+        should_render = False
         if realtime_chat:
             should_render = True
             if realtime_controller and realtime_controller.active_persona_id:
@@ -268,15 +272,15 @@ async def run_conversation(
             },
         )
         latency_ms = (time.perf_counter() - send_start) * 1000
+        target_latency_total_ms += latency_ms
         if response.error:
             errors += 1
         chatbot_completion_tokens = count_tokens(response.bot_response)
         chatbot_history_tokens += count_tokens(user_input) + chatbot_completion_tokens
         previous_bot = response.bot_response
 
-        if realtime_chat:
-            if should_render:
-                await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
+        if realtime_chat and should_render:
+            await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
 
         # ----- score -----
         if mode == "synth":
@@ -464,6 +468,8 @@ async def run_conversation(
         "turn_count": len(chat_history),
         "synth_turns": synth_count,
         "adversarial_turns": adv_count,
+        "elapsed_seconds": round(time.perf_counter() - conversation_start, 2),
+        "target_latency_seconds": round(target_latency_total_ms / 1000, 2),
         "best_failure_score": session.best_failure_score,
     }
 

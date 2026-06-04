@@ -72,6 +72,31 @@ class UnifiedArtifactWriter(ArtifactWriter):
                 f"| 100,000 conversations | {_format_duration(scale.get('time_for_100k_conversations_seconds', 0.0))} |",
                 "",
             ])
+            if scale.get("steady_state_conversations_per_second"):
+                lines.extend([
+                    "### Steady-State Projection",
+                    f"- **Estimated conversations per second at configured concurrency**: {scale.get('steady_state_conversations_per_second')}",
+                    "",
+                    "| Projected Volume | Estimated Time |",
+                    "| :--- | :--- |",
+                    f"| 1,000 conversations | {_format_duration(scale.get('steady_state_time_for_1k_conversations_seconds', 0.0))} |",
+                    f"| 10,000 conversations (Month at scale) | {_format_duration(scale.get('steady_state_time_for_10k_conversations_seconds', 0.0))} |",
+                    f"| 100,000 conversations | {_format_duration(scale.get('steady_state_time_for_100k_conversations_seconds', 0.0))} |",
+                    "",
+                ])
+
+        performance = summary.get("performance", {})
+        if performance:
+            lines.extend([
+                "## Runtime Performance",
+                f"- Target latency total: {_format_duration(performance.get('target_latency_total_seconds', 0.0))}",
+                f"- Avg target latency per turn: {_format_duration(performance.get('avg_target_latency_per_turn_seconds', 0.0))}",
+                f"- Max target latency per turn: {_format_duration(performance.get('max_target_latency_per_turn_seconds', 0.0))}",
+                f"- Avg conversation elapsed: {_format_duration(performance.get('avg_conversation_elapsed_seconds', 0.0))}",
+                f"- Max conversation elapsed: {_format_duration(performance.get('max_conversation_elapsed_seconds', 0.0))}",
+                f"- Avg target latency per conversation: {_format_duration(performance.get('avg_target_latency_per_conversation_seconds', 0.0))}",
+                "",
+            ])
 
         # Token & Cost Projections
         tokens = summary.get("tokens", {})
@@ -115,7 +140,7 @@ class UnifiedArtifactWriter(ArtifactWriter):
 
             def calc_cb_cost(prompt_rate, completion_rate, multiplier):
                 cost_per_convo = (avg_cb_prompt * prompt_rate / 1_000_000) + (
-                            avg_cb_completion * completion_rate / 1_000_000)
+                        avg_cb_completion * completion_rate / 1_000_000)
                 return f"${cost_per_convo * multiplier:.2f}"
 
             cb_cost_lightweight_1k = calc_cb_cost(0.20, 0.40, 1000)

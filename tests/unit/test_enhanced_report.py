@@ -33,6 +33,18 @@ def test_unified_report_with_enhanced_stats():
                 "time_for_1k_conversations_seconds": 4545.45,
                 "time_for_10k_conversations_seconds": 45454.55,
                 "time_for_100k_conversations_seconds": 454545.45,
+                "steady_state_conversations_per_second": 0.5,
+                "steady_state_time_for_1k_conversations_seconds": 2000.0,
+                "steady_state_time_for_10k_conversations_seconds": 20000.0,
+                "steady_state_time_for_100k_conversations_seconds": 200000.0,
+            },
+            "performance": {
+                "target_latency_total_seconds": 120.0,
+                "avg_target_latency_per_turn_seconds": 2.4,
+                "max_target_latency_per_turn_seconds": 8.0,
+                "avg_conversation_elapsed_seconds": 10.0,
+                "max_conversation_elapsed_seconds": 14.0,
+                "avg_target_latency_per_conversation_seconds": 12.0,
             },
             "tokens": {
                 "simulator_prompt_tokens": 50000,
@@ -66,6 +78,9 @@ def test_unified_report_with_enhanced_stats():
         assert "1,000 conversations" in content, "Missing 1K projection"
         assert "10,000 conversations (Month at scale)" in content, "Missing 10K projection"
         assert "100,000 conversations" in content, "Missing 100K projection"
+        assert "### Steady-State Projection" in content, "Missing steady-state projection"
+        assert "## Runtime Performance" in content, "Missing runtime performance section"
+        assert "Avg target latency per turn" in content, "Missing target latency metric"
 
         assert "## Simulator Token Usage & Estimated Cost" in content, "Missing token usage section"
         assert "## Chatbot Token Usage & Estimated Cost" in content, "Missing chatbot token usage section"

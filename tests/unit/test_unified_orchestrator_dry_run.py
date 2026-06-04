@@ -4,6 +4,7 @@ to the adversarial planner.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -92,7 +93,16 @@ def test_unified_persona_filter_raises_for_unknown_persona(tmp_path: Path):
         )
 
 
+def test_effective_concurrency_reports_requested_value(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=16))
+
+    summary = run_unified(contract, dry_run=True, run_id_override="orchestrator_concurrency")
+
+    assert summary["configured_max_concurrency"] == 16
+    assert summary["effective_max_concurrency"] == 16
+
+
 def _with_output_dir(contract, base_dir: Path):
-    from dataclasses import replace
     from adaptive_synth_eval.unified_eval.config.schemas import OutputConfig
     return replace(contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id))
