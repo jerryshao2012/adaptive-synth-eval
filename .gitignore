@@ -9,3 +9,4 @@ contracts/examples/outputs/
 adaptive_synth_eval.egg-info/
 .env
 .worktrees/
+.claude/
