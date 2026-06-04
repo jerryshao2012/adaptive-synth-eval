@@ -7,11 +7,10 @@ from ..core.token_budget import TokenBudgetManager
 # Pricing per million tokens (prompt, completion) for known models.
 # Matched by substring so "claude-haiku-4-5-20251001" hits "claude-haiku-4-5".
 _PRICING: Dict[str, Tuple[float, float]] = {
-    "claude-haiku-4-5": (0.80, 4.00),
+    "claude-haiku-4-5": (1.00, 5.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-7": (15.00, 75.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4o": (2.50, 10.00),
+    "nova-micro-v1:0": (0.20, 0.40),
 }
 
 

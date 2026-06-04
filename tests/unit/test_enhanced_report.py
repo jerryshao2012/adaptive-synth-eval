@@ -69,8 +69,8 @@ def test_unified_report_with_enhanced_stats():
         assert "**Total Run Usage**" in content, "Missing total run usage"
         assert "**Average per Convo**" in content, "Missing average per convo"
         assert "### Cost Extrapolations (USD)" in content, "Missing cost extrapolations"
-        assert "Lightweight (e.g., GPT-4o-mini)" in content, "Missing lightweight tier"
-        assert "Premium (e.g., GPT-4o)" in content, "Missing premium tier"
+        assert "Lightweight (e.g., nova-micro-v1:0)" in content, "Missing lightweight tier"
+        assert "Premium (e.g., Claude Haiku 4.5)" in content, "Missing premium tier"
         assert "High-End (e.g., Claude 3.5 Sonnet)" in content, "Missing high-end tier"
 
         print("✅ All enhanced stats sections present in unified report!")

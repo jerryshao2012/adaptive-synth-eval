@@ -80,10 +80,10 @@ class ArtifactWriter:
                 cost_per_convo = (avg_prompt * prompt_rate / 1_000_000) + (avg_completion * completion_rate / 1_000_000)
                 return f"${cost_per_convo * multiplier:.2f}"
 
-            cost_lightweight_1k = calc_cost(0.15, 0.60, 1000)
-            cost_lightweight_10k = calc_cost(0.15, 0.60, 10000)
-            cost_premium_1k = calc_cost(2.50, 10.00, 1000)
-            cost_premium_10k = calc_cost(2.50, 10.00, 10000)
+            cost_lightweight_1k = calc_cost(0.20, 0.40, 1000)
+            cost_lightweight_10k = calc_cost(0.20, 0.40, 10000)
+            cost_premium_1k = calc_cost(1.00, 5.00, 1000)
+            cost_premium_10k = calc_cost(1.00, 5.00, 10000)
             cost_highend_1k = calc_cost(3.00, 15.00, 1000)
             cost_highend_10k = calc_cost(3.00, 15.00, 10000)
 
@@ -100,8 +100,8 @@ class ArtifactWriter:
                 "",
                 "| Model Pricing Tier | Cost per 1K Convos | Cost per 10K Convos (Month) |",
                 "| :--- | :--- | :--- |",
-                f"| **Lightweight (e.g., GPT-4o-mini)**<br>*(Input: $0.15/1M, Output: $0.60/1M)* | {cost_lightweight_1k} | {cost_lightweight_10k} |",
-                f"| **Premium (e.g., GPT-4o)**<br>*(Input: $2.50/1M, Output: $10.00/1M)* | {cost_premium_1k} | {cost_premium_10k} |",
+                f"| **Lightweight (e.g., nova-micro-v1:0)**<br>*(Input: $0.20/1M, Output: $0.40/1M)* | {cost_lightweight_1k} | {cost_lightweight_10k} |",
+                f"| **Premium (e.g., Claude Haiku 4.5)**<br>*(Input: $1.00/1M, Output: $5.00/1M)* | {cost_premium_1k} | {cost_premium_10k} |",
                 f"| **High-End (e.g., Claude 3.5 Sonnet)**<br>*(Input: $3.00/1M, Output: $15.00/1M)* | {cost_highend_1k} | {cost_highend_10k} |",
                 "",
             ])
@@ -115,10 +115,10 @@ class ArtifactWriter:
                             avg_cb_completion * completion_rate / 1_000_000)
                 return f"${cost_per_convo * multiplier:.2f}"
 
-            cb_cost_lightweight_1k = calc_cb_cost(0.15, 0.60, 1000)
-            cb_cost_lightweight_10k = calc_cb_cost(0.15, 0.60, 10000)
-            cb_cost_premium_1k = calc_cb_cost(2.50, 10.00, 1000)
-            cb_cost_premium_10k = calc_cb_cost(2.50, 10.00, 10000)
+            cb_cost_lightweight_1k = calc_cb_cost(0.20, 0.40, 1000)
+            cb_cost_lightweight_10k = calc_cb_cost(0.20, 0.40, 10000)
+            cb_cost_premium_1k = calc_cb_cost(1.00, 5.00, 1000)
+            cb_cost_premium_10k = calc_cb_cost(1.00, 5.00, 10000)
             cb_cost_highend_1k = calc_cb_cost(3.00, 15.00, 1000)
             cb_cost_highend_10k = calc_cb_cost(3.00, 15.00, 10000)
 
@@ -135,8 +135,8 @@ class ArtifactWriter:
                 "",
                 "| Model Pricing Tier | Cost per 1K Convos | Cost per 10K Convos (Month) |",
                 "| :--- | :--- | :--- |",
-                f"| **Lightweight (e.g., GPT-4o-mini)**<br>*(Input: $0.15/1M, Output: $0.60/1M)* | {cb_cost_lightweight_1k} | {cb_cost_lightweight_10k} |",
-                f"| **Premium (e.g., GPT-4o)**<br>*(Input: $2.50/1M, Output: $10.00/1M)* | {cb_cost_premium_1k} | {cb_cost_premium_10k} |",
+                f"| **Lightweight (e.g., nova-micro-v1:0)**<br>*(Input: $0.20/1M, Output: $0.40/1M)* | {cb_cost_lightweight_1k} | {cb_cost_lightweight_10k} |",
+                f"| **Premium (e.g., Claude Haiku 4.5)**<br>*(Input: $1.00/1M, Output: $5.00/1M)* | {cb_cost_premium_1k} | {cb_cost_premium_10k} |",
                 f"| **High-End (e.g., Claude 3.5 Sonnet)**<br>*(Input: $3.00/1M, Output: $15.00/1M)* | {cb_cost_highend_1k} | {cb_cost_highend_10k} |",
                 "",
             ])

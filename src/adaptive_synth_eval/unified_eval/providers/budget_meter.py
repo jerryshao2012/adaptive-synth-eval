@@ -15,13 +15,11 @@ from adaptive_synth_eval.adversarial_response_engine.core.token_budget import To
 # provider's current pricing before publishing cost claims externally.)
 _DEFAULT_PRICING_PER_1M_TOKENS: dict[str, dict[str, float]] = {
     # Anthropic Claude
-    "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
     "claude-opus-4-7": {"input": 15.00, "output": 75.00},
-    # OpenAI
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gpt-4o": {"input": 2.50, "output": 10.00},
+    # Amazon Nova
+    "nova-micro-v1:0": {"input": 0.20, "output": 0.40},
     # Mock = free
     "mock": {"input": 0.0, "output": 0.0},
 }
@@ -29,7 +27,11 @@ _DEFAULT_PRICING_PER_1M_TOKENS: dict[str, dict[str, float]] = {
 
 def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     """Best-effort USD estimate. Unknown models return 0.0 with no error."""
-    rates = _DEFAULT_PRICING_PER_1M_TOKENS.get(model)
+    rates = None
+    for key, val in _DEFAULT_PRICING_PER_1M_TOKENS.items():
+        if key in model:
+            rates = val
+            break
     if rates is None:
         return 0.0
     return (

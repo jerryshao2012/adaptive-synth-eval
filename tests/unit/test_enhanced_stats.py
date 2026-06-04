@@ -92,7 +92,7 @@ def test_write_generation_report_with_enhanced_stats(tmp_path):
     assert "## Chatbot Token Usage & Estimated Cost" in report_content
     assert "### Chatbot Cost Extrapolations (USD)" in report_content
     assert "## Production Realism Analysis" in report_content
-    assert "Lightweight (e.g., GPT-4o-mini)" in report_content
+    assert "Lightweight (e.g., nova-micro-v1:0)" in report_content
     assert "P001 + S001" in report_content
     assert "P001" in report_content
     assert "S001" in report_content
