@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 
-from adaptive_synth_eval.unified_eval.config.schemas import Schedule
+from unified_eval.config.schemas import Schedule
 
 
 def plan_turn_modes(schedule: Schedule, turn_count: int, rng: random.Random) -> list[str]:
@@ -27,19 +27,6 @@ def plan_turn_modes(schedule: Schedule, turn_count: int, rng: random.Random) -> 
     if mode == "phased":
         warmup = max(0, min(schedule.warmup_turns, turn_count))
         return ["synth"] * warmup + ["adversarial"] * (turn_count - warmup)
-
-    if mode == "ramp":
-        # Gradual hand-off: `warmup_turns` pure synth, then P(adversarial) climbs
-        # linearly from ~0 to ~1 across the remaining turns — early turns stay mostly
-        # legit (refreshing grounding), pressure builds toward the end. Deterministic
-        # given the seeded rng.
-        warmup = max(0, min(schedule.warmup_turns, turn_count))
-        modes = ["synth"] * warmup
-        remaining = turn_count - warmup
-        for i in range(remaining):
-            p_adversarial = (i + 1) / (remaining + 1)
-            modes.append("adversarial" if rng.random() < p_adversarial else "synth")
-        return modes
 
     if mode == "min_each":
         min_s = max(0, schedule.min_synth)

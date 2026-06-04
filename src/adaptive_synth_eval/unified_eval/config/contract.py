@@ -322,9 +322,9 @@ def _parse_entry(payload: dict[str, Any], warnings: list[str]) -> EvalPlanEntry:
 
 def _parse_schedule(payload: dict[str, Any]) -> Schedule:
     mode = str(payload.get("mode", "bernoulli"))
-    if mode not in {"bernoulli", "phased", "min_each"}:
+    if mode not in {"bernoulli", "phased", "min_each", "ramp"}:
         raise ContractError(
-            f"schedule.mode must be one of bernoulli|phased|min_each, got {mode!r}"
+            f"schedule.mode must be one of bernoulli|phased|min_each|ramp, got {mode!r}"
         )
     p_synth = float(payload.get("p_synth", 0.3))
     if not 0.0 <= p_synth <= 1.0:

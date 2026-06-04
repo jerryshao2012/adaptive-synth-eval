@@ -16,6 +16,40 @@ logger = setup_logger(__name__)
 _MIN_RUNTIME_SESSION_ID_LEN = 33
 
 
+def _join_sse(raw: str) -> str:
+    """Concatenate the text deltas of a text/event-stream response.
+
+    Each `data:` line is usually a JSON-encoded string fragment (e.g. data: "Hello "),
+    so decode each chunk before joining — concatenating the raw lines would leave the
+    surrounding quotes in place and garble word boundaries.
+    """
+    parts: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[len("data:"):].strip()
+        if not chunk or chunk == "[DONE]":
+            continue
+        try:
+            decoded = json.loads(chunk)
+        except (json.JSONDecodeError, ValueError):
+            parts.append(chunk)          # not JSON — take the literal payload
+            continue
+        if isinstance(decoded, str):
+            parts.append(decoded)
+        elif isinstance(decoded, dict):  # structured event — best-effort text delta
+            text = next(
+                (decoded[k] for k in ("text", "delta", "content", "output", "response", "answer")
+                 if isinstance(decoded.get(k), str)),
+                None,
+            )
+            parts.append(text if text is not None else json.dumps(decoded))
+        else:
+            parts.append(str(decoded))
+    return "".join(parts)
+
+
 class AgentCoreChatbotClient:
     def __init__(
             self,
@@ -120,11 +154,17 @@ class AgentCoreChatbotClient:
         response = client.invoke_agent_runtime(**request)
         latency_ms = (time.perf_counter() - start) * 1000
 
+        content_type = (response.get("contentType") or "").lower()
         raw_stream = response["response"].read()
         if isinstance(raw_stream, bytes):
             raw_text = raw_stream.decode("utf-8")
         else:
             raw_text = str(raw_stream)
+
+        # AgentCore runtimes that stream reply as text/event-stream: stitch the
+        # `data:` chunks into one string instead of leaking raw SSE lines.
+        if "text/event-stream" in content_type or raw_text.lstrip().startswith("data:"):
+            raw_text = _join_sse(raw_text)
 
         body: dict[str, Any]
         try:
@@ -160,6 +200,16 @@ class AgentCoreChatbotClient:
 
         if not self.agent_runtime_arn:
             error = "AgentCore runtime ARN is not configured"
+            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
+
+        arn = self.agent_runtime_arn
+        if "${" in arn or not arn.startswith("arn:aws:bedrock-agentcore:") or ":runtime/" not in arn:
+            error = (
+                f"target.agentcore.agent_runtime_arn is not a full AgentCore runtime ARN: {arn!r}. "
+                "Expected arn:aws:bedrock-agentcore:<region>:<account-id>:runtime/<runtime-id>. "
+                "A bare id/name is treated as agentId by InvokeAgentRuntime and fails. "
+                "Export the env var so it resolves to the deployed runtime ARN."
+            )
             return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
 
         try:

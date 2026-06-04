@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync *)",
+      "Bash(WEALTH_ADVISORY_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:123:runtime/wealth-agent uv run python -c ' *)"
+    ]
+  }
+}

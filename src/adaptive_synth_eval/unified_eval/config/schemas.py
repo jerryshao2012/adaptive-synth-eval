@@ -108,10 +108,13 @@ class Schedule:
                      Use for realistic "establish context then attack" patterns.
       - "min_each":  guarantee at least `min_synth` synth and `min_adversarial`
                      adversarial turns, then fill the rest by Bernoulli at p_synth.
+      - "ramp":      first `warmup_turns` are synth, then P(adversarial) climbs
+                     linearly to 1 across the remaining turns — a gradual hand-off
+                     from legitimate context-building to sustained adversarial pressure.
     """
     mode: str = "bernoulli"
     p_synth: float = 0.3  # used by bernoulli and min_each (default leans adversarial)
-    warmup_turns: int = 2  # used by phased
+    warmup_turns: int = 2  # used by phased and ramp
     min_synth: int = 0  # used by min_each
     min_adversarial: int = 0  # used by min_each
 

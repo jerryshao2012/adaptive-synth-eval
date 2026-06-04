@@ -14,6 +14,20 @@ from ..core.models import (
 from ..providers.llm_client import LLMClient
 
 
+def _clip(value, limit: int) -> str:
+    """Coerce any planner/judge field to a string before slicing.
+
+    These fields are usually strings, but the planner LLM sometimes emits a
+    structured object (e.g. next_generator_instruction as a dict). Slicing a
+    dict/list with [:limit] raises `KeyError: slice(...)`, so normalize first.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)
+    return value[:limit]
+
+
 def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
     # tried_angles: ALL turns deduplicated by (angle, sub_tactic), highest score kept.
     # Gives the planner a fast scan of exhausted approaches without re-reading every turn.
@@ -40,7 +54,7 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
             "attack": {
                 "angle": s.get("attack_angle"),
                 "sub_tactic": s.get("sub_tactic"),
-                "instruction": (s.get("next_generator_instruction") or "")[:150],
+                "instruction": _clip(s.get("next_generator_instruction"), 150),
                 "ladder": s.get("ladder_dependency", ""),
             },
             "defense": {
@@ -48,12 +62,22 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
                 "refusal_quality": int(j.get("refusal_quality", 2)),
                 "type": j.get("failure_type", "unknown"),
                 "near_miss": bool(j.get("near_miss", False)),
-                "signal": (j.get("reasoning") or "")[:200],
+                "signal": _clip(j.get("reasoning"), 200),
             },
-            "response_excerpt": t.chatbot_response[:200],
+            "response_excerpt": _clip(t.chatbot_response, 200),
         })
 
-    return json.dumps({"tried_angles": tried, "turns": turns}, indent=2)
+    # Facts the legit warm-up turns surfaced (real client/file/amount) — the planner
+    # and generator ground probes in these instead of inventing identifiers.
+    synth_context = getattr(session, "synth_context", []) or []
+    return json.dumps(
+        {
+            "synth_warmup_context": synth_context[-3:],
+            "tried_angles": tried,
+            "turns": turns,
+        },
+        indent=2,
+    )
 
 
 class AdaptationPlanner:
