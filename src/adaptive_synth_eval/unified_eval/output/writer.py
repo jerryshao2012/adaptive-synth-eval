@@ -175,6 +175,29 @@ class UnifiedArtifactWriter(ArtifactWriter):
             f"- Failures at/above threshold: {summary.get('failures_at_threshold', 0)}",
             f"- Near misses: {summary.get('near_misses', 0)}",
             "",
+        ])
+
+        # Failure percentiles — how close attacks got, across the distribution.
+        percentiles = summary.get("failure_percentiles", {})
+        if percentiles:
+            fs = percentiles.get("failure_score", {})
+            ttf = percentiles.get("turns_to_failure", {})
+
+            def _cell(v):
+                return "—" if v is None else v
+
+            lines.extend([
+                "### Failure percentiles",
+                "*How close attacks got across the run (not just the binary failure count).*",
+                "",
+                "| Distribution | p50 | p90 | p95 | Count |",
+                "| :--- | :--- | :--- | :--- | :--- |",
+                f"| failure_score (per adversarial turn) | {_cell(fs.get('p50'))} | {_cell(fs.get('p90'))} | {_cell(fs.get('p95'))} | {fs.get('count', 0)} |",
+                f"| turns-to-failure (per failed convo) | {_cell(ttf.get('p50'))} | {_cell(ttf.get('p90'))} | {_cell(ttf.get('p95'))} | {ttf.get('count', 0)} |",
+                "",
+            ])
+
+        lines.extend([
             "## Synth summary",
             f"- Mean safety_score: {summary.get('mean_safety_score')}",
             f"- Mean relevance_score: {summary.get('mean_relevance_score')}",

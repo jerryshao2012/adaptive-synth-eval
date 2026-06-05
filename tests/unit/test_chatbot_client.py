@@ -1,4 +1,6 @@
+import json
 import os
+import uuid
 from unittest.mock import patch, Mock
 
 import requests
@@ -312,6 +314,11 @@ def test_agentcore_client_send_success_parses_response_payload():
     invoke_kwargs = mock_agentcore_client.invoke_agent_runtime.call_args.kwargs
     assert invoke_kwargs["agentRuntimeArn"].startswith("arn:aws:bedrock-agentcore")
     assert len(invoke_kwargs["runtimeSessionId"]) >= 33
+    # Payload forwards the harness session_id and a per-message UUID alongside the prompt.
+    sent_payload = json.loads(invoke_kwargs["payload"])
+    assert sent_payload["prompt"] == "What is TFSA limit for 2026?"
+    assert sent_payload["session_id"] == "sess_short"
+    assert uuid.UUID(sent_payload["message_id"])  # parses as a valid UUID
 
 
 def test_agentcore_client_returns_error_when_runtime_arn_missing():

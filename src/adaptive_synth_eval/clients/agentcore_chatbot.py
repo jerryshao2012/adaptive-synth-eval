@@ -142,11 +142,19 @@ class AgentCoreChatbotClient:
             *,
             conversation_id: str,
             session_id: str,
+            message_id: str,
             user_message: str,
     ) -> tuple[dict[str, Any], int, float]:
         client = self._get_client()
         runtime_session_id = self._runtime_session_id_for(conversation_id, session_id)
-        payload = json.dumps({self.payload_prompt_key: user_message})
+        # Forward the harness session_id and a per-message UUID alongside the prompt
+        # so the TFSA agent can correlate turns; runtimeSessionId remains AgentCore's
+        # own opaque session handle.
+        payload = json.dumps({
+            self.payload_prompt_key: user_message,
+            "session_id": session_id,
+            "message_id": message_id,
+        })
 
         request: dict[str, Any] = {
             "agentRuntimeArn": self.agent_runtime_arn,
@@ -218,10 +226,13 @@ class AgentCoreChatbotClient:
             )
             return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
 
+        # One message_id per logical message; reused across retries of this send().
+        message_id = str(uuid.uuid4())
         try:
             body, status_code, latency_ms = self._invoke_with_retry(
                 conversation_id=conversation_id,
                 session_id=session_id,
+                message_id=message_id,
                 user_message=user_message,
             )
             error = None if 200 <= status_code < 300 else f"HTTP {status_code}"
