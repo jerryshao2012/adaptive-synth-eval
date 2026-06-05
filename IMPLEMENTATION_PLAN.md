@@ -84,7 +84,7 @@ adaptive-synth-eval/
     integration/
   contracts/
     examples/
-      one_week_chat_history.yaml
+      tfsa_one_week_traffic.yaml
       ten_k_conversations.yaml
   outputs/
     .gitkeep
@@ -99,8 +99,8 @@ The CLI must accept JSON or YAML contracts as the single source of truth.
 Example commands:
 
 ```bash
-uv run adaptive-synth-eval validate-contract contracts/examples/one_week_chat_history.yaml
-uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml
+uv run adaptive-synth-eval validate-contract contracts/examples/tfsa_one_week_traffic.yaml
+uv run adaptive-synth-eval run --contract contracts/examples/tfsa_one_week_traffic.yaml
 uv run adaptive-synth-eval run --contract contracts/examples/ten_k_conversations.yaml
 uv run adaptive-synth-eval summarize --run-id <run_id>
 ```
@@ -108,7 +108,7 @@ uv run adaptive-synth-eval summarize --run-id <run_id>
 The CLI should also support dry-run generation without calling the chatbot:
 
 ```bash
-uv run adaptive-synth-eval run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+uv run adaptive-synth-eval run --contract contracts/examples/tfsa_one_week_traffic.yaml --dry-run
 ```
 
 Dry-run mode should generate planned conversations and user turns, mark chatbot responses as omitted or mocked, and still write run artifacts for review.
@@ -397,7 +397,7 @@ Do not require:
 
 - Create: `src/adaptive_synth_eval/config/schemas.py`
 - Create: `src/adaptive_synth_eval/config/contract.py`
-- Create: `contracts/examples/one_week_chat_history.yaml`
+- Create: `contracts/examples/tfsa_one_week_traffic.yaml`
 - Create: `contracts/examples/ten_k_conversations.yaml`
 - Create: `tests/unit/test_contract.py`
 

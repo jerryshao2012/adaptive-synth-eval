@@ -7,7 +7,7 @@ For convenience, you can use the shorthand command `ase` instead of the full `ad
 ### Running with uv
 Prefix commands with `uv run ase`:
 ```bash
-uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
+uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
 ```
 
 ### Running Globally (No `uv run` prefix)
@@ -17,7 +17,7 @@ uv tool install --editable .
 ```
 Then, you can run commands directly:
 ```bash
-ase validate-contract contracts/examples/one_week_chat_history.yaml
+ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
 ```
 
 ---
@@ -27,7 +27,7 @@ ase validate-contract contracts/examples/one_week_chat_history.yaml
 ### Validating a Contract
 Validate a contract to ensure it matches the schema and is configurationally sound:
 ```bash
-uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
+uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
 ```
 
 ### Running Simulations
@@ -36,7 +36,7 @@ The `run` command executes simulation sessions based on a contract.
 #### Dry-Run Execution
 Generate one week of dry-run `ChatHistory`:
 ```bash
-uv run ase run --contract contracts/examples/one_week_chat_history.yaml --dry-run
+uv run ase run --contract contracts/examples/tfsa_one_week_traffic.yaml --dry-run
 ```
 
 Generate a 10,000-conversation dataset:
@@ -168,11 +168,9 @@ If `uv run` fails on Windows OneDrive paths with a hardlink error (such as `os e
 ```powershell
 $env:UV_LINK_MODE='copy'
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realtime-chat
-
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
 ```
+
+For specific unified evaluation execution examples (including running specific personas), see the usage comments at the top of individual contract files like `contracts/examples/unified_evaluation_demo.yaml`.
 
 ---
 
@@ -202,30 +200,11 @@ uv pip install -e .
 ```
 Installs the `adaptive-synth-eval` package in editable mode, allowing you to make code changes without reinstalling.
 
-### Step 5: Run TFSA Evaluation (Batch Mode)
-```powershell
-uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml 
-```
-Executes the TFSA (Tax-Free Savings Account) evaluation contract against AWS Bedrock AgentCore in batch mode. All conversations are generated first, then evaluated.
+### Step 5: Execute TFSA Evaluation Contracts
 
-### Step 6: Run TFSA Evaluation with Real-time Chat
-```powershell
-uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat
-```
-Runs the evaluation with real-time chat display, showing conversations as they happen in the terminal.
-
-### Step 7: Run Specific Persona Evaluations
-```powershell
-# Novice user persona
-uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P1_NOVICE
-
-# Experienced investor persona
-uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P2_INVESTOR
-
-# Financial contractor persona
-uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --realtime-chat --persona TFSA_P3_CONTRACTOR
-```
-Executes evaluations for specific personas only. Useful for targeted testing or debugging individual persona behaviors.
+For full execution examples (including running in batch mode, real-time chat mode, or targeting specific personas), refer to the usage comments documented at the top of the specific TFSA contract files:
+- [tfsa_aws_unified_evaluation_no_reasoning.yaml](../contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml)
+- [tfsa_aws_unified_evaluation_reasoning.yaml](../contracts/examples/tfsa_aws_unified_evaluation_reasoning.yaml)
 
 ---
 

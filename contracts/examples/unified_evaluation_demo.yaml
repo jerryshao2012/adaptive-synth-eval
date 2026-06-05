@@ -7,6 +7,9 @@
 # Usage:
 #   uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
 #   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
+#   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat
+#   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P1
+#   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
 
 suite:
   suite_id: multi_persona_demo_suite

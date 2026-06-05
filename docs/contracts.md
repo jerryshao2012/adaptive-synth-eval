@@ -156,11 +156,11 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   - Scenarios: Eligibility & limits, Withdrawals, PII Leak (protecting SIN), Persona Hijack (certified advisor boundaries), Toxicity, and Prompt injection.
 - **Validation**:
   ```bash
-  uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation.yaml
+  uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml
   ```
 - **Execution**:
   ```bash
-  uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation.yaml --dry-run
+  uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml --dry-run
   ```
 
 ### Additional Examples
