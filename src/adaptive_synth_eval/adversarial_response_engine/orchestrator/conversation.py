@@ -263,7 +263,9 @@ async def run_conversation(
         })
 
         if realtime_chat:
-            await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
+            await asyncio.to_thread(
+                display_bot_turn, bot_message=response.bot_response, error=response.error
+            )
 
         # ----- score -----
         if mode == "synth":

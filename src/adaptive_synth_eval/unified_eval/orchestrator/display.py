@@ -41,8 +41,18 @@ def display_user_turn(
     console.print(Panel(user_message, title=title, border_style=border))
 
 
-def display_bot_turn(*, bot_message: str) -> None:
+def display_bot_turn(*, bot_message: str, error: str | None = None) -> None:
+    """Render the target's reply.
+
+    A blank `bot_message` is almost always a failed/empty target turn, not a
+    real silent answer — render the error (or an explicit placeholder) in a red
+    panel so the CLI doesn't show a misleading empty green box.
+    """
     console = _console()
+    if not (bot_message or "").strip():
+        body = f"⚠️  {error}" if error else "(empty response — target returned no text)"
+        console.print(Panel(body, title="🤖 Assistant [NO REPLY]", border_style="red"))
+        return
     console.print(Panel(bot_message, title="🤖 Assistant", border_style="green"))
 
 
