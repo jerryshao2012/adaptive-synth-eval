@@ -86,7 +86,7 @@ uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-
 ### 4. Summarize a Run
 
 ```bash
-uv run ase summarize --run-id multi_persona_demo_run
+uv run ase summarize --run-id unified_evaluation_demo_run
 ```
 
 ---
