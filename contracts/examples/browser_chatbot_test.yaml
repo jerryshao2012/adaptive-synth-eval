@@ -1,3 +1,13 @@
+# Browser Chatbot Test Contract
+#
+# Purpose:
+# - Validate browser-driven chatbot mode with a minimal synthetic generation setup.
+# - Exercise selector-based input/submit/response behavior for web chat targets.
+#
+# Usage:
+#   uv run ase validate-contract contracts/examples/browser_chatbot_test.yaml
+#   uv run ase run --contract contracts/examples/browser_chatbot_test.yaml
+
 simulation_suite:
   suite_id: browser_chatbot_simple_test
   target_application: hr_policy_web_chatbot

@@ -4,6 +4,7 @@ writes unified artifacts.
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from collections import deque
@@ -26,6 +27,8 @@ from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
 from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
 from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
+
+logger = logging.getLogger(__name__)
 
 
 def run_unified(
@@ -189,25 +192,38 @@ async def run_unified_async(
                     planned["persona_id"],
                     total_turns=planned["turn_count"],
                 )
-            return await run_conversation(
-                entry=planned["entry"],
-                persona=contract.persona_by_id()[planned["persona_id"]],
-                synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
-                adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
-                contract=contract,
-                llms=llms,
-                target=target,
-                writer=writer,
-                conversation_id=planned["conversation_id"],
-                rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
-                token_budget=token_budget,
-                attack_memory=attack_memory,
-                attack_memory_lock=attack_memory_lock,
-                turn_count=planned["turn_count"],
-                realtime_chat=realtime_chat,
-                realtime_controller=realtime_controller,
-                meter=meter,
-            )
+            started = time.perf_counter()
+            try:
+                return await run_conversation(
+                    entry=planned["entry"],
+                    persona=contract.persona_by_id()[planned["persona_id"]],
+                    synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
+                    adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
+                    contract=contract,
+                    llms=llms,
+                    target=target,
+                    writer=writer,
+                    conversation_id=planned["conversation_id"],
+                    rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
+                    token_budget=token_budget,
+                    attack_memory=attack_memory,
+                    attack_memory_lock=attack_memory_lock,
+                    turn_count=planned["turn_count"],
+                    realtime_chat=realtime_chat,
+                    realtime_controller=realtime_controller,
+                    meter=meter,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Conversation failed and will be recorded as an error: %s (%s)",
+                    planned["conversation_id"],
+                    type(exc).__name__,
+                )
+                return _failed_conversation_result(
+                    planned=planned,
+                    error=f"{type(exc).__name__}: {exc}",
+                    elapsed_seconds=round(time.perf_counter() - started, 2),
+                )
 
     budget_stopped = False
     start_time = time.time()
@@ -411,6 +427,45 @@ def _effective_max_concurrency(contract: UnifiedContract) -> int:
     if contract.target.mode == "browser":
         return 1
     return max(1, int(contract.run.max_concurrency or 1))
+
+
+def _failed_conversation_result(
+        *,
+        planned: dict[str, Any],
+        error: str,
+        elapsed_seconds: float,
+) -> ConversationResult:
+    conv_id = planned["conversation_id"]
+    return ConversationResult(
+        conversation_row={
+            "conversation_id": conv_id,
+            "session_id": conv_id,
+            "persona_id": planned["persona_id"],
+            "scenario_id": planned["synth_scenario_id"],
+            "adversarial_scenario_id": planned["adversarial_scenario_id"],
+            "synthetic_day": "",
+            "turn_count": 0,
+            "synth_turns": 0,
+            "adversarial_turns": 0,
+            "elapsed_seconds": elapsed_seconds,
+            "target_latency_seconds": 0.0,
+            "best_failure_score": 0,
+        },
+        chat_history=[],
+        turn_rows=[
+            {
+                "conversation_id": conv_id,
+                "turn_id": 0,
+                "turn_type": "system_error",
+                "error": error,
+                "failure_mode": "runner_exception",
+            }
+        ],
+        score_rows=[],
+        failed_rows=[],
+        adversarial_session=None,
+        errors=1,
+    )
 
 
 def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:

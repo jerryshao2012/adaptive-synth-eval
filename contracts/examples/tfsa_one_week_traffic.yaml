@@ -1,8 +1,8 @@
-# TFSA Chatbot AWS API Key Evaluation Contract
+# TFSA One-Week Traffic Contract
 #
-# One-week traffic profile derived from tfsa_aws_unified_evaluation.yaml.
-# Keeps the same unified structure/personas/scenarios while scaling volume and
-# turn depth for throughput-oriented traffic simulation.
+# Purpose:
+# - Scale the TFSA unified evaluation into a one-week traffic-style profile.
+# - Stress throughput and latency with deeper turn ranges and larger budget.
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml

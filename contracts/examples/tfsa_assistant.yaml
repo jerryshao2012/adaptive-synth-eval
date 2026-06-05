@@ -1,18 +1,12 @@
-# TFSA Assistant — adversarial + synthetic eval against the live multi-agent bot.
+# TFSA Assistant Contract
 #
-# Target is the deployed TFSA AgentCore runtime (the LangGraph supervisor graph:
-# profile -> calculation/transaction or document -> search -> response). The harness
-# invokes it directly by ARN via boto3 (mode: agentcore): payload_prompt_key sends each
-# turn as {"prompt": ...} and the reply (incl. text/event-stream) is unwrapped
-# automatically — no shim or local server needed.
+# Purpose:
+# - Run unified adversarial + synthetic evaluation against the live TFSA AgentCore bot.
+# - Exercise runtime ARN invocation flow and realtime adversarial probing behavior.
 #
-# Setup:
-#   export AWS_REGION=us-east-1            # and AWS creds / SSO (aws sso login)
-#   export TFSA_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:<acct>:runtime/<id>
-#
-# Run:
-#   ase validate-contract contracts/examples/tfsa_assistant.yaml
-#   ase run --contract contracts/examples/tfsa_assistant.yaml --realtime-chat
+# Usage:
+#   uv run ase validate-contract contracts/examples/tfsa_assistant.yaml
+#   uv run ase run --contract contracts/examples/tfsa_assistant.yaml --realtime-chat
 
 # Both the adversarial probes and the synth warm-up turns run live on Bedrock:
 

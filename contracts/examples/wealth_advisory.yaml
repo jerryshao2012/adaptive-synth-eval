@@ -1,15 +1,12 @@
-# Wealth-advisory life-event detection agent — adversarial + synthetic eval.
+# Wealth Advisory Contract
 #
-# Target: a custom agent deployed to Amazon Bedrock AgentCore Runtime that reads a
-# bank's client + transaction data files (from S3, by path), detects life-event signals
-# (inheritance, property sale, business exit, large inflow), surfaces wealth-advisory
-# leads, and drafts personalized outreach for relationship managers.
-# Setup:
-#   WEALTH_ADVISORY_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:123:runtime/your-agent
-#   export AWS_REGION=us-east-1            # and AWS creds / SSO (aws sso login)
-# Run:
-#   ase validate-contract contracts/examples/wealth_advisory.yaml
-#   ase run --contract contracts/examples/wealth_advisory.yaml --verbose
+# Purpose:
+# - Run unified adversarial + synthetic evaluation for wealth-advisory life-event detection.
+# - Validate AgentCore behavior on high-value advisory lead and outreach scenarios.
+#
+# Usage:
+#   uv run ase validate-contract contracts/examples/wealth_advisory.yaml
+#   uv run ase run --contract contracts/examples/wealth_advisory.yaml --verbose
 
 suite:
   suite_id: wealth_advisory_eval

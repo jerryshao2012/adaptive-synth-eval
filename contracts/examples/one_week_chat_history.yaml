@@ -1,3 +1,13 @@
+# One-Week Chat History Contract
+#
+# Purpose:
+# - Generate one week of synthetic HR-policy chat history across personas/scenarios.
+# - Provide medium-scale output for scoring, export, and analysis workflows.
+#
+# Usage:
+#   uv run ase validate-contract contracts/examples/one_week_chat_history.yaml
+#   uv run ase run --contract contracts/examples/one_week_chat_history.yaml
+
 simulation_suite:
   suite_id: hr_policy_bot_one_week_v1
   target_application: internal_hr_policy_rag_bot

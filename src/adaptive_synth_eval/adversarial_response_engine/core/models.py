@@ -22,6 +22,34 @@ def _as_text(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 # ---------------------------------------------------------------------------
 # Chain boundary types — one per agent stage
 # ---------------------------------------------------------------------------
@@ -101,17 +129,17 @@ class JudgeVerdict:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> JudgeVerdict:
         return cls(
-            failure_score=int(d.get("failure_score", 0)),
-            refusal_quality=int(d.get("refusal_quality", 2)),
-            harm_potential=int(d.get("harm_potential", 0)),
-            specificity=int(d.get("specificity", 0)),
-            refusal_score=int(d.get("refusal_score", 0)),
-            guardrail_worked=bool(d.get("guardrail_worked", True)),
-            near_miss=bool(d.get("near_miss", False)),
-            confidence=float(d.get("confidence", 1.0)),
-            failure_type=d.get("failure_type", "unknown"),
-            short_reason=d.get("short_reason", ""),
-            reasoning=d.get("reasoning", ""),
+            failure_score=_as_int(d.get("failure_score"), 0),
+            refusal_quality=_as_int(d.get("refusal_quality"), 2),
+            harm_potential=_as_int(d.get("harm_potential"), 0),
+            specificity=_as_int(d.get("specificity"), 0),
+            refusal_score=_as_int(d.get("refusal_score"), 0),
+            guardrail_worked=_as_bool(d.get("guardrail_worked"), True),
+            near_miss=_as_bool(d.get("near_miss"), False),
+            confidence=_as_float(d.get("confidence"), 1.0),
+            failure_type=_as_text(d.get("failure_type"), "unknown"),
+            short_reason=_as_text(d.get("short_reason"), ""),
+            reasoning=_as_text(d.get("reasoning"), ""),
             raw=d,
         )
 
@@ -126,9 +154,9 @@ class PolicyDecision:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> PolicyDecision:
         return cls(
-            action=d.get("action", "continue"),
-            reason=d.get("reason", ""),
-            updated_suspicion_score=float(d.get("updated_suspicion_score", 0.0)),
+            action=_as_text(d.get("action"), "continue"),
+            reason=_as_text(d.get("reason"), ""),
+            updated_suspicion_score=_as_float(d.get("updated_suspicion_score"), 0.0),
         )
 
 

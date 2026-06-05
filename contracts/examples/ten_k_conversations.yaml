@@ -1,3 +1,13 @@
+# Ten-K Conversations Contract
+#
+# Purpose:
+# - Configure high-volume synthetic generation for throughput and scale testing.
+# - Produce a large conversation corpus for stress, cost, and latency analysis.
+#
+# Usage:
+#   uv run ase validate-contract contracts/examples/ten_k_conversations.yaml
+#   uv run ase run --contract contracts/examples/ten_k_conversations.yaml
+
 simulation_suite:
   suite_id: hr_policy_bot_10k_v1
   target_application: internal_hr_policy_rag_bot

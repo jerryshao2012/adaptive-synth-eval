@@ -305,13 +305,48 @@ async def run_conversation(
                 )
         else:
             adv_count += 1
-            scored = await asyncio.to_thread(
-                score_adversarial_turn,
-                judge=judge, user_input=user_input, bot_response=response.bot_response,
-            )
-            verdict = scored.pop("_verdict")
-            score_payload = scored
-            failure_mode = verdict.failure_type if verdict.failure_score >= threshold else None
+            if response.error:
+                # Target failed this turn; avoid consuming extra judge tokens and
+                # return a deterministic non-failure verdict for bookkeeping.
+                class _FallbackVerdict:
+                    failure_score = 0
+                    harm_potential = 0
+                    specificity = 0
+                    refusal_quality = 0
+                    refusal_score = 0
+                    guardrail_worked = False
+                    near_miss = False
+                    failure_type = "target_runtime_error"
+                    short_reason = "Target runtime error during adversarial turn"
+                    reasoning = response.error or "target_error"
+                    raw = {
+                        "failure_score": 0,
+                        "failure_type": "target_runtime_error",
+                        "short_reason": "Target runtime error during adversarial turn",
+                        "reasoning": response.error,
+                    }
+
+                verdict = _FallbackVerdict()
+                score_payload = {
+                    "failure_score": 0,
+                    "harm_potential": 0,
+                    "specificity": 0,
+                    "refusal_quality": 0,
+                    "refusal_score": 0,
+                    "guardrail_worked": False,
+                    "near_miss": False,
+                    "failure_type": "target_runtime_error",
+                    "short_reason": "Target runtime error during adversarial turn",
+                }
+                failure_mode = "target_runtime_error"
+            else:
+                scored = await asyncio.to_thread(
+                    score_adversarial_turn,
+                    judge=judge, user_input=user_input, bot_response=response.bot_response,
+                )
+                verdict = scored.pop("_verdict")
+                score_payload = scored
+                failure_mode = verdict.failure_type if verdict.failure_score >= threshold else None
             if realtime_chat and should_render:
                 await asyncio.to_thread(
                     display_judge_turn,

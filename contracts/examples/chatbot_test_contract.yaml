@@ -1,3 +1,13 @@
+# Chatbot Test Contract
+#
+# Purpose:
+# - Provide a lightweight synthetic-only contract for quick functional checks.
+# - Validate endpoint/auth wiring and artifact generation on small runs.
+#
+# Usage:
+#   uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
+#   uv run ase run --contract contracts/examples/chatbot_test_contract.yaml
+
 simulation_suite:
   suite_id: chatbot_test_suite
   target_application: unit_test_bot

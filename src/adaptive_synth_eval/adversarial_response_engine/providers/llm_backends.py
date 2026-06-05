@@ -282,10 +282,16 @@ def make_bedrock_backend(
     """
     try:
         import boto3
+        from botocore.config import Config
     except ImportError as e:
         raise ImportError("Install boto3: pip install boto3") from e
 
-    client = boto3.client("bedrock-runtime", region_name=region)
+    # Adaptive retries smooth request bursts and reduce throttling errors at higher concurrency.
+    cfg = Config(
+        retries={"mode": "adaptive", "max_attempts": 12},
+        max_pool_connections=64,
+    )
+    client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
     # Inference profile IDs can be prefixed (for example, "us.anthropic..."),
     # and ARNs can include provider names in the resource segment.
     model_lc = model.lower()

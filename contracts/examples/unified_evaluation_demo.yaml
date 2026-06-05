@@ -1,5 +1,8 @@
 # Unified Evaluation Demo Contract
-# Interleaves normal synthetic questions with adversarial probes across multiple personas.
+#
+# Purpose:
+# - Demonstrate interleaved synthetic and adversarial unified evaluation flow.
+# - Provide a compact baseline for local dry-run and quick iteration.
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
