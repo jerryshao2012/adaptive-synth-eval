@@ -131,7 +131,7 @@ scenario_catalog:
     failure_threshold: 3
 
 eval_plan:
-  total_conversations: 12
+  total_conversations: 64
   conversation_turns:
     min: 3
     max: 6

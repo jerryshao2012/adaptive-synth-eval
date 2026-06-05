@@ -6,7 +6,7 @@ from adaptive_synth_eval.clients.chatbot import ChatbotClient
 from adaptive_synth_eval.config.schemas import TargetChatbot
 
 
-def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
+def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False, max_concurrency: int | None = None):
     enabled = config.enabled and not dry_run
     if config.mode == "browser":
 
@@ -21,6 +21,8 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
                 "(nest region/agent_runtime_arn/qualifier under target.agentcore)."
             )
         ac = config.agentcore
+        # Give the boto3 HTTP pool a little headroom over the worker concurrency.
+        pool = max(10, (max_concurrency or 1) + 4)
         return AgentCoreChatbotClient(
             enabled=enabled,
             region=ac.region,
@@ -33,6 +35,7 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False):
             retry_max_backoff=config.retry_max_backoff_seconds,
             retry_backoff_multiplier=config.retry_backoff_multiplier,
             retry_jitter=config.retry_jitter,
+            max_pool_connections=pool,
         )
 
     return ChatbotClient(

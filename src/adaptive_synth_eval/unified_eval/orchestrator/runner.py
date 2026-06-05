@@ -103,7 +103,11 @@ async def run_unified_async(
             retry_max_backoff=contract.run.retry_max_backoff_seconds,
         )
     else:
-        target = create_chatbot_client(contract.target, dry_run=dry_run)
+        target = create_chatbot_client(
+            contract.target,
+            dry_run=dry_run,
+            max_concurrency=max_concurrency_override or _effective_max_concurrency(contract),
+        )
 
     attack_memory = (
         AttackMemory() if contract.eval_plan.attack_memory in {"shared"} else None

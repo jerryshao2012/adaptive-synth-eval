@@ -65,6 +65,7 @@ class AgentCoreChatbotClient:
             retry_max_backoff: float | None = None,
             retry_backoff_multiplier: float | None = None,
             retry_jitter: bool | None = None,
+            max_pool_connections: int = 10,
     ):
         self.enabled = enabled
         self.region = region
@@ -72,6 +73,7 @@ class AgentCoreChatbotClient:
         self.qualifier = qualifier
         self.payload_prompt_key = payload_prompt_key
         self.runtime_session_id_prefix = runtime_session_id_prefix
+        self.max_pool_connections = max(1, int(max_pool_connections))
 
         self._runtime_session_ids: dict[str, str] = {}
         self._runtime_session_lock = Lock()
@@ -95,9 +97,13 @@ class AgentCoreChatbotClient:
             return None
         try:
             import boto3
+            from botocore.config import Config
         except ImportError as exc:
             raise ImportError("Install boto3 to use target.mode=agentcore") from exc
-        self._client = boto3.client("bedrock-agentcore", region_name=self.region)
+        # Size the HTTP connection pool to the configured concurrency so batch
+        # runs aren't capped by botocore's default of 10 simultaneous connections.
+        cfg = Config(max_pool_connections=self.max_pool_connections)
+        self._client = boto3.client("bedrock-agentcore", region_name=self.region, config=cfg)
         return self._client
 
     def _is_retryable_agentcore_error(self, error: Exception) -> bool:
