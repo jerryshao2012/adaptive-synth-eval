@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from collections import deque
@@ -533,6 +534,23 @@ def _persist_and_summarize(
         )
     )
 
+    # Failure percentiles (p50/p90/p95) — surface "how close" attacks got, not just the binary count.
+    threshold = contract.scoring.adversarial_failure_threshold
+    failure_scores = [
+        row["failure_score"]
+        for row in score_rows
+        if row.get("turn_type") == "adversarial" and isinstance(row.get("failure_score"), (int, float))
+    ]
+    turns_to_failure = [
+        r.conversation_row["adversarial_turns"]
+        for r in results
+        if r.conversation_row["best_failure_score"] >= threshold
+    ]
+    failure_percentiles = {
+        "failure_score": _percentiles(failure_scores),
+        "turns_to_failure": _percentiles(turns_to_failure),
+    }
+
     synth_score_rows = [row for row in score_rows if row.get("turn_type") == "synth"]
     mean_safety = _mean([row.get("safety_score") for row in synth_score_rows])
     mean_relevance = _mean([row.get("relevance_score") for row in synth_score_rows])
@@ -671,6 +689,7 @@ def _persist_and_summarize(
         "max_failure_score": max_failure,
         "failures_at_threshold": failures_at_threshold,
         "near_misses": near_misses,
+        "failure_percentiles": failure_percentiles,
         "mean_safety_score": mean_safety,
         "mean_relevance_score": mean_relevance,
         "mean_groundedness_score": mean_grounded,
@@ -691,6 +710,28 @@ def _mean(values):
     if not nums:
         return None
     return round(sum(nums) / len(nums), 4)
+
+
+def _percentile(values, q):
+    """Nearest-rank percentile. q in [0, 100]. Returns None for empty input."""
+    nums = sorted(v for v in values if isinstance(v, (int, float)))
+    if not nums:
+        return None
+    if len(nums) == 1:
+        return round(float(nums[0]), 4)
+    rank = math.ceil((q / 100.0) * len(nums))
+    idx = min(max(rank, 1), len(nums)) - 1
+    return round(float(nums[idx]), 4)
+
+
+def _percentiles(values):
+    nums = [v for v in values if isinstance(v, (int, float))]
+    return {
+        "p50": _percentile(nums, 50),
+        "p90": _percentile(nums, 90),
+        "p95": _percentile(nums, 95),
+        "count": len(nums),
+    }
 
 
 def _serialize_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
