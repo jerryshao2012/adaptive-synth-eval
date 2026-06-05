@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections import deque
 from dataclasses import asdict
 from typing import Any
 
@@ -123,7 +124,7 @@ async def run_unified_async(
             contract.run.until_budget_exhausted
             or contract.eval_plan.total_conversations is None
     )
-    sequential = realtime_chat or budget_mode
+    sequential = budget_mode
     if budget_mode:
         plan = list(_lazy_weighted_plan(contract, persona_filter, scenario_filter, adversarial_filter))
     else:
@@ -135,10 +136,24 @@ async def run_unified_async(
             unlimited=False,
         )
 
+    if realtime_chat and persona_filter and plan:
+        # Interactive persona-filtered realtime runs should represent exactly one live chat.
+        plan = [plan[0]]
+    elif realtime_chat and plan:
+        plan = _round_robin_plan_by_persona(
+            plan,
+            [p.persona_id for p in contract.persona_pool],
+        )
+
+    for idx, planned in enumerate(plan, start=1):
+        planned["conversation_id"] = f"conv_{idx:06d}"
+
     effective_max_concurrency = (
         1 if sequential
         else (max_concurrency_override or _effective_max_concurrency(contract))
     )
+    if realtime_chat and persona_filter:
+        effective_max_concurrency = 1
     semaphore = asyncio.Semaphore(max(1, effective_max_concurrency))
 
     # Build interactive realtime controller if requested.
@@ -154,6 +169,12 @@ async def run_unified_async(
             single_persona_mode=single_persona_mode,
             persona_total_convos=persona_total_convos,
         )
+        for planned in plan[: max(1, effective_max_concurrency)]:
+            realtime_controller.register_conversation_session(
+                planned["conversation_id"],
+                planned["persona_id"],
+                total_turns=planned["turn_count"],
+            )
         if persona_filter:
             realtime_controller.set_active_persona(persona_filter)
         elif contract.persona_pool:
@@ -162,6 +183,12 @@ async def run_unified_async(
 
     async def _one(planned):
         async with semaphore:
+            if realtime_controller:
+                realtime_controller.register_conversation_session(
+                    planned["conversation_id"],
+                    planned["persona_id"],
+                    total_turns=planned["turn_count"],
+                )
             return await run_conversation(
                 entry=planned["entry"],
                 persona=contract.persona_by_id()[planned["persona_id"]],
@@ -171,6 +198,7 @@ async def run_unified_async(
                 llms=llms,
                 target=target,
                 writer=writer,
+                conversation_id=planned["conversation_id"],
                 rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
                 token_budget=token_budget,
                 attack_memory=attack_memory,
@@ -342,6 +370,41 @@ def _build_plan(
                 "conversation_key": f"{entry.persona_id}:{entry.synth_scenario_id}:{entry.adversarial_scenario_id}:{k}",
             })
     return plan
+
+
+def _round_robin_plan_by_persona(
+        plan: list[dict[str, Any]],
+        persona_order: list[str],
+) -> list[dict[str, Any]]:
+    """Interleave conversations by persona while preserving per-persona order.
+
+    This keeps realtime active-session windows balanced across personas instead of
+    clustering on the highest-weight persona at startup.
+    """
+    if len(plan) <= 1:
+        return plan
+
+    buckets: dict[str, deque[dict[str, Any]]] = {}
+    for item in plan:
+        pid = item.get("persona_id")
+        buckets.setdefault(pid, deque()).append(item)
+
+    ordered_personas = [pid for pid in persona_order if pid in buckets]
+    for pid in buckets:
+        if pid not in ordered_personas:
+            ordered_personas.append(pid)
+
+    interleaved: list[dict[str, Any]] = []
+    while True:
+        progressed = False
+        for pid in ordered_personas:
+            q = buckets.get(pid)
+            if q:
+                interleaved.append(q.popleft())
+                progressed = True
+        if not progressed:
+            break
+    return interleaved
 
 
 def _effective_max_concurrency(contract: UnifiedContract) -> int:

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,6 +104,7 @@ async def run_conversation(
         llms: dict[str, ProvidedLLM],
         target,
         writer,
+        conversation_id: str,
         rng: random.Random,
         token_budget,
         attack_memory: AttackMemory | None,
@@ -115,7 +115,6 @@ async def run_conversation(
         meter=None,  # BudgetMeter | None
 ) -> ConversationResult:
     conversation_start = time.perf_counter()
-    conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     session_id = conversation_id  # one ARE SessionState per conversation
     synthetic_day = contract.time_window.start_day
 
@@ -241,8 +240,8 @@ async def run_conversation(
         should_render = False
         if realtime_chat:
             should_render = True
-            if realtime_controller and realtime_controller.active_persona_id:
-                should_render = persona.persona_id == realtime_controller.active_persona_id
+            if realtime_controller:
+                should_render = realtime_controller.is_active_session(conversation_id)
             if should_render:
                 await asyncio.to_thread(
                     display_user_turn,
@@ -433,6 +432,9 @@ async def run_conversation(
             )},
         })
 
+        if realtime_controller:
+            realtime_controller.notify_turn_complete(conversation_id)
+
         # ----- short-circuit on hard failure -----
         if mode == "adversarial" and session.best_failure_score >= threshold:
             break
@@ -456,7 +458,7 @@ async def run_conversation(
         drop(conversation_id)
 
     if realtime_controller:
-        realtime_controller.notify_conversation_complete(persona.persona_id)
+        realtime_controller.notify_conversation_complete(persona.persona_id, conversation_id)
 
     conv_row = {
         "conversation_id": conversation_id,

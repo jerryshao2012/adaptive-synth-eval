@@ -103,6 +103,40 @@ def test_effective_concurrency_reports_requested_value(tmp_path: Path):
     assert summary["effective_max_concurrency"] == 16
 
 
+def test_realtime_persona_filter_runs_single_conversation(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=16))
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="orchestrator_realtime_persona_single",
+        realtime_chat=True,
+        interactive_realtime_controls=False,
+        persona_filter="DEMO_P1",
+    )
+
+    assert summary["total_conversations"] == 1
+    assert summary["configured_max_concurrency"] == 16
+    assert summary["effective_max_concurrency"] == 1
+
+
+def test_round_robin_plan_by_persona_interleaves_order():
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _round_robin_plan_by_persona
+
+    plan = [
+        {"persona_id": "P1", "conversation_key": "k1"},
+        {"persona_id": "P1", "conversation_key": "k2"},
+        {"persona_id": "P1", "conversation_key": "k3"},
+        {"persona_id": "P2", "conversation_key": "k4"},
+        {"persona_id": "P2", "conversation_key": "k5"},
+        {"persona_id": "P3", "conversation_key": "k6"},
+    ]
+    interleaved = _round_robin_plan_by_persona(plan, ["P1", "P2", "P3"])
+
+    assert [p["persona_id"] for p in interleaved[:4]] == ["P1", "P2", "P3", "P1"]
+
+
 def _with_output_dir(contract, base_dir: Path):
     from adaptive_synth_eval.unified_eval.config.schemas import OutputConfig
     return replace(contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id))

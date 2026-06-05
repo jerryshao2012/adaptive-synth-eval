@@ -90,51 +90,52 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 
 ### How `--realtime-chat` Works
 - It is opt-in and streams conversations directly in the console as alternating Human and Assistant panels.
-- It supports both single-persona and multi-persona simulation pools, processing conversations in a clean sequential order.
+- In unified mode, it supports concurrent conversations and respects `max_concurrency`.
+- With `--persona <id>`, realtime mode runs a single conversation (`effective_max_concurrency = 1`).
 - It does not replace output artifacts; files like `chat_history.jsonl` and `conversations.txt` (when enabled) are still generated normally.
 
 ### How `--persona <id>` Works
 - Limit the terminal simulation session to a single specific persona ID.
 - Useful for running multiple terminals in parallel targeting different personas.
-- Automatically disables the realtime commands `personas`, `persona <id>`, and `switch <id>`.
+- Automatically disables realtime session controls (`list` and `switch`).
 
 ### How Interactive Realtime Controls Work
 - They are enabled by default when `--realtime-chat` is enabled.
 - Use `--no-interactive-realtime-controls` to turn them off.
 - During the run, type a command and press Enter to control playback.
 - Offers interactive auto-hinting / auto-completion of commands and arguments as you type.
-- In multi-persona mode, the prompt displays the current active persona ID (e.g., `⚡> [P001] `) for continuous visibility.
-- In single-persona mode (one persona in contract or using `--persona` flag), the prompt remains as `⚡> ` without the persona ID since switching is disabled.
+- In multi-persona mode, the prompt displays active persona+conversation (e.g., `⚡> [P001-conv_000001] `) for continuous visibility.
+- In single-persona mode (one persona in contract or using `--persona` flag), session switching is disabled.
 - Supported commands:
   - `h/help`: Show available controls.
-  - `s/status`: Show current playback speed, mode, active behavior, and active persona.
+  - `st/status`: Show current playback speed, mode, active behavior, active persona, active conversation session, and turn progress (`turns_completed`/`turns_remaining`) when available.
   - `+/faster` or `-/slower`: Adjust turn playback speed.
   - `p/pause`: Pause or resume conversation turns.
   - `q/stop`: Stop the simulation early.
   - `style <mode>`: Dynamically set the communication style for the **currently active persona**. Each persona maintains its own behavior mode independently. Modes: `default`, `aggressive`, `polite`, `concise`, `confused`, `anxious`. When no persona is active, applies globally as a fallback.
-  - `personas` (disabled in single-persona runs): List all persona IDs available in the simulation pool.
-  - `persona <persona_id>` or `switch <persona_id>` (disabled in single-persona runs): Dynamically switch the user simulator to a different persona mid-conversation.
-- Behavior changes apply to the active persona and persist across persona switches. Each persona can have its own distinct behavior mode.
-- The prompt remains stable while logs stream above it, with the persona ID updating dynamically when switched.
+  - `l/list` (disabled in single-persona runs): List all active conversation sessions.
+  - `s/switch <persona_id-conversation_id|conversation_id>` (disabled in single-persona runs): Explicitly switch to another active conversation session.
+- Behavior changes apply to the active persona and persist across session switches. Each persona can have its own distinct behavior mode.
+- The prompt remains stable while logs stream above it, with active persona/session updating when switched.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
-### Per-Persona Behavior Example
+### Realtime Session Control Example
 ```bash
-# Set P001 to aggressive mode
-⚡> [P001] style aggressive
-Behavior updated for P001
+# List active sessions and the current focus (*)
+⚡> l
+Active sessions: *P001-conv_000001, P002-conv_000002, P003-conv_000003
 
-# Switch to P002 and set different behavior
-⚡> [P001] persona P002
-Persona updated
-⚡> [P002] style polite
+# Switch to another active conversation session
+⚡> s P002-conv_000002
+Conversation updated
+
+# Set behavior for the currently active persona (P002)
+⚡> [P002-conv_000002] style aggressive
 Behavior updated for P002
 
-# Switch back to P001 - retains 'aggressive' behavior
-⚡> [P002] persona P001
-Persona updated
-⚡> [P001] status
-Status: delay=0.80s, mode=running, behavior=aggressive, persona=P001
+# Check status (includes active session)
+⚡> [P002-conv_000002] st
+Status: delay=0.80s, mode=running, behavior=aggressive, persona=P002, session=conv_000002, active_sessions=3, turns_completed=5, turns_remaining=11, active_turns=2/6 (remaining=4)
 ```
 
 ---

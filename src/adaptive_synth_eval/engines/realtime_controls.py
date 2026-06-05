@@ -29,6 +29,7 @@ class RealtimeControlState:
     stop_requested: bool = False
     behavior_mode: str = "default"  # Global fallback for backward compatibility
     active_persona_id: str | None = None
+    active_session_id: str | None = None
     persona_behavior_modes: dict[str, str] | None = None  # Per-persona behavior tracking
 
 
@@ -49,8 +50,7 @@ if Completer is not None:
             top_level_cmds = [
                 "help",
                 "status",
-                "personas",
-                "persona",
+                "list",
                 "switch",
                 "style",
                 "behavior",
@@ -63,7 +63,7 @@ if Completer is not None:
                 "exit",
             ]
             if self.controller._single_persona_mode:
-                top_level_cmds = [c for c in top_level_cmds if c not in {"personas", "persona", "switch"}]
+                top_level_cmds = [c for c in top_level_cmds if c not in {"list", "switch"}]
 
             # Case 1: Typing the command itself
             if len(words_before) == 0:
@@ -76,13 +76,12 @@ if Completer is not None:
             elif len(words_before) == 1:
                 cmd = words_before[0].lower()
                 prefix = word_before.lower()
-                if cmd in {"persona", "switch"}:
+                if cmd in {"s", "switch"}:
                     if self.controller._single_persona_mode:
                         return
-                    active_persona = self.controller.active_persona_id
-                    for p_id in self.controller._personas.keys():
-                        if p_id != active_persona and (not prefix or p_id.lower().startswith(prefix)):
-                            yield Completion(p_id, start_position=-len(prefix))
+                    for session_label in self.controller.list_switch_targets():
+                        if not prefix or session_label.lower().startswith(prefix):
+                            yield Completion(session_label, start_position=-len(prefix))
                 elif cmd in {"style", "behavior", "mode"}:
                     current_behavior = self.controller.behavior_mode
                     for behavior in self.controller.SUPPORTED_BEHAVIORS:
@@ -106,7 +105,7 @@ class RealtimeChatController:
 
     COMMAND_HELP = (
         "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
-        "[p]ause/resume, [q]uit, style <behavior>, persona <persona_id>, personas"
+        "[p]ause/resume, [q]uit, style <behavior>, list, switch <session_id>"
     )
     PROMPT_TEXT = "⚡> "
 
@@ -128,6 +127,11 @@ class RealtimeChatController:
         self._single_persona_mode = single_persona_mode
         self._persona_total_convos: dict[str, int] = persona_total_convos or {}
         self._persona_done_convos: dict[str, int] = {}
+        self._session_personas: dict[str, str] = {}
+        self._session_total_turns: dict[str, int] = {}
+        self._session_completed_turns: dict[str, int] = {}
+        self._active_sessions: set[str] = set()
+        self._preferred_persona_id: str | None = None
         if self._single_persona_mode:
             self.command_help = (
                 "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
@@ -173,16 +177,65 @@ class RealtimeChatController:
         with self._state_cv:
             return self._state.active_persona_id
 
+    @property
+    def active_session_id(self) -> str | None:
+        with self._state_cv:
+            return self._state.active_session_id
+
     def set_active_persona(self, persona_id: str | None) -> None:
         with self._state_cv:
+            self._preferred_persona_id = persona_id
             self._state.active_persona_id = persona_id
+            if persona_id is None:
+                self._state.active_session_id = None
+                return
+            matching = [sid for sid, pid in self._session_personas.items() if
+                        pid == persona_id and sid in self._active_sessions]
+            if matching:
+                self._state.active_session_id = sorted(matching)[0]
+            elif self._state.active_session_id and self._state.active_session_id not in self._active_sessions:
+                self._state.active_session_id = None
 
-    def notify_conversation_complete(self, persona_id: str) -> None:
-        """Track per-persona conversation completion and log when all finish."""
+    def register_conversation_session(
+            self,
+            session_id: str,
+            persona_id: str,
+            total_turns: int | None = None,
+    ) -> None:
+        with self._state_cv:
+            self._session_personas[session_id] = persona_id
+            self._active_sessions.add(session_id)
+            if total_turns is not None:
+                self._session_total_turns[session_id] = max(0, int(total_turns))
+            self._session_completed_turns.setdefault(session_id, 0)
+            if self._state.active_session_id is None:
+                self._state.active_session_id = session_id
+                self._state.active_persona_id = persona_id
+
+    def notify_turn_complete(self, session_id: str, count: int = 1) -> None:
+        with self._state_cv:
+            if count <= 0:
+                return
+            self._session_completed_turns[session_id] = self._session_completed_turns.get(session_id, 0) + int(count)
+
+    def is_active_session(self, session_id: str) -> bool:
+        with self._state_cv:
+            if not self._state.active_session_id:
+                return True
+            return self._state.active_session_id == session_id
+
+    def notify_conversation_complete(self, persona_id: str, session_id: str | None = None) -> None:
+        """Track per-persona/session completion and log when all finish."""
         with self._state_cv:
             self._persona_done_convos[persona_id] = self._persona_done_convos.get(persona_id, 0) + 1
             done = self._persona_done_convos[persona_id]
             total = self._persona_total_convos.get(persona_id, 0)
+            if session_id:
+                self._active_sessions.discard(session_id)
+                if self._state.active_session_id == session_id:
+                    self._state.active_session_id = sorted(self._active_sessions)[0] if self._active_sessions else None
+                    if self._state.active_session_id:
+                        self._state.active_persona_id = self._session_personas.get(self._state.active_session_id)
         if total > 0 and done >= total:
             logger.info("[%s] All %d conversation(s) completed.", persona_id, total)
 
@@ -215,26 +268,27 @@ class RealtimeChatController:
         normalized = command.strip().lower()
         if normalized in {"h", "help"}:
             return self.command_help
-        if normalized in {"s", "status"}:
+        if normalized in {"st", "status"}:
             return self._status_text()
-        if normalized == "personas":
+        if normalized in {"l", "list"}:
             if self._single_persona_mode:
-                return "Persona switching commands are disabled when running in single-persona mode."
-            if not self._personas:
-                return "No personas available in pool."
-            return "Available personas: " + ", ".join(self._personas.keys())
-        if normalized.startswith("persona ") or normalized.startswith("switch "):
+                return "List/switch commands are disabled when running in single-persona mode."
+            sessions = self._list_active_sessions()
+            if sessions:
+                return "Active sessions: " + ", ".join(sessions)
+            return "No active conversation sessions."
+        if normalized.startswith("switch ") or normalized.startswith("s "):
             if self._single_persona_mode:
-                return "Persona switching commands are disabled when running in single-persona mode."
+                return "List/switch commands are disabled when running in single-persona mode."
             parts = command.strip().split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
-                return "Usage: persona <persona_id>"
+                return "Usage: switch <persona_id-conversation_id|conversation_id>"
             requested = parts[1].strip()
-            return self._set_active_persona_by_name(requested)
-        if normalized in {"persona", "switch"}:
+            return self._set_active_session_by_name(requested)
+        if normalized in {"s", "switch"}:
             if self._single_persona_mode:
-                return "Persona switching commands are disabled when running in single-persona mode."
-            return "Usage: persona <persona_id>"
+                return "List/switch commands are disabled when running in single-persona mode."
+            return "Usage: switch <persona_id-conversation_id|conversation_id>"
         if normalized.startswith("style ") or normalized.startswith("behavior "):
             parts = normalized.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
@@ -250,7 +304,7 @@ class RealtimeChatController:
                     self._state.delay_seconds - self._delay_step_seconds,
                 )
             return self._status_text(prefix="Playback speed increased")
-        if normalized in {"-", "l", "slower"}:
+        if normalized in {"-", "slower"}:
             with self._state_cv:
                 self._state.delay_seconds = min(
                     self._max_delay_seconds,
@@ -321,40 +375,41 @@ class RealtimeChatController:
             paused_text = "paused" if self._state.paused else "running"
             delay = self._state.delay_seconds
             persona = self._state.active_persona_id
-            # Get the behavior for the active persona specifically
+            session_id = self._state.active_session_id
             if persona and self._state.persona_behavior_modes:
                 behavior = self._state.persona_behavior_modes.get(persona, self._state.behavior_mode)
             else:
                 behavior = self._state.behavior_mode
+            active_slots = len(self._active_sessions)
+            progress_suffix = ""
+            known_totals = [t for t in self._session_total_turns.values() if t > 0]
+            if known_totals:
+                total_turns = sum(known_totals)
+                completed_turns = sum(
+                    min(self._session_completed_turns.get(sid, 0), self._session_total_turns.get(sid, 0))
+                    for sid in self._session_total_turns
+                )
+                remaining_turns = max(0, total_turns - completed_turns)
+                progress_suffix = (
+                    f", turns_completed={completed_turns}, turns_remaining={remaining_turns}"
+                )
+                if session_id and session_id in self._session_total_turns:
+                    active_total = self._session_total_turns[session_id]
+                    active_completed = min(
+                        self._session_completed_turns.get(session_id, 0),
+                        active_total,
+                    )
+                    active_remaining = max(0, active_total - active_completed)
+                    progress_suffix += (
+                        f", active_turns={active_completed}/{active_total}"
+                        f" (remaining={active_remaining})"
+                    )
         return (
             f"{prefix}: delay={delay:.2f}s, "
-            f"mode={paused_text}, behavior={behavior}, persona={persona or 'none'}"
+            f"mode={paused_text}, behavior={behavior}, persona={persona or 'none'}, "
+            f"session={session_id or 'none'}, active_sessions={active_slots}"
+            f"{progress_suffix}"
         )
-
-    def _set_active_persona_by_name(self, requested: str) -> str:
-        if not self._personas:
-            return "No personas configured."
-        match = None
-        for pid in self._personas:
-            if pid.lower() == requested.lower():
-                match = pid
-                break
-        if not match:
-            available = ", ".join(self._personas.keys())
-            return f"Unknown persona: {requested}. Available: {available}"
-        with self._state_cv:
-            self._state.active_persona_id = match
-        status = self._status_text(prefix="Persona updated")
-        total = self._persona_total_convos.get(match, 0)
-        if total > 0:
-            with self._state_cv:
-                done = self._persona_done_convos.get(match, 0)
-            remaining = total - done
-            if remaining <= 0:
-                status += f" — Note: all {total} conversation(s) for {match} have already completed."
-            else:
-                status += f" — {remaining}/{total} conversation(s) still running for {match}."
-        return status
 
     def _set_behavior_mode(self, requested: str) -> str:
         if requested not in self.SUPPORTED_BEHAVIORS:
@@ -378,6 +433,72 @@ class RealtimeChatController:
                 self._state.behavior_mode = requested
         return self._status_text(prefix=status_prefix)
 
+    def list_switch_targets(self) -> list[str]:
+        with self._state_cv:
+            active_sid = self._state.active_session_id
+            labels = []
+            for sid in sorted(self._active_sessions):
+                persona = self._session_personas.get(sid, "unknown")
+                if sid == active_sid:
+                    continue
+                labels.append(f"{persona}-{sid}")
+            return labels
+
+    def _list_active_sessions(self) -> list[str]:
+        with self._state_cv:
+            active_sid = self._state.active_session_id
+            values = []
+            for sid in sorted(self._active_sessions):
+                persona = self._session_personas.get(sid, "unknown")
+                label = f"{persona}-{sid}"
+                if sid == active_sid:
+                    label = f"*{label}"
+                values.append(label)
+            return values
+
+    def _set_active_session_by_name(self, requested: str) -> str:
+        requested_norm = requested.strip().lower()
+        active_labels: list[str] = []
+        switched = False
+        with self._state_cv:
+            if not self._active_sessions:
+                # Backward-compatible fallback when sessions aren't registered yet.
+                pass
+            else:
+                direct_match = None
+                for sid in self._active_sessions:
+                    if sid.lower() == requested_norm:
+                        direct_match = sid
+                        break
+                if direct_match is None:
+                    for sid in self._active_sessions:
+                        persona = self._session_personas.get(sid, "")
+                        label = f"{persona}-{sid}".lower()
+                        if label == requested_norm:
+                            direct_match = sid
+                            break
+                if direct_match is None:
+                    active_sid = self._state.active_session_id
+                    for sid in sorted(self._active_sessions):
+                        persona = self._session_personas.get(sid, "unknown")
+                        label = f"{persona}-{sid}"
+                        if sid == active_sid:
+                            label = f"*{label}"
+                        active_labels.append(label)
+                else:
+                    self._state.active_session_id = direct_match
+                    persona_id = self._session_personas.get(direct_match)
+                    if persona_id:
+                        self._state.active_persona_id = persona_id
+                        self._preferred_persona_id = persona_id
+                    switched = True
+
+        if switched:
+            return self._status_text(prefix="Conversation updated")
+        if active_labels:
+            return f"Unknown conversation: {requested}. Active sessions: {', '.join(active_labels)}"
+        return "No active conversation sessions. Use: list"
+
     @property
     def prompt_text(self) -> str:
         """Generate dynamic prompt text that includes current persona ID if available.
@@ -388,6 +509,9 @@ class RealtimeChatController:
         base_prompt = self.PROMPT_TEXT
         with self._state_cv:
             active_persona_id = self._state.active_persona_id
+            active_session_id = self._state.active_session_id
+        if active_persona_id and active_session_id:
+            return f"{base_prompt}[{active_persona_id}-{active_session_id}] "
         if active_persona_id:
             return f"{base_prompt}[{active_persona_id}] "
         return base_prompt

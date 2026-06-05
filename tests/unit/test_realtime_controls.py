@@ -10,6 +10,9 @@ def test_realtime_controller_speed_commands_adjust_delay():
     controller.apply_command("-")
     assert controller.current_delay_seconds == 1.0
 
+    controller.apply_command("slower")
+    assert controller.current_delay_seconds == 1.25
+
 
 def test_realtime_controller_pause_resume_and_stop():
     controller = RealtimeChatController(initial_delay_seconds=0.5)
@@ -177,33 +180,18 @@ def test_realtime_controller_notify_conversation_complete_logs_completion():
         assert controller._persona_done_convos.get("P2") == 1
 
 
-def test_realtime_controller_persona_switch_shows_remaining_count():
-    """Persona switch message includes remaining conversations and 'already completed' note."""
+def test_realtime_controller_list_shows_active_sessions_with_marker():
     personas = {"P1": {}, "P2": {}, "P3": {}}
-    persona_total_convos = {"P1": 3, "P2": 2, "P3": 1}
     controller = RealtimeChatController(
         initial_delay_seconds=0.5,
         personas=personas,
-        persona_total_convos=persona_total_convos,
     )
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
 
-    # P3 already has its single conversation done
-    controller.notify_conversation_complete("P3")
-
-    # Switch to P1 — 3 remaining
-    msg = controller.apply_command("persona P1")
-    assert "Persona updated" in msg
-    assert "3/3" in msg
-
-    # Complete one P1 convo, then switch — 2 remaining
-    controller.notify_conversation_complete("P1")
-    msg = controller.apply_command("persona P2")
-    assert "2/2" in msg
-
-    # Switch to P3 — already completed
-    msg = controller.apply_command("persona P3")
-    assert "already completed" in msg.lower()
-    assert "1" in msg
+    msg = controller.apply_command("list")
+    assert "*P1-conv_000001" in msg
+    assert "P2-conv_000002" in msg
 
 
 def test_realtime_controller_rejects_unknown_behavior_mode():
@@ -215,38 +203,31 @@ def test_realtime_controller_rejects_unknown_behavior_mode():
     assert controller.behavior_mode == "default"
 
 
-def test_realtime_controller_personas_listing_and_switching():
+def test_realtime_controller_list_and_switching():
     personas = {
         "P1": {"role": "tester"},
         "P2": {"role": "manager"},
     }
     controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
 
-    # test personas listing
-    msg = controller.apply_command("personas")
-    assert "P1" in msg
-    assert "P2" in msg
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
 
-    # test initial active persona is None
-    assert controller.active_persona_id is None
+    msg = controller.apply_command("list")
+    assert "P1-conv_000001" in msg
+    assert "P2-conv_000002" in msg
 
-    # test set_active_persona programmatically
-    controller.set_active_persona("P1")
-    assert controller.active_persona_id == "P1"
-
-    # test switching to existing persona (case-insensitive)
-    msg = controller.apply_command("persona p2")
-    assert "Persona updated" in msg
+    # explicit session switch (case-insensitive)
+    msg = controller.apply_command("switch p2-conv_000002")
+    assert "Conversation updated" in msg
     assert controller.active_persona_id == "P2"
+    assert controller.active_session_id == "conv_000002"
 
-    # test switching to non-existing persona
-    msg = controller.apply_command("persona P3")
-    assert "Unknown persona: P3" in msg
-    assert controller.active_persona_id == "P2"  # remains unchanged
+    msg = controller.apply_command("switch conv_999999")
+    assert "Unknown conversation" in msg
 
-    # test invalid usage format
-    msg = controller.apply_command("persona")
-    assert "Usage: persona" in msg
+    msg = controller.apply_command("persona P1")
+    assert "Persona switching is no longer supported" in msg
 
 
 def test_realtime_command_completer():
@@ -268,50 +249,33 @@ def test_realtime_command_completer():
     completer = RealtimeCommandCompleter(controller)
 
     # 1. Test top-level commands suggestions
-    completions = list(completer.get_completions(Document("per"), None))
-    # Should suggest "personas" and "persona"
+    completions = list(completer.get_completions(Document("l"), None))
+    # Should suggest list
     texts = [c.text for c in completions]
-    assert "persona" in texts
-    assert "personas" in texts
-    # start_position should be -3 because "per" has length 3
-    assert completions[0].start_position == -3
+    assert "list" in texts
 
     # 2. Test empty input top-level suggestions
     completions = list(completer.get_completions(Document(""), None))
     texts = [c.text for c in completions]
     assert "help" in texts
-    assert "persona" in texts
+    assert "list" in texts
 
-    # 3. Test persona suggestions (active persona is None)
-    completions = list(completer.get_completions(Document("persona "), None))
-    texts = [c.text for c in completions]
-    assert set(texts) == {"P1", "P2", "P3"}
-    assert completions[0].start_position == 0
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
 
-    # 4. Test persona suggestions with prefix
-    completions = list(completer.get_completions(Document("persona p"), None))
-    texts = [c.text for c in completions]
-    assert set(texts) == {"P1", "P2", "P3"}
-    assert completions[0].start_position == -1
-
-    # 5. Test persona suggestions when active persona is P1 (should exclude P1)
-    controller.set_active_persona("P1")
-    completions = list(completer.get_completions(Document("persona "), None))
-    texts = [c.text for c in completions]
-    assert set(texts) == {"P2", "P3"}
-
-    # 6. Test switch command
+    # 3. Test switch command
     completions = list(completer.get_completions(Document("switch p"), None))
     texts = [c.text for c in completions]
-    assert set(texts) == {"P2", "P3"}
+    assert "P2-conv_000002" in texts
+    assert "conv_000002" not in texts
 
-    # 7. Test style/behavior command suggestions (active behavior is "default")
+    # 4. Test style/behavior command suggestions (active behavior is "default")
     completions = list(completer.get_completions(Document("style "), None))
     texts = [c.text for c in completions]
     assert "aggressive" in texts
     assert "default" not in texts  # should exclude active behavior
 
-    # 8. Test style/behavior command suggestions with prefix
+    # 5. Test style/behavior command suggestions with prefix
     completions = list(completer.get_completions(Document("style agg"), None))
     texts = [c.text for c in completions]
     assert texts == ["aggressive"]
@@ -330,11 +294,12 @@ def test_realtime_controller_single_persona_mode():
         single_persona_mode=True,
     )
 
-    # 1. Test command_help doesn't show persona controls
-    assert "persona" not in controller.command_help
+    # 1. Test command_help doesn't show list/switch controls
+    assert "list" not in controller.command_help
+    assert "switch" not in controller.command_help
 
     # 2. Test apply_command returns disabled messages
-    msg1 = controller.apply_command("personas")
+    msg1 = controller.apply_command("list")
     assert "disabled" in msg1
 
     msg2 = controller.apply_command("persona P2")
@@ -353,12 +318,11 @@ def test_realtime_controller_single_persona_mode():
             # Test empty input autocomplete
             completions = list(completer.get_completions(Document(""), None))
             texts = [c.text for c in completions]
-            assert "personas" not in texts
-            assert "persona" not in texts
+            assert "list" not in texts
             assert "switch" not in texts
 
-            # Test typed 'persona ' argument autocomplete is empty
-            completions = list(completer.get_completions(Document("persona "), None))
+            # Test typed 'switch ' argument autocomplete is empty
+            completions = list(completer.get_completions(Document("switch "), None))
             assert len(completions) == 0
     except ImportError:
         pass
@@ -399,3 +363,110 @@ def test_realtime_controller_prompt_text_shows_persona():
     )
     controller_single.set_active_persona("P001")
     assert controller_single.prompt_text == "⚡> [P001] "
+
+
+def test_switch_without_active_sessions_returns_clear_message():
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas={"P1": {}, "P2": {}})
+
+    msg = controller.apply_command("switch P2-conv_000002")
+
+    assert "No active conversation sessions" in msg
+
+
+def test_realtime_controller_lists_and_switches_session_ids():
+    personas = {
+        "P1": {"role": "tester"},
+        "P2": {"role": "manager"},
+    }
+    controller = RealtimeChatController(initial_delay_seconds=0.5, personas=personas)
+
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
+
+    listed = controller.apply_command("list")
+    assert "P1-conv_000001" in listed
+    assert "P2-conv_000002" in listed
+
+    switched = controller.apply_command("switch P2-conv_000002")
+    assert "Conversation updated" in switched
+    assert controller.active_persona_id == "P2"
+    assert controller.active_session_id == "conv_000002"
+
+
+def test_realtime_controller_shortcuts_for_list_and_switch():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P1": {"role": "tester"}, "P2": {"role": "manager"}},
+    )
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
+
+    listed = controller.apply_command("l")
+    assert "P1-conv_000001" in listed
+    assert "P2-conv_000002" in listed
+
+    switched = controller.apply_command("s P2-conv_000002")
+    assert "Conversation updated" in switched
+    assert controller.active_session_id == "conv_000002"
+
+
+def test_realtime_controller_status_shortcut_still_available():
+    controller = RealtimeChatController(initial_delay_seconds=0.5)
+
+    status = controller.apply_command("st")
+
+    assert status.startswith("Status:")
+
+
+def test_realtime_controller_persona_command_is_guidance_only():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P1": {"role": "tester"}, "P2": {"role": "manager"}},
+    )
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P1")
+
+    msg = controller.apply_command("persona P2")
+
+    assert "Persona switching is no longer supported" in msg
+    assert controller.active_persona_id == "P1"
+    assert controller.active_session_id == "conv_000001"
+
+
+def test_realtime_controller_prompt_text_includes_session_when_active():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P001": {"role": "tester"}},
+    )
+    controller.register_conversation_session("conv_000001", "P001")
+
+    assert controller.prompt_text == "⚡> [P001-conv_000001] "
+
+
+def test_register_conversation_session_does_not_steal_active_session():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P1": {}, "P2": {}},
+    )
+    controller.register_conversation_session("conv_000001", "P1")
+    controller.register_conversation_session("conv_000002", "P2")
+
+    assert controller.active_session_id == "conv_000001"
+    assert controller.active_persona_id == "P1"
+
+
+def test_realtime_status_reports_turn_progress_when_available():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P1": {}, "P2": {}},
+    )
+    controller.register_conversation_session("conv_000001", "P1", total_turns=4)
+    controller.register_conversation_session("conv_000002", "P2", total_turns=6)
+    controller.notify_turn_complete("conv_000001", count=2)
+    controller.notify_turn_complete("conv_000002", count=1)
+
+    status = controller.apply_command("status")
+
+    assert "turns_completed=3" in status
+    assert "turns_remaining=7" in status
+    assert "active_turns=2/4" in status
