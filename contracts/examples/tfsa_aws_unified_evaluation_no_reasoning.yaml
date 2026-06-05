@@ -13,7 +13,7 @@
 #   uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml --realtime-chat --persona TFSA_P3_CONTRACTOR
 
 suite:
-  suite_id: tfsa_aws_evaluation_suite
+  suite_id: tfsa_aws_unified_evaluation_no_reasoning
   target_application: tfsa_advisor_bot
   run_mode: unified
   synthetic_flag: true
@@ -191,4 +191,4 @@ scoring:
 
 output:
   base_dir: ../../outputs
-  run_id: tfsa_aws_eval_run
+  run_id: tfsa_aws_eval_run_no_reasoning

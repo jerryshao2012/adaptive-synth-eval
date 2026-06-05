@@ -12,7 +12,7 @@
 #   uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --realtime-chat --persona DEMO_P2
 
 suite:
-  suite_id: multi_persona_demo_suite
+  suite_id: unified_evaluation_demo
   target_application: unit_test_bot
   run_mode: unified
   synthetic_flag: true
@@ -203,4 +203,4 @@ scoring:
 
 output:
   base_dir: ../../outputs
-  run_id: multi_persona_demo_run
+  run_id: unified_evaluation_demo_run
