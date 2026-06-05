@@ -93,7 +93,7 @@ target:
   timeout_seconds: 60
   agentcore:
     region: "${AWS_REGION:-us-east-1}"
-    agent_runtime_arn: "${TFSA_AGENTCORE_RUNTIME_ARN}"
+    agent_runtime_arn: "${TFSA_AGENT_RUNTIME_ARN}"
     qualifier: "${TFSA_AGENTCORE_QUALIFIER:-DEFAULT}"
     payload_prompt_key: prompt
     runtime_session_id_prefix: ase_

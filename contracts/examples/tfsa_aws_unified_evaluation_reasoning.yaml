@@ -22,7 +22,7 @@ suite:
 run:
   random_seed: 101
   # Lowered from 16 to reduce Bedrock burst-throttling pressure.
-  max_concurrency: 3
+  max_concurrency: 8
   dry_run: false
   verbose: true
   budget: 250000
@@ -82,7 +82,7 @@ target:
   retry_on_http_5xx: true
   agentcore:
     region: "${AWS_REGION:-us-east-1}"
-    agent_runtime_arn: "${TFSA_AGENTCORE_RUNTIME_ARN}"
+    agent_runtime_arn: "${TFSA_AGENT_RUNTIME_ARN}"
     qualifier: "${TFSA_AGENTCORE_QUALIFIER:-DEFAULT}"
     payload_prompt_key: prompt
     runtime_session_id_prefix: ase_tfsa_
