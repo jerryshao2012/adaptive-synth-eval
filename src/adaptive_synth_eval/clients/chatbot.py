@@ -27,6 +27,16 @@ class RetryableChatbotError(Exception):
         self.status_code = status_code
 
 
+def _is_no_response_text(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    return normalized in {
+        "",
+        "no response generated",
+        "no response",
+        "empty response",
+    }
+
+
 @dataclass(frozen=True)
 class ChatbotResponse:
     raw: dict[str, Any]
@@ -293,6 +303,10 @@ class ChatbotClient:
 
             if self.retry_on_http_5xx and status_code in {429, 500, 502, 503, 504}:
                 raise RetryableChatbotError(error, status_code=status_code)
+
+        bot_text = extract_bot_text(body)
+        if response.ok and _is_no_response_text(bot_text):
+            raise RetryableChatbotError("target_empty_response", status_code=status_code)
 
         return ChatbotResponse.from_payload(body, latency_ms=round(latency_ms, 2), status_code=status_code,
                                             error=error)

@@ -45,6 +45,25 @@ from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLL
 from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
 
 
+def _classify_target_error(error: str | None) -> str:
+    lowered = (error or "").lower()
+    if "target_empty_response" in lowered:
+        return "target_empty_response"
+    if "content_filter" in lowered or "content filter" in lowered:
+        return "content_filter_blocked"
+    return "target_runtime_error"
+
+
+def _is_no_response_text(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    return normalized in {
+        "",
+        "no response generated",
+        "no response",
+        "empty response",
+    }
+
+
 def _build_session_policy(contract, llms, token_budget, meter):
     """Build the configured session policy controller, or None when disabled."""
     mode = contract.run.session_policy
@@ -270,9 +289,13 @@ async def run_conversation(
                 "synthetic": True,
             },
         )
+        effective_error = response.error
+        if effective_error is None and _is_no_response_text(response.bot_response):
+            effective_error = "target_empty_response"
+
         latency_ms = (time.perf_counter() - send_start) * 1000
         target_latency_total_ms += latency_ms
-        if response.error:
+        if effective_error:
             errors += 1
         chatbot_completion_tokens = count_tokens(response.bot_response)
         chatbot_history_tokens += count_tokens(user_input) + chatbot_completion_tokens
@@ -280,7 +303,7 @@ async def run_conversation(
 
         if realtime_chat and should_render:
             await asyncio.to_thread(
-                display_bot_turn, bot_message=response.bot_response, error=response.error
+                display_bot_turn, bot_message=response.bot_response, error=effective_error
             )
 
         # ----- score -----
@@ -296,7 +319,7 @@ async def run_conversation(
                 ),
             )
             failure_mode = detect_failure_mode(
-                response.bot_response, response.error, score_payload["safety_score"]
+                response.bot_response, effective_error, score_payload["safety_score"]
             )
             # Hand the facts this legit turn surfaced to the adversarial side so
             # later probes build on the real client/file/amount the agent revealed.
@@ -307,9 +330,11 @@ async def run_conversation(
                 )
         else:
             adv_count += 1
-            if response.error:
+            if effective_error:
                 # Target failed this turn; avoid consuming extra judge tokens and
                 # return a deterministic non-failure verdict for bookkeeping.
+                error_class = _classify_target_error(effective_error)
+
                 class _FallbackVerdict:
                     failure_score = 0
                     harm_potential = 0
@@ -318,14 +343,14 @@ async def run_conversation(
                     refusal_score = 0
                     guardrail_worked = False
                     near_miss = False
-                    failure_type = "target_runtime_error"
+                    failure_type = error_class
                     short_reason = "Target runtime error during adversarial turn"
-                    reasoning = response.error or "target_error"
+                    reasoning = effective_error or "target_error"
                     raw = {
                         "failure_score": 0,
-                        "failure_type": "target_runtime_error",
+                        "failure_type": error_class,
                         "short_reason": "Target runtime error during adversarial turn",
-                        "reasoning": response.error,
+                        "reasoning": effective_error,
                     }
 
                 verdict = _FallbackVerdict()
@@ -337,10 +362,10 @@ async def run_conversation(
                     "refusal_score": 0,
                     "guardrail_worked": False,
                     "near_miss": False,
-                    "failure_type": "target_runtime_error",
+                    "failure_type": error_class,
                     "short_reason": "Target runtime error during adversarial turn",
                 }
-                failure_mode = "target_runtime_error"
+                failure_mode = error_class
             else:
                 scored = await asyncio.to_thread(
                     score_adversarial_turn,
@@ -439,7 +464,7 @@ async def run_conversation(
             clarification_score=score_payload.get("clarification_score"),
             failure_mode=failure_mode,
             latency_ms=latency_ms,
-            error=response.error,
+            error=effective_error,
             synthetic_flag=contract.suite.synthetic_flag,
             retrieved_policy_ids=response.retrieved_policy_ids,
             response_raw=response.raw,

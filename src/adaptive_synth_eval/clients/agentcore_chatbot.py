@@ -16,6 +16,20 @@ logger = setup_logger(__name__)
 _MIN_RUNTIME_SESSION_ID_LEN = 33
 
 
+class AgentCoreEmptyResponseError(Exception):
+    """Raised when target returns a sentinel/empty reply and should be retried."""
+
+
+def _is_no_response_text(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    return normalized in {
+        "",
+        "no response generated",
+        "no response",
+        "empty response",
+    }
+
+
 def _join_sse(raw: str) -> str:
     """Concatenate the text deltas of a text/event-stream response.
 
@@ -34,7 +48,7 @@ def _join_sse(raw: str) -> str:
         try:
             decoded = json.loads(chunk)
         except (json.JSONDecodeError, ValueError):
-            parts.append(chunk)          # not JSON — take the literal payload
+            parts.append(chunk)  # not JSON — take the literal payload
             continue
         if isinstance(decoded, str):
             parts.append(decoded)
@@ -107,6 +121,9 @@ class AgentCoreChatbotClient:
         return self._client
 
     def _is_retryable_agentcore_error(self, error: Exception) -> bool:
+        if isinstance(error, AgentCoreEmptyResponseError):
+            return True
+
         if is_transient_error(error):
             return True
 
@@ -120,6 +137,7 @@ class AgentCoreChatbotClient:
             "internal server",
             "request timeout",
             "temporarily unavailable",
+            "target_empty_response",
         ]
         return any(marker in text for marker in retryable_markers)
 
@@ -186,6 +204,15 @@ class AgentCoreChatbotClient:
             body = parsed if isinstance(parsed, dict) else {"response": str(parsed)}
         except json.JSONDecodeError:
             body = {"response": raw_text}
+
+        response_text = ""
+        for key in ("response", "answer", "message", "content", "text", "llm_response"):
+            value = body.get(key)
+            if value is not None:
+                response_text = str(value)
+                break
+        if _is_no_response_text(response_text):
+            raise AgentCoreEmptyResponseError("target_empty_response")
 
         response_meta = response.get("ResponseMetadata", {})
         status_code = int(response_meta.get("HTTPStatusCode", 200))
