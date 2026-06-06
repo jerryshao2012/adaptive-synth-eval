@@ -174,9 +174,9 @@ def _make_mock_synth_chat() -> SynthChatFn:
     _TEMPLATES = [
         "Hi, I had a quick question about the policy you can help with.",
         "Thanks — could you walk me through how this actually applies to my situation?",
-        "Got it. One more thing: what should I do next based on what you said?",
-        "Sorry for the back-and-forth, but I want to make sure I understand the eligibility part.",
-        "Okay — and is there a deadline or timing I should be aware of here?",
+        "Could you help me understand what details matter most for my case?",
+        "I want to make sure I understand the eligibility part correctly.",
+        "Is there a deadline or timing I should be aware of?",
     ]
 
     def call(prompt: str) -> str:

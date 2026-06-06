@@ -169,6 +169,16 @@ class GeneratedTurn:
 
 
 class UserSimulator:
+    _FIRST_CONTACT_PATTERNS = (
+        r"\bgot it\b",
+        r"\bone more thing\b",
+        r"\bsorry for the back-and-forth\b",
+        r"\bas we discussed\b",
+        r"\bbased on what you said\b",
+        r"\bfrom our (recent|previous) discussion\b",
+        r"\bgiven our (recent|previous) discussion\b",
+    )
+
     def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None,
                  memory_file: Path | None = None, llm_client: Any | None = None):
         self.persona = persona
@@ -196,12 +206,12 @@ class UserSimulator:
                 self.memory.demographics["style"] = persona.communication_style
                 self.memory.demographics["hr_familiarity"] = persona.hr_familiarity
                 self.memory.demographics["privacy_sensitivity"] = persona.privacy_sensitivity
-            # Load history from memory if present
+            # Start each conversation as fresh contact. Keep long-term profile memory,
+            # but never carry short-term dialogue context across conversations.
             if self.memory.recent_window:
-                self.history = []
-                for turn in self.memory.recent_window:
-                    role_lbl = "agent" if turn["role"] == "assistant" else "user"
-                    self.history.append({"role": role_lbl, "content": turn["text"]})
+                self.memory.recent_window = []
+                if self.memory_file:
+                    self.memory.save_to_file(self.memory_file)
 
     def switch_persona(self, new_persona: Persona) -> None:
         """Dynamically update the active persona mid-conversation and sync its memory state."""
@@ -272,6 +282,8 @@ class UserSimulator:
             message = self._fallback_message(turn_id, behavior_mode=behavior_mode)
         else:
             message = result.content
+
+        message = self._sanitize_opening_message(turn_id, message, behavior_mode=behavior_mode)
 
         if "ambiguity" in applied:
             message += " I am not totally sure what details matter."
@@ -349,7 +361,11 @@ class UserSimulator:
             prompt += f"{msg['role'].capitalize()}: {msg['content']}\n"
 
         if turn_id == 1:
-            prompt += "\nPlease provide your opening message to the agent."
+            prompt += (
+                "\nPlease provide your opening message to the agent. "
+                "Treat this as the first time you are meeting this agent in this conversation. "
+                "Do not imply prior interaction, prior answers, or back-and-forth."
+            )
         elif turn_id == self.turn_count:
             prompt += "\nThis is the final turn. Please ask the agent to summarize what you should do next."
         else:
@@ -576,6 +592,14 @@ class UserSimulator:
             return f"I might be misunderstanding this. {message}"
         if behavior_mode == "anxious":
             return f"I am really worried about this timeline. {message}"
+        return message
+
+    def _sanitize_opening_message(self, turn_id: int, message: str, *, behavior_mode: str) -> str:
+        if turn_id != 1:
+            return message
+        lowered = message.lower()
+        if any(re.search(pattern, lowered) for pattern in self._FIRST_CONTACT_PATTERNS):
+            return self._fallback_message(turn_id=1, behavior_mode=behavior_mode)
         return message
 
 

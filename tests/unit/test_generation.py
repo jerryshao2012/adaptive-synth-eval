@@ -113,7 +113,9 @@ def test_generate_turn_behavior_override_changes_fallback_and_metadata():
     )
 
     simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=3, seed=42)
-    turn = simulator.generate_turn(turn_id=1, previous_bot_response=None, behavior_override="aggressive")
+    with patch.object(simulator.llm_client, "complete") as mock_complete:
+        mock_complete.return_value = LLMResult(content="", raw={"mock": True}, error="llm_disabled")
+        turn = simulator.generate_turn(turn_id=1, previous_bot_response=None, behavior_override="aggressive")
 
     assert turn.generation_metadata["behavior_mode"] == "aggressive"
     assert "I need a clear answer now" in turn.user_message
@@ -199,3 +201,92 @@ def test_llm_client_content_filter_error_returns_classified_fallback():
 
     assert result.error == "content_filter_blocked"
     assert result.raw.get("error_code") == "content_filter"
+
+
+def test_first_turn_sanitizes_continuation_language():
+    persona = Persona(
+        persona_id="P_FIRST_CONTACT",
+        role="new_employee",
+        location="Canada",
+        seniority="junior",
+        communication_style="polite",
+        hr_familiarity="low",
+        privacy_sensitivity="medium",
+    )
+    scenario = Scenario(
+        scenario_id="S_FIRST_CONTACT",
+        domain="tfsa_eligibility",
+        intent="check_eligibility_and_limits",
+        expected_retrieval_topics=["eligibility"],
+        failure_injection=FailureInjection(),
+        success_criteria={"answers_grounded_in_policy": True},
+    )
+
+    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=3, seed=7)
+    with patch.object(simulator.llm_client, "complete") as mock_complete:
+        mock_complete.return_value = LLMResult(
+            content="Got it. One more thing: what should I do next based on what you said?",
+            raw={},
+        )
+        turn = simulator.generate_turn(turn_id=1, previous_bot_response=None)
+
+    assert "got it" not in turn.user_message.lower()
+    assert "one more thing" not in turn.user_message.lower()
+    assert turn.user_message.startswith("Hi, I need help with")
+
+
+def test_recent_window_is_cleared_when_starting_new_conversation(tmp_path):
+    persona = Persona(
+        persona_id="P_RECENT_WINDOW",
+        role="new_employee",
+        location="Canada",
+        seniority="junior",
+        communication_style="polite",
+        hr_familiarity="low",
+        privacy_sensitivity="medium",
+    )
+    scenario = Scenario(
+        scenario_id="S_RECENT_WINDOW",
+        domain="tfsa_eligibility",
+        intent="check_eligibility_and_limits",
+        expected_retrieval_topics=["eligibility"],
+        failure_injection=FailureInjection(),
+        success_criteria={"answers_grounded_in_policy": True},
+    )
+    memory_file = tmp_path / "personas" / "P_RECENT_WINDOW_memory.md"
+    memory_file.parent.mkdir(parents=True, exist_ok=True)
+    memory_file.write_text(
+        "\n".join([
+            "# Persona Memory: P_RECENT_WINDOW",
+            "",
+            "## Demographics",
+            "- role: new_employee",
+            "",
+            "## Preferences",
+            "",
+            "## Settings",
+            "",
+            "## Summary Notes",
+            "- Interacted regarding tfsa_eligibility.",
+            "",
+            "## Long Term Recall",
+            "",
+            "## Recent Window",
+            "- User: Got it. One more thing: can you confirm eligibility?",
+            "- Assistant: Sure, based on what we discussed...",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    simulator = UserSimulator(
+        persona=persona,
+        scenario=scenario,
+        turn_count=3,
+        seed=11,
+        memory_file=memory_file,
+    )
+
+    assert simulator.history == []
+    assert simulator.memory is not None
+    assert simulator.memory.recent_window == []
