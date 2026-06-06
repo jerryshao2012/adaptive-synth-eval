@@ -9,6 +9,30 @@ from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 
 
 class ArtifactWriter:
+    CHAT_HISTORY_CSV_FIELDNAMES = [
+        "conversation_id",
+        "session_id",
+        "synthetic_day",
+        "persona_id",
+        "scenario_id",
+        "turn_id",
+        "user_message",
+        "bot_response",
+        "expected_retrieval_topics",
+        "planned_failure_modes",
+        "applied_failure_modes",
+        "groundedness_score",
+        "relevance_score",
+        "safety_score",
+        "clarification_score",
+        "failure_mode",
+        "latency_ms",
+        "error",
+        "synthetic_flag",
+        "retrieved_policy_ids",
+        "generation_metadata",
+    ]
+
     def __init__(self, base_dir: str | Path, *, run_id: str):
         self.base_dir = Path(base_dir)
         self.run_id = run_id
@@ -27,10 +51,22 @@ class ArtifactWriter:
                 handle.write(json.dumps(row, default=str) + "\n")
         return path
 
+    def append_jsonl(self, name: str, rows: Iterable[dict], *, overwrite: bool = False) -> Path:
+        path = self.run_dir / name
+        mode = "w" if overwrite else "a"
+        with path.open(mode, encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, default=str) + "\n")
+        return path
+
     def write_chat_history(self, records: list[ChatHistoryRecord]) -> None:
         rows = [record.to_dict() for record in records]
-        self.write_jsonl("chat_history.jsonl", rows)
-        self._write_csv("chat_history.csv", rows)
+        self.append_chat_history_rows(rows, overwrite=True)
+
+    def append_chat_history_rows(self, rows: Iterable[dict], *, overwrite: bool = False) -> None:
+        rows_list = list(rows)
+        self.append_jsonl("chat_history.jsonl", rows_list, overwrite=overwrite)
+        self._write_csv("chat_history.csv", rows_list, append=not overwrite)
 
     def write_generation_report(self, summary: dict) -> Path:
         lines = [
@@ -114,7 +150,7 @@ class ArtifactWriter:
 
             def calc_cb_cost(prompt_rate, completion_rate, multiplier):
                 cost_per_convo = (avg_cb_prompt * prompt_rate / 1_000_000) + (
-                            avg_cb_completion * completion_rate / 1_000_000)
+                        avg_cb_completion * completion_rate / 1_000_000)
                 return f"${cost_per_convo * multiplier:.2f}"
 
             cb_cost_lightweight_1k = calc_cb_cost(0.20, 0.40, 1000)
@@ -219,56 +255,49 @@ class ArtifactWriter:
                 turns = conversations[conv_id]
                 # Sort turns by turn_id
                 turns.sort(key=lambda r: r.turn_id)
-
-                handle.write(f"{'=' * 80}\n")
-                handle.write(f"Conversation ID: {conv_id}\n")
-                handle.write(f"Session ID: {turns[0].session_id}\n")
-                handle.write(f"Persona: {turns[0].persona_id}\n")
-                handle.write(f"Scenario: {turns[0].scenario_id}\n")
-                handle.write(f"Synthetic Day: {turns[0].synthetic_day}\n")
-                handle.write(f"{'=' * 80}\n\n")
-
-                for turn in turns:
-                    handle.write(f"Persona (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
-                    handle.write(f"Bot (Turn {turn.turn_id}):\n{turn.bot_response}\n\n")
-
-                    if turn.error:
-                        handle.write(f"[ERROR: {turn.error}]\n\n")
-
-                    handle.write(f"---\n\n")
-
-                handle.write(f"\n{'=' * 80}\n\n\n")
+                self._write_conversation_txt_block(handle, turns)
 
         return path
 
-    def _write_csv(self, name: str, rows: list[dict]) -> Path:
+    def append_conversation_txt(self, records: list[ChatHistoryRecord], *, overwrite: bool = False) -> Path:
+        path = self.run_dir / "conversations.txt"
+        mode = "w" if overwrite else "a"
+        with path.open(mode, encoding="utf-8") as handle:
+            self._write_conversation_txt_block(handle, records)
+        return path
+
+    def _write_conversation_txt_block(self, handle, turns: list[ChatHistoryRecord]) -> None:
+        if not turns:
+            return
+        sorted_turns = sorted(turns, key=lambda r: r.turn_id)
+        first_turn = sorted_turns[0]
+
+        handle.write(f"{'=' * 80}\n")
+        handle.write(f"Conversation ID: {first_turn.conversation_id}\n")
+        handle.write(f"Session ID: {first_turn.session_id}\n")
+        handle.write(f"Persona: {first_turn.persona_id}\n")
+        handle.write(f"Scenario: {first_turn.scenario_id}\n")
+        handle.write(f"Synthetic Day: {first_turn.synthetic_day}\n")
+        handle.write(f"{'=' * 80}\n\n")
+
+        for turn in sorted_turns:
+            handle.write(f"Persona (Turn {turn.turn_id}):\n{turn.user_message}\n\n")
+            handle.write(f"Bot (Turn {turn.turn_id}):\n{turn.bot_response}\n\n")
+
+            if turn.error:
+                handle.write(f"[ERROR: {turn.error}]\n\n")
+
+            handle.write("---\n\n")
+
+        handle.write(f"\n{'=' * 80}\n\n\n")
+
+    def _write_csv(self, name: str, rows: list[dict], *, append: bool = False) -> Path:
         path = self.run_dir / name
-        fieldnames = [
-            "conversation_id",
-            "session_id",
-            "synthetic_day",
-            "persona_id",
-            "scenario_id",
-            "turn_id",
-            "user_message",
-            "bot_response",
-            "expected_retrieval_topics",
-            "planned_failure_modes",
-            "applied_failure_modes",
-            "groundedness_score",
-            "relevance_score",
-            "safety_score",
-            "clarification_score",
-            "failure_mode",
-            "latency_ms",
-            "error",
-            "synthetic_flag",
-            "retrieved_policy_ids",
-            "generation_metadata",
-        ]
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
+        mode = "a" if append else "w"
+        with path.open(mode, encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.CHAT_HISTORY_CSV_FIELDNAMES, extrasaction="ignore")
+            if not append:
+                writer.writeheader()
             for row in rows:
                 writer.writerow(row)
         return path

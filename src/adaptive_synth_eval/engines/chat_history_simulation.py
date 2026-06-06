@@ -97,11 +97,17 @@ async def run_simulation_async(
 
     client = create_chatbot_client(contract.target, dry_run=dry_run)
 
-    records: list[ChatHistoryRecord] = []
-    conversation_rows = []
-    turn_rows = []
-    score_rows = []
     errors = 0
+    total_turns = 0
+    simulator_prompt_tokens = 0
+    simulator_completion_tokens = 0
+    chatbot_prompt_tokens = 0
+    chatbot_completion_tokens = 0
+    wrote_chat_history = False
+    wrote_conversations = False
+    wrote_turns = False
+    wrote_scores = False
+    wrote_conversations_txt = False
     realtime_chat_enabled = realtime_chat
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
@@ -366,48 +372,58 @@ async def run_simulation_async(
         return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
 
     try:
-        if realtime_chat_enabled:
-            max_concurrency = _effective_max_concurrency(contract)
-            semaphore = asyncio.Semaphore(max_concurrency)
+        max_concurrency = _effective_max_concurrency(contract)
+        semaphore = asyncio.Semaphore(max_concurrency)
 
-            async def limited_process(planned):
-                if stop_all_requested.is_set():
-                    return await process_conversation(planned)
-                async with semaphore:
-                    return await process_conversation(planned)
-
-            results = await asyncio.gather(*(limited_process(planned) for planned in plan))
-            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in results:
-                conversation_rows.append(conv_row)
-                records.extend(loc_recs)
-                turn_rows.extend(loc_turn_rows)
-                score_rows.extend(loc_score_rows)
-                errors += loc_errs
-
-            if realtime_controller and realtime_controller.stop_requested:
-                stopped_early = True
+        async def limited_process(planned):
             if stop_all_requested.is_set():
-                stopped_early = True
-        else:
-            max_concurrency = _effective_max_concurrency(contract)
-            semaphore = asyncio.Semaphore(max_concurrency)
+                return await process_conversation(planned)
+            async with semaphore:
+                return await process_conversation(planned)
 
-            async def limited_process(planned):
-                if stop_all_requested.is_set():
-                    return await process_conversation(planned)
-                async with semaphore:
-                    return await process_conversation(planned)
+        tasks = [asyncio.create_task(limited_process(planned)) for planned in plan]
+        for task in asyncio.as_completed(tasks):
+            conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = await task
+            errors += loc_errs
+            total_turns += conv_row.get("turn_count", 0)
 
-            results = await asyncio.gather(*(limited_process(planned) for planned in plan))
-            for conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs in results:
-                conversation_rows.append(conv_row)
-                records.extend(loc_recs)
-                turn_rows.extend(loc_turn_rows)
-                score_rows.extend(loc_score_rows)
-                errors += loc_errs
+            if loc_recs:
+                chat_rows = [rec.to_dict() for rec in loc_recs]
+                writer.append_chat_history_rows(chat_rows, overwrite=not wrote_chat_history)
+                wrote_chat_history = True
 
-            if stop_all_requested.is_set():
-                stopped_early = True
+                simulator_prompt_tokens += sum(
+                    (rec.generation_metadata or {}).get("simulator_prompt_tokens", 0) for rec in loc_recs
+                )
+                simulator_completion_tokens += sum(
+                    (rec.generation_metadata or {}).get("simulator_completion_tokens", 0) for rec in loc_recs
+                )
+                chatbot_prompt_tokens += sum(
+                    (rec.generation_metadata or {}).get("chatbot_prompt_tokens", 0) for rec in loc_recs
+                )
+                chatbot_completion_tokens += sum(
+                    (rec.generation_metadata or {}).get("chatbot_completion_tokens", 0) for rec in loc_recs
+                )
+
+                if output_conversations:
+                    writer.append_conversation_txt(loc_recs, overwrite=not wrote_conversations_txt)
+                    wrote_conversations_txt = True
+
+            writer.append_jsonl("conversations.jsonl", [conv_row], overwrite=not wrote_conversations)
+            wrote_conversations = True
+
+            if loc_turn_rows:
+                writer.append_jsonl("turns.jsonl", loc_turn_rows, overwrite=not wrote_turns)
+                wrote_turns = True
+
+            if loc_score_rows:
+                writer.append_jsonl("scores.jsonl", loc_score_rows, overwrite=not wrote_scores)
+                wrote_scores = True
+
+        if realtime_controller and realtime_controller.stop_requested:
+            stopped_early = True
+        if stop_all_requested.is_set():
+            stopped_early = True
     finally:
         close_client_async = getattr(client, "close_async", None)
         close_client = getattr(client, "close", None)
@@ -421,16 +437,6 @@ async def run_simulation_async(
     elapsed_seconds = round(time.perf_counter() - run_start, 2)
 
     # Simulator LLM Token Statistics
-    simulator_prompt_tokens = sum(
-        rec.generation_metadata.get("simulator_prompt_tokens", 0)
-        for rec in records
-        if rec.generation_metadata
-    )
-    simulator_completion_tokens = sum(
-        rec.generation_metadata.get("simulator_completion_tokens", 0)
-        for rec in records
-        if rec.generation_metadata
-    )
     simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
 
     avg_prompt_tokens_convo = round(simulator_prompt_tokens / len(plan), 2) if plan else 0.0
@@ -438,16 +444,6 @@ async def run_simulation_async(
     avg_total_tokens_convo = round(simulator_total_tokens / len(plan), 2) if plan else 0.0
 
     # Chatbot LLM Token Statistics
-    chatbot_prompt_tokens = sum(
-        rec.generation_metadata.get("chatbot_prompt_tokens", 0)
-        for rec in records
-        if rec.generation_metadata
-    )
-    chatbot_completion_tokens = sum(
-        rec.generation_metadata.get("chatbot_completion_tokens", 0)
-        for rec in records
-        if rec.generation_metadata
-    )
     chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
 
     avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / len(plan), 2) if plan else 0.0
@@ -587,7 +583,7 @@ async def run_simulation_async(
     summary = {
         "run_id": run_id,
         "total_conversations": len(plan),
-        "total_turns": len(records),
+        "total_turns": total_turns,
         "errors": errors,
         "dry_run": dry_run,
         "stopped_early": stopped_early,
@@ -601,15 +597,20 @@ async def run_simulation_async(
     }
     writer.write_json("contract.normalized.json", contract_to_dict(contract))
     writer.write_json("run_plan.json", [item.__dict__ for item in plan])
-    writer.write_chat_history(records)
-    writer.write_jsonl("conversations.jsonl", conversation_rows)
-    writer.write_jsonl("turns.jsonl", turn_rows)
-    writer.write_jsonl("scores.jsonl", score_rows)
+
+    if not wrote_chat_history:
+        writer.append_chat_history_rows([], overwrite=True)
+    if not wrote_conversations:
+        writer.write_jsonl("conversations.jsonl", [])
+    if not wrote_turns:
+        writer.write_jsonl("turns.jsonl", [])
+    if not wrote_scores:
+        writer.write_jsonl("scores.jsonl", [])
+    if output_conversations and not wrote_conversations_txt:
+        writer.append_conversation_txt([], overwrite=True)
+
     writer.write_json("run_summary.json", summary)
     writer.write_generation_report(summary)
-
-    if output_conversations:
-        writer.write_conversations_txt(records)
 
     return summary
 
