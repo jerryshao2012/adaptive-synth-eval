@@ -137,6 +137,21 @@ def test_round_robin_plan_by_persona_interleaves_order():
     assert [p["persona_id"] for p in interleaved[:4]] == ["P1", "P2", "P3", "P1"]
 
 
+def test_estimate_remaining_seconds_returns_expected_value():
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _estimate_remaining_seconds
+
+    eta = _estimate_remaining_seconds(completed=10, total=50, elapsed_seconds=20.0)
+
+    assert eta == pytest.approx(80.0)
+
+
+def test_estimate_remaining_seconds_handles_unknown_or_empty_progress():
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _estimate_remaining_seconds
+
+    assert _estimate_remaining_seconds(completed=0, total=50, elapsed_seconds=20.0) is None
+    assert _estimate_remaining_seconds(completed=10, total=None, elapsed_seconds=20.0) is None
+
+
 def _with_output_dir(contract, base_dir: Path):
     from adaptive_synth_eval.unified_eval.config.schemas import OutputConfig
     return replace(contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id))

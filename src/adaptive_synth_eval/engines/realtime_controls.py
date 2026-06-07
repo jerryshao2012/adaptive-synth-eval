@@ -7,6 +7,7 @@ import threading
 import time
 from contextlib import redirect_stderr
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 try:
@@ -151,6 +152,7 @@ class RealtimeChatController:
         self._suppress_info_logs = os.getenv("REALTIME_SUPPRESS_INFO_LOGS", "false").lower() in {
             "1", "true", "yes", "y"
         }
+        self._run_started_monotonic = time.perf_counter()
 
     @property
     def current_delay_seconds(self) -> float:
@@ -372,6 +374,7 @@ class RealtimeChatController:
 
     def _status_text(self, *, prefix: str = "Status") -> str:
         with self._state_cv:
+            ts = datetime.now().astimezone().isoformat(timespec="seconds")
             paused_text = "paused" if self._state.paused else "running"
             delay = self._state.delay_seconds
             persona = self._state.active_persona_id
@@ -382,6 +385,31 @@ class RealtimeChatController:
                 behavior = self._state.behavior_mode
             active_slots = len(self._active_sessions)
             progress_suffix = ""
+
+            # Conversation-level progress for realtime status (requested via command).
+            known_convo_total = sum(max(0, int(v)) for v in self._persona_total_convos.values())
+            completed_convos = sum(max(0, int(v)) for v in self._persona_done_convos.values())
+            elapsed_seconds = max(0.0, time.perf_counter() - self._run_started_monotonic)
+            elapsed_text = _format_duration(elapsed_seconds)
+            if known_convo_total > 0:
+                remaining_convos = max(known_convo_total - completed_convos, 0)
+                eta_seconds = _estimate_remaining_seconds(
+                    completed=completed_convos,
+                    total=known_convo_total,
+                    elapsed_seconds=elapsed_seconds,
+                )
+                progress_suffix += (
+                    f", conversations_done={completed_convos}/{known_convo_total}"
+                    f", conversations_left={remaining_convos}"
+                    f", elapsed={elapsed_text}"
+                    f", eta={_format_eta_timestamp(eta_seconds)}"
+                )
+            else:
+                progress_suffix += (
+                    f", conversations_done={completed_convos}, conversations_left=unknown"
+                    f", elapsed={elapsed_text}, eta=unknown"
+                )
+
             known_totals = [t for t in self._session_total_turns.values() if t > 0]
             if known_totals:
                 total_turns = sum(known_totals)
@@ -390,7 +418,7 @@ class RealtimeChatController:
                     for sid in self._session_total_turns
                 )
                 remaining_turns = max(0, total_turns - completed_turns)
-                progress_suffix = (
+                progress_suffix += (
                     f", turns_completed={completed_turns}, turns_remaining={remaining_turns}"
                 )
                 if session_id and session_id in self._session_total_turns:
@@ -405,7 +433,7 @@ class RealtimeChatController:
                         f" (remaining={active_remaining})"
                     )
         return (
-            f"{prefix}: delay={delay:.2f}s, "
+            f"{prefix}: ts={ts}, delay={delay:.2f}s, "
             f"mode={paused_text}, behavior={behavior}, persona={persona or 'none'}, "
             f"session={session_id or 'none'}, active_sessions={active_slots}"
             f"{progress_suffix}"
@@ -419,7 +447,7 @@ class RealtimeChatController:
         status_prefix = "Behavior updated (global)"
         with self._state_cv:
             if self._personas and not self._state.active_persona_id:
-                return "No active persona selected. Use: persona <persona_id> before style changes."
+                return "No active persona selected. Use: switch <persona_id-conversation_id|conversation_id> before style changes."
 
             # Apply to active persona if one is set, otherwise use global fallback
             if self._state.active_persona_id:
@@ -656,3 +684,27 @@ class _PromptFriendlyLogStream:
         import sys
 
         return getattr(sys.stdout, item)
+
+
+def _estimate_remaining_seconds(*, completed: int, total: int, elapsed_seconds: float) -> float | None:
+    if completed <= 0 or total <= 0 or elapsed_seconds <= 0:
+        return None
+    remaining = max(total - completed, 0)
+    rate = completed / elapsed_seconds
+    if rate <= 0:
+        return None
+    return remaining / rate
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _format_eta_timestamp(eta_seconds: float | None) -> str:
+    if eta_seconds is None:
+        return "unknown"
+    eta_dt = datetime.now().astimezone() + timedelta(seconds=max(0.0, eta_seconds))
+    return eta_dt.isoformat(timespec="seconds")

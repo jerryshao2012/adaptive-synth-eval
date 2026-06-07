@@ -227,7 +227,7 @@ def test_realtime_controller_list_and_switching():
     assert "Unknown conversation" in msg
 
     msg = controller.apply_command("persona P1")
-    assert "Persona switching is no longer supported" in msg
+    assert "Unknown command" in msg
 
 
 def test_realtime_command_completer():
@@ -303,7 +303,7 @@ def test_realtime_controller_single_persona_mode():
     assert "disabled" in msg1
 
     msg2 = controller.apply_command("persona P2")
-    assert "disabled" in msg2
+    assert "Unknown command" in msg2
 
     msg3 = controller.apply_command("switch P1")
     assert "disabled" in msg3
@@ -418,7 +418,28 @@ def test_realtime_controller_status_shortcut_still_available():
     assert status.startswith("Status:")
 
 
-def test_realtime_controller_persona_command_is_guidance_only():
+def test_realtime_status_includes_conversation_progress_and_eta_fields():
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5,
+        personas={"P1": {}},
+        persona_total_convos={"P1": 2},
+    )
+    controller.register_conversation_session("conv_000001", "P1", total_turns=3)
+
+    status = controller.apply_command("status")
+    assert "ts=" in status
+    assert "conversations_done=0/2" in status
+    assert "conversations_left=2" in status
+    assert "eta=unknown" in status
+
+    controller.notify_conversation_complete("P1", "conv_000001")
+    status = controller.apply_command("status")
+    assert "conversations_done=1/2" in status
+    assert "conversations_left=1" in status
+    assert "eta=" in status
+
+
+def test_realtime_controller_persona_command_is_unknown():
     controller = RealtimeChatController(
         initial_delay_seconds=0.5,
         personas={"P1": {"role": "tester"}, "P2": {"role": "manager"}},
@@ -428,7 +449,7 @@ def test_realtime_controller_persona_command_is_guidance_only():
 
     msg = controller.apply_command("persona P2")
 
-    assert "Persona switching is no longer supported" in msg
+    assert "Unknown command" in msg
     assert controller.active_persona_id == "P1"
     assert controller.active_session_id == "conv_000001"
 

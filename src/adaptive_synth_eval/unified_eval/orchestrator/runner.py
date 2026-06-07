@@ -10,6 +10,7 @@ import random
 import time
 from collections import deque
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from typing import Any
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
@@ -30,6 +31,61 @@ from adaptive_synth_eval.unified_eval.providers.llm_factory import build_compone
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
 
 logger = logging.getLogger(__name__)
+
+
+class _RunProgressTracker:
+    """Emit periodic run progress as conversations complete."""
+
+    def __init__(self, *, total: int | None, enabled: bool = True):
+        self.total = total
+        self.enabled = enabled
+        self.completed = 0
+        self.started_monotonic = time.perf_counter()
+        self._lock = asyncio.Lock()
+
+    async def mark_completed(self, conversation_id: str) -> None:
+        if not self.enabled:
+            return
+        async with self._lock:
+            self.completed += 1
+            completed = self.completed
+            elapsed_seconds = max(0.0, time.perf_counter() - self.started_monotonic)
+
+            if self.total is None:
+                # Unknown total (budget-driven runs): emit periodically to avoid noisy logs.
+                if completed != 1 and completed % 25 != 0:
+                    return
+                logger.info(
+                    "[PROGRESS] ts=%s done=%d left=unknown elapsed=%s eta=unknown last=%s",
+                    _now_iso_timestamp(),
+                    completed,
+                    _format_duration(elapsed_seconds),
+                    conversation_id,
+                )
+                return
+
+            step = max(1, self.total // 100)
+            should_emit = completed == 1 or completed == self.total or completed % step == 0
+            if not should_emit:
+                return
+
+            remaining = max(self.total - completed, 0)
+            eta_seconds = _estimate_remaining_seconds(
+                completed=completed,
+                total=self.total,
+                elapsed_seconds=elapsed_seconds,
+            )
+            eta_str = _format_eta_timestamp(eta_seconds)
+            logger.info(
+                "[PROGRESS] ts=%s done=%d/%d left=%d elapsed=%s eta=%s last=%s",
+                _now_iso_timestamp(),
+                completed,
+                self.total,
+                remaining,
+                _format_duration(elapsed_seconds),
+                eta_str,
+                conversation_id,
+            )
 
 
 def run_unified(
@@ -152,6 +208,13 @@ async def run_unified_async(
     for idx, planned in enumerate(plan, start=1):
         planned["conversation_id"] = f"conv_{idx:06d}"
 
+    progress_total: int | None
+    if budget_mode:
+        progress_total = contract.eval_plan.total_conversations
+    else:
+        progress_total = len(plan)
+    progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat)
+
     effective_max_concurrency = (
         1 if sequential
         else (max_concurrency_override or _effective_max_concurrency(contract))
@@ -225,6 +288,8 @@ async def run_unified_async(
                     error=f"{type(exc).__name__}: {exc}",
                     elapsed_seconds=round(time.perf_counter() - started, 2),
                 )
+            finally:
+                await progress.mark_completed(planned["conversation_id"])
 
     budget_stopped = False
     start_time = time.time()
@@ -747,3 +812,33 @@ def _serialize_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
         })
     return rows
+
+
+def _estimate_remaining_seconds(*, completed: int, total: int | None, elapsed_seconds: float) -> float | None:
+    if total is None:
+        return None
+    if completed <= 0 or elapsed_seconds <= 0:
+        return None
+    remaining = max(total - completed, 0)
+    rate = completed / elapsed_seconds
+    if rate <= 0:
+        return None
+    return remaining / rate
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _format_eta_timestamp(eta_seconds: float | None) -> str:
+    if eta_seconds is None:
+        return "unknown"
+    eta_dt = datetime.now().astimezone() + timedelta(seconds=max(0.0, eta_seconds))
+    return eta_dt.isoformat(timespec="seconds")
+
+
+def _now_iso_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
