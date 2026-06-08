@@ -76,11 +76,13 @@ class _RunProgressTracker:
                 elapsed_seconds=elapsed_seconds,
             )
             eta_str = _format_eta_timestamp(eta_seconds)
+            completion_pct = (completed / self.total) * 100 if self.total > 0 else 100.0
             logger.info(
-                "[PROGRESS] ts=%s done=%d/%d left=%d elapsed=%s eta=%s last=%s",
+                "[PROGRESS] ts=%s done=%d/%d pct=%.1f%% left=%d elapsed=%s eta=%s last=%s",
                 _now_iso_timestamp(),
                 completed,
                 self.total,
+                completion_pct,
                 remaining,
                 _format_duration(elapsed_seconds),
                 eta_str,
