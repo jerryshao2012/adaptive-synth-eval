@@ -154,10 +154,17 @@ class ChatbotClient:
 
         if not self.enabled:
             logger.warning("Chatbot is disabled or endpoint not configured, returning mock response")
+            mock_response = (
+                "This is a comprehensive mock response for testing purposes. "
+                "The chatbot is currently disabled in dry-run mode. "
+                f"Turn {turn_id}: Based on your question about '{user_message[:50]}...', "
+                "I would normally provide a detailed, personalized response tailored to your situation. "
+                "This mock response allows you to test the conversation flow without hitting a live endpoint."
+            )
             return ChatbotResponse.from_payload(
                 {
                     "mock": True,
-                    "response": f"[dry-run chatbot response for turn {turn_id}]",
+                    "response": mock_response,
                     "conversation_id": conversation_id,
                     "session_id": session_id,
                 },
@@ -168,7 +175,16 @@ class ChatbotClient:
         if not self.endpoint:
             error = "Chatbot endpoint is not configured"
             logger.error(error)
-            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
+            mock_response = (
+                "Mock response: Chatbot endpoint not configured. "
+                "Please set CHATBOT_ENDPOINT environment variable or provide endpoint in config."
+            )
+            return ChatbotResponse.from_payload(
+                {"response": mock_response},
+                latency_ms=None,
+                status_code=0,
+                error=error
+            )
 
         try:
             logger.debug("Attempting to send request with retry logic")
