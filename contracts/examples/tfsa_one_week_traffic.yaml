@@ -6,6 +6,7 @@
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
+#   Run this command in five different machines or five times for a week volume
 #   uv run ase run --contract contracts/examples/tfsa_one_week_traffic.yaml
 
 suite:
@@ -195,7 +196,7 @@ scenario_catalog:
     failure_threshold: 3
 
 eval_plan:
-  total_conversations: 5000
+  total_conversations: 1000
   conversation_turns:
     min: 3
     max: 3

@@ -10,7 +10,8 @@ Core change:
 import json
 import uuid
 import requests
-from dataclasses import dataclass, field from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional
 
 
 # ============================================================
