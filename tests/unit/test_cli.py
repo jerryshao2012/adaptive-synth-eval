@@ -1,4 +1,11 @@
+import logging
+from pathlib import Path
+from types import SimpleNamespace
+
 from adaptive_synth_eval.cli import main
+from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
+
+UNIFIED_EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
 
 
 def test_cli_rejects_missing_contract(tmp_path, capsys):
@@ -530,6 +537,48 @@ def test_cli_resume_incomplete_run_passes_resume_flag(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert captured["resume_incomplete"] is True
+
+
+def test_cli_logs_pre_run_summary_before_realtime_controls(monkeypatch, caplog):
+    contract = load_unified_contract(UNIFIED_EXAMPLE)
+
+    def _fake_run(*args, **kwargs):
+        logging.getLogger("adaptive_synth_eval.engines.realtime_controls").info(
+            "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, [p]ause/resume, [q]uit, style <behavior>"
+        )
+        return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    fake_mode = SimpleNamespace(load_contract=lambda _: contract, run=_fake_run)
+    monkeypatch.setattr("adaptive_synth_eval.cli.get_mode", lambda _: fake_mode)
+
+    with caplog.at_level("INFO"):
+        exit_code = main(
+            [
+                "run",
+                "--contract",
+                str(UNIFIED_EXAMPLE),
+                "--dry-run",
+                "--realtime-chat",
+                "--persona",
+                "DEMO_P1",
+            ]
+        )
+
+    assert exit_code == 0
+
+    messages = [record.getMessage() for record in caplog.records]
+    summary_index = next(i for i, message in enumerate(messages) if message.startswith("Run configuration:"))
+    target_index = next(i for i, message in enumerate(messages) if message.startswith("Target:"))
+    simulator_index = next(
+        i for i, message in enumerate(messages)
+        if message.startswith("Adaptive component user_simulator:")
+    )
+    controls_index = next(i for i, message in enumerate(messages) if message.startswith("Realtime controls:"))
+
+    assert summary_index < controls_index
+    assert target_index < controls_index
+    assert simulator_index < controls_index
+    assert "effective_runtime=mock synth adapter" in messages[simulator_index]
 
 
 def test_cli_restart_incomplete_run_cleans_existing_artifacts(tmp_path, monkeypatch):
