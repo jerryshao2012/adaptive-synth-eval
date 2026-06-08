@@ -133,6 +133,17 @@ async def run_unified_async(
     run_id = run_id_override or contract.output.run_id or f"unified_run_{int(time.time())}"
     writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
 
+    # Initialize / clean slate for progressive artifact writing
+    writer.write_jsonl("conversations.jsonl", [])
+    writer.write_jsonl("turns.jsonl", [])
+    writer.write_jsonl("scores.jsonl", [])
+    writer.write_jsonl("failed_examples.jsonl", [])
+    writer.write_jsonl("adversarial_sessions.jsonl", [])
+    writer.write_jsonl("chat_history.jsonl", [])
+    writer._write_csv("chat_history.csv", [], append=False)
+    if output_conversations:
+        (writer.run_dir / "conversations.txt").write_text("", encoding="utf-8")
+
     # Build LLM clients for each component (mock when dry_run regardless of contract.llm.provider).
     if dry_run:
         contract = _force_mock_providers(contract)
@@ -174,6 +185,7 @@ async def run_unified_async(
         AttackMemory() if contract.eval_plan.attack_memory in {"shared"} else None
     )
     attack_memory_lock = asyncio.Lock()
+    writer_lock = asyncio.Lock()
 
     # Plan conversations.
     # - Cap mode (default): build a finite, weighted, deterministic plan list.
@@ -258,7 +270,7 @@ async def run_unified_async(
                 )
             started = time.perf_counter()
             try:
-                return await run_conversation(
+                res = await run_conversation(
                     entry=planned["entry"],
                     persona=contract.persona_by_id()[planned["persona_id"]],
                     synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
@@ -283,13 +295,19 @@ async def run_unified_async(
                     planned["conversation_id"],
                     type(exc).__name__,
                 )
-                return _failed_conversation_result(
+                res = _failed_conversation_result(
                     planned=planned,
                     error=f"{type(exc).__name__}: {exc}",
                     elapsed_seconds=round(time.perf_counter() - started, 2),
                 )
             finally:
                 await progress.mark_completed(planned["conversation_id"])
+
+            # Write progressively under a lock
+            async with writer_lock:
+                await asyncio.to_thread(_append_result_to_artifacts, writer, res, output_conversations)
+
+            return res
 
     budget_stopped = False
     start_time = time.time()
@@ -335,6 +353,28 @@ async def run_unified_async(
         effective_max_concurrency=effective_max_concurrency,
     )
     return summary
+
+
+def _append_result_to_artifacts(
+        writer: UnifiedArtifactWriter,
+        res: ConversationResult,
+        output_conversations: bool,
+) -> None:
+    """Append a single conversation's outputs to the artifact files in real time."""
+    writer.append_jsonl("conversations.jsonl", [res.conversation_row])
+    if res.turn_rows:
+        writer.append_jsonl("turns.jsonl", res.turn_rows)
+    if res.score_rows:
+        writer.append_jsonl("scores.jsonl", res.score_rows)
+    if res.failed_rows:
+        writer.append_jsonl("failed_examples.jsonl", res.failed_rows)
+    if res.adversarial_session:
+        writer.append_jsonl("adversarial_sessions.jsonl", [res.adversarial_session])
+    if res.chat_history:
+        rows = [record.to_dict() for record in res.chat_history]
+        writer.append_chat_history_rows(rows, overwrite=False)
+        if output_conversations:
+            writer.append_conversation_txt(res.chat_history, overwrite=False)
 
 
 # --------------------------------------------------------------------------- #
