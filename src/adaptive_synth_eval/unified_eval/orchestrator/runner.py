@@ -15,6 +15,7 @@ from typing import Any
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
+from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
@@ -102,6 +103,7 @@ def run_unified(
         realtime_chat: bool = False,
         output_conversations: bool = False,
         interactive_realtime_controls: bool = False,
+        resume_incomplete: bool = False,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
     return asyncio.run(run_unified_async(
@@ -115,6 +117,7 @@ def run_unified(
         realtime_chat=realtime_chat,
         output_conversations=output_conversations,
         interactive_realtime_controls=interactive_realtime_controls,
+        resume_incomplete=resume_incomplete,
     ))
 
 
@@ -130,21 +133,30 @@ async def run_unified_async(
         realtime_chat: bool = False,
         output_conversations: bool = False,
         interactive_realtime_controls: bool = False,
+        resume_incomplete: bool = False,
 ) -> dict[str, Any]:
     persona_filter = _resolve_persona_filter(contract, persona_filter)
     run_id = run_id_override or contract.output.run_id or f"unified_run_{int(time.time())}"
     writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
+    resumed_state = load_run_state(writer.run_dir) if resume_incomplete else None
+    started_at = (resumed_state or {}).get("started_at") or now_iso()
+    completed_conversation_ids = {
+        str(cid) for cid in ((resumed_state or {}).get("completed_conversation_ids") or []) if cid
+    }
 
-    # Initialize / clean slate for progressive artifact writing
-    writer.write_jsonl("conversations.jsonl", [])
-    writer.write_jsonl("turns.jsonl", [])
-    writer.write_jsonl("scores.jsonl", [])
-    writer.write_jsonl("failed_examples.jsonl", [])
-    writer.write_jsonl("adversarial_sessions.jsonl", [])
-    writer.write_jsonl("chat_history.jsonl", [])
-    writer._write_csv("chat_history.csv", [], append=False)
-    if output_conversations:
-        (writer.run_dir / "conversations.txt").write_text("", encoding="utf-8")
+    # Initialize / clean slate for progressive artifact writing.
+    if not resume_incomplete:
+        writer.write_jsonl("conversations.jsonl", [])
+        writer.write_jsonl("turns.jsonl", [])
+        writer.write_jsonl("scores.jsonl", [])
+        writer.write_jsonl("failed_examples.jsonl", [])
+        writer.write_jsonl("adversarial_sessions.jsonl", [])
+        writer.write_jsonl("chat_history.jsonl", [])
+        writer._write_csv("chat_history.csv", [], append=False)
+        if output_conversations:
+            (writer.run_dir / "conversations.txt").write_text("", encoding="utf-8")
+    else:
+        _ensure_progressive_artifacts_exist(writer=writer, output_conversations=output_conversations)
 
     # Build LLM clients for each component (mock when dry_run regardless of contract.llm.provider).
     if dry_run:
@@ -188,7 +200,10 @@ async def run_unified_async(
     )
     attack_memory_lock = asyncio.Lock()
     writer_lock = asyncio.Lock()
-    tracker = _RunningStatsTracker(contract.scoring.adversarial_failure_threshold)
+    tracker = _RunningStatsTracker.from_dict(
+        threshold=contract.scoring.adversarial_failure_threshold,
+        payload=(resumed_state or {}).get("metrics"),
+    )
 
     # Plan conversations.
     # - Cap mode (default): build a finite, weighted, deterministic plan list.
@@ -223,8 +238,30 @@ async def run_unified_async(
     for idx, planned in enumerate(plan, start=1):
         planned["conversation_id"] = f"conv_{idx:06d}"
 
+    full_plan = list(plan)
+    planned_conversations_total = len(plan)
+    if completed_conversation_ids:
+        plan = [p for p in plan if p["conversation_id"] not in completed_conversation_ids]
+
     writer.write_json("contract.normalized.json", contract_to_dict(contract))
-    writer.write_json("run_plan.json", _serialize_plan(plan))
+    writer.write_json("run_plan.json", _serialize_plan(full_plan))
+
+    if not resume_incomplete:
+        write_run_state(
+            writer.run_dir,
+            {
+                "version": 1,
+                "mode": "unified",
+                "status": "in_progress",
+                "run_id": run_id,
+                "started_at": started_at,
+                "updated_at": now_iso(),
+                "total_planned_conversations": planned_conversations_total,
+                "completed_conversations": 0,
+                "completed_conversation_ids": [],
+                "metrics": tracker.to_dict(),
+            },
+        )
 
     progress_total: int | None
     if budget_mode:
@@ -232,6 +269,7 @@ async def run_unified_async(
     else:
         progress_total = len(plan)
     progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat)
+    processed_conversation_ids = set(completed_conversation_ids)
 
     effective_max_concurrency = (
         1 if sequential
@@ -313,6 +351,23 @@ async def run_unified_async(
             async with writer_lock:
                 await asyncio.to_thread(_append_result_to_artifacts, writer, res, output_conversations)
                 tracker.update(res)
+                processed_conversation_ids.add(str(res.conversation_row.get("conversation_id") or ""))
+                await asyncio.to_thread(
+                    write_run_state,
+                    writer.run_dir,
+                    {
+                        "version": 1,
+                        "mode": "unified",
+                        "status": "in_progress",
+                        "run_id": run_id,
+                        "started_at": started_at,
+                        "updated_at": now_iso(),
+                        "total_planned_conversations": planned_conversations_total,
+                        "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
+                        "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
+                        "metrics": tracker.to_dict(),
+                    },
+                )
 
     budget_stopped = False
     start_time = time.time()
@@ -355,6 +410,24 @@ async def run_unified_async(
         budget_stopped=budget_stopped,
         elapsed_seconds=elapsed_seconds,
         effective_max_concurrency=effective_max_concurrency,
+        planned_conversations_total=planned_conversations_total,
+    )
+    write_run_state(
+        writer.run_dir,
+        {
+            "version": 1,
+            "mode": "unified",
+            "status": "completed",
+            "run_id": run_id,
+            "started_at": started_at,
+            "updated_at": now_iso(),
+            "completed_at": now_iso(),
+            "total_planned_conversations": planned_conversations_total,
+            "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
+            "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
+            "metrics": tracker.to_dict(),
+            "summary": summary,
+        },
     )
     return summary
 
@@ -385,6 +458,55 @@ class _RunningStatsTracker:
         self.target_latencies_ms: list[float] = []
         self.conversation_elapsed_seconds: list[float] = []
         self.conversation_target_seconds: list[float] = []
+
+    @classmethod
+    def from_dict(cls, *, threshold: int, payload: dict[str, Any] | None) -> _RunningStatsTracker:
+        tracker = cls(threshold)
+        if not payload:
+            return tracker
+
+        tracker.total_conversations = int(payload.get("total_conversations") or 0)
+        tracker.total_turns = int(payload.get("total_turns") or 0)
+        tracker.synth_turns = int(payload.get("synth_turns") or 0)
+        tracker.adv_turns = int(payload.get("adv_turns") or 0)
+        tracker.errors = int(payload.get("errors") or 0)
+        tracker.max_failure_score = int(payload.get("max_failure_score") or 0)
+        tracker.failures_at_threshold = int(payload.get("failures_at_threshold") or 0)
+        tracker.near_misses = int(payload.get("near_misses") or 0)
+
+        tracker.failure_scores = [float(v) for v in payload.get("failure_scores") or []]
+        tracker.turns_to_failure = [int(v) for v in payload.get("turns_to_failure") or []]
+        tracker.synth_safety_scores = [float(v) for v in payload.get("synth_safety_scores") or []]
+        tracker.synth_relevance_scores = [float(v) for v in payload.get("synth_relevance_scores") or []]
+        tracker.synth_groundedness_scores = [float(v) for v in payload.get("synth_groundedness_scores") or []]
+        tracker.chatbot_prompt_tokens = int(payload.get("chatbot_prompt_tokens") or 0)
+        tracker.chatbot_completion_tokens = int(payload.get("chatbot_completion_tokens") or 0)
+        tracker.target_latencies_ms = [float(v) for v in payload.get("target_latencies_ms") or []]
+        tracker.conversation_elapsed_seconds = [float(v) for v in payload.get("conversation_elapsed_seconds") or []]
+        tracker.conversation_target_seconds = [float(v) for v in payload.get("conversation_target_seconds") or []]
+        return tracker
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_conversations": self.total_conversations,
+            "total_turns": self.total_turns,
+            "synth_turns": self.synth_turns,
+            "adv_turns": self.adv_turns,
+            "errors": self.errors,
+            "max_failure_score": self.max_failure_score,
+            "failures_at_threshold": self.failures_at_threshold,
+            "near_misses": self.near_misses,
+            "failure_scores": self.failure_scores,
+            "turns_to_failure": self.turns_to_failure,
+            "synth_safety_scores": self.synth_safety_scores,
+            "synth_relevance_scores": self.synth_relevance_scores,
+            "synth_groundedness_scores": self.synth_groundedness_scores,
+            "chatbot_prompt_tokens": self.chatbot_prompt_tokens,
+            "chatbot_completion_tokens": self.chatbot_completion_tokens,
+            "target_latencies_ms": self.target_latencies_ms,
+            "conversation_elapsed_seconds": self.conversation_elapsed_seconds,
+            "conversation_target_seconds": self.conversation_target_seconds,
+        }
 
     def update(self, res: ConversationResult) -> None:
         self.total_conversations += 1
@@ -459,6 +581,30 @@ def _append_result_to_artifacts(
         writer.append_chat_history_rows(rows, overwrite=False)
         if output_conversations:
             writer.append_conversation_txt(res.chat_history, overwrite=False)
+
+
+def _ensure_progressive_artifacts_exist(*, writer: UnifiedArtifactWriter, output_conversations: bool) -> None:
+    required_jsonl = (
+        "conversations.jsonl",
+        "turns.jsonl",
+        "scores.jsonl",
+        "failed_examples.jsonl",
+        "adversarial_sessions.jsonl",
+        "chat_history.jsonl",
+    )
+    for name in required_jsonl:
+        path = writer.run_dir / name
+        if not path.exists():
+            writer.write_jsonl(name, [])
+
+    csv_path = writer.run_dir / "chat_history.csv"
+    if not csv_path.exists():
+        writer._write_csv("chat_history.csv", [], append=False)
+
+    if output_conversations:
+        conv_txt = writer.run_dir / "conversations.txt"
+        if not conv_txt.exists():
+            conv_txt.write_text("", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -701,6 +847,7 @@ def _persist_and_summarize(
         budget_stopped: bool = False,
         elapsed_seconds: float = 0.0,
         effective_max_concurrency: int = 1,
+        planned_conversations_total: int | None = None,
 ) -> dict[str, Any]:
     errors = tracker.errors
     synth_turns = tracker.synth_turns
@@ -813,6 +960,7 @@ def _persist_and_summarize(
     summary = {
         "run_id": run_id,
         "total_conversations": convo_count,
+        "planned_conversations": planned_conversations_total or convo_count,
         "total_turns": tracker.total_turns,
         "synth_turns": synth_turns,
         "adversarial_turns": adv_turns,

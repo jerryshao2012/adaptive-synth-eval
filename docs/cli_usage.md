@@ -68,6 +68,29 @@ The following options are valid only when running with a unified contract. If pa
 - `--max-concurrency <n>`: Override the `eval_plan.max_concurrency` config for this run.
 - `--run-id <id>`: Explicitly override the output run ID.
 
+### Incomplete Run Recovery
+When an existing run directory appears incomplete (for example, a previous run was interrupted), the CLI can resume or restart safely.
+
+- `--incomplete-run-action ask|resume|restart|abort`:
+  - `ask` (default): Prompt interactively to choose resume, restart, or abort.
+  - `resume`: Continue only remaining conversations from checkpoint state.
+  - `restart`: Delete the existing run directory and start a fresh run.
+  - `abort`: Stop immediately and return without running.
+
+Examples:
+
+```bash
+# Resume an interrupted run using existing artifacts/checkpoints
+uv run ase run --contract contracts/examples/tfsa_one_week_traffic.yaml --incomplete-run-action resume
+
+# Start a fresh run and clean previous artifacts for this run_id
+uv run ase run --contract contracts/examples/tfsa_one_week_traffic.yaml --incomplete-run-action restart
+```
+
+Notes:
+- In non-interactive environments (no TTY), `ask` is not allowed for incomplete runs. Use `resume`, `restart`, or `abort` explicitly.
+- Checkpoint state is persisted in `outputs/runs/<run_id>/run_state.json`.
+
 ### Summarizing a Run
 Summarize a run's results:
 ```bash

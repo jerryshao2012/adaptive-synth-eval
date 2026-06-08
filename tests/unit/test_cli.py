@@ -453,3 +453,161 @@ def test_cli_runs_with_persona_option(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert captured["persona_filter"] == "P001"
+
+
+def test_cli_resume_incomplete_run_passes_resume_flag(tmp_path, monkeypatch):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s", "run_id": "existing_run"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    run_dir = output_dir / "runs" / "existing_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_state.json").write_text(
+        '{"status":"in_progress","completed_conversations":1,"total_planned_conversations":5}',
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    def _fake_run_simulation(*args, **kwargs):
+        captured["resume_incomplete"] = kwargs.get("resume_incomplete")
+        return {"run_id": "existing_run", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
+
+    exit_code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--dry-run",
+            "--incomplete-run-action",
+            "resume",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["resume_incomplete"] is True
+
+
+def test_cli_restart_incomplete_run_cleans_existing_artifacts(tmp_path, monkeypatch):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s", "run_id": "existing_run"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    run_dir = output_dir / "runs" / "existing_run"
+    run_dir.mkdir(parents=True)
+    stale_file = run_dir / "stale.txt"
+    stale_file.write_text("old", encoding="utf-8")
+    (run_dir / "run_state.json").write_text(
+        '{"status":"in_progress","completed_conversations":1,"total_planned_conversations":5}',
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    def _fake_run_simulation(*args, **kwargs):
+        captured["stale_exists_before_run"] = stale_file.exists()
+        captured["resume_incomplete"] = kwargs.get("resume_incomplete")
+        return {"run_id": "existing_run", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
+
+    exit_code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--dry-run",
+            "--incomplete-run-action",
+            "restart",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["stale_exists_before_run"] is False
+    assert captured["resume_incomplete"] is False

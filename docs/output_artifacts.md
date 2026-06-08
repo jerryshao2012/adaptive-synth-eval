@@ -17,10 +17,13 @@ outputs/runs/<run_id>/
 ├── failed_examples.jsonl       # turns exceeding adversarial failure threshold
 ├── attack_memory.json          # Shared red-teaming attack memory database
 ├── run_summary.json            # Overall execution statistics & component-level costs
+├── run_state.json              # Checkpoint/progress state for interruption recovery
 ├── run_plan.json               # Seed and parameters generated for the run
 ├── generation_report.md        # Formatted markdown summary report
 └── conversations.txt           # (Optional) Formatted speaker-labeled transcripts
 ```
+
+`run_state.json` tracks in-progress status, completed conversation IDs, rolling metrics, and final completion status. It is used by `ase run --incomplete-run-action ...` to resume or restart interrupted runs safely.
 
 ---
 
