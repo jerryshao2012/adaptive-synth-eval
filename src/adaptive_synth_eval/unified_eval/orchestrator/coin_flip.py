@@ -7,6 +7,7 @@ Three scheduler modes (see unified_eval.config.schemas.Schedule):
 """
 from __future__ import annotations
 
+import hashlib
 import random
 
 from adaptive_synth_eval.unified_eval.config.schemas import Schedule
@@ -63,7 +64,9 @@ def plan_turn_modes(schedule: Schedule, turn_count: int, rng: random.Random) -> 
 
 def make_conversation_rng(run_seed: int | None, conversation_id: str) -> random.Random:
     """Stable RNG keyed by (run seed, conversation_id) for reproducible runs."""
-    seed = hash((run_seed if run_seed is not None else 0, conversation_id)) & 0xFFFFFFFF
+    seed_material = f"{run_seed if run_seed is not None else 0}:{conversation_id}".encode("utf-8")
+    digest = hashlib.sha256(seed_material).digest()
+    seed = int.from_bytes(digest[:8], "big") & 0xFFFFFFFF
     return random.Random(seed)
 
 

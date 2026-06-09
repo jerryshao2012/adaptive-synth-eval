@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
+from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
@@ -51,6 +52,7 @@ def run_simulation(
         realtime_chat: bool = False,
         interactive_realtime_controls: bool = False,
         persona_filter: str | None = None,
+        resume_incomplete: bool = False,
 ) -> dict:
     """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
     return asyncio.run(
@@ -61,6 +63,7 @@ def run_simulation(
             realtime_chat=realtime_chat,
             interactive_realtime_controls=interactive_realtime_controls,
             persona_filter=persona_filter,
+            resume_incomplete=resume_incomplete,
         )
     )
 
@@ -73,14 +76,23 @@ async def run_simulation_async(
         realtime_chat: bool = False,
         interactive_realtime_controls: bool = False,
         persona_filter: str | None = None,
+        resume_incomplete: bool = False,
 ) -> dict:
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
-    plan = build_run_plan(contract.traffic, contract.time_window)
+    full_plan = build_run_plan(contract.traffic, contract.time_window)
+    plan = list(full_plan)
     personas = contract.persona_by_id()
     scenarios = contract.scenario_by_id()
     matched_persona_id: str | None = None
+    resumed_state = load_run_state(writer.run_dir) if resume_incomplete else None
+    started_at = (resumed_state or {}).get("started_at") or now_iso()
+    completed_conversation_ids = set()
+    if resumed_state:
+        completed_conversation_ids = {
+            str(cid) for cid in (resumed_state.get("completed_conversation_ids") or []) if cid
+        }
 
     if persona_filter:
         for pid in personas:
@@ -91,23 +103,30 @@ async def run_simulation_async(
             raise ContractError(
                 f"Specified persona '{persona_filter}' not found in contract's persona pool: {list(personas.keys())}"
             )
+        full_plan = [planned for planned in full_plan if planned.persona_id == matched_persona_id]
         plan = [planned for planned in plan if planned.persona_id == matched_persona_id]
         if not plan:
             logger.warning("No conversations planned for persona '%s' in this run.", matched_persona_id)
 
+    if completed_conversation_ids:
+        plan = [planned for planned in plan if planned.conversation_id not in completed_conversation_ids]
+
+    planned_conversations_total = len(full_plan)
+
     client = create_chatbot_client(contract.target, dry_run=dry_run)
 
-    errors = 0
-    total_turns = 0
-    simulator_prompt_tokens = 0
-    simulator_completion_tokens = 0
-    chatbot_prompt_tokens = 0
-    chatbot_completion_tokens = 0
-    wrote_chat_history = False
-    wrote_conversations = False
-    wrote_turns = False
-    wrote_scores = False
-    wrote_conversations_txt = False
+    resume_metrics = (resumed_state or {}).get("metrics") if resumed_state else {}
+    errors = int((resume_metrics or {}).get("errors") or 0)
+    total_turns = int((resume_metrics or {}).get("total_turns") or 0)
+    simulator_prompt_tokens = int((resume_metrics or {}).get("simulator_prompt_tokens") or 0)
+    simulator_completion_tokens = int((resume_metrics or {}).get("simulator_completion_tokens") or 0)
+    chatbot_prompt_tokens = int((resume_metrics or {}).get("chatbot_prompt_tokens") or 0)
+    chatbot_completion_tokens = int((resume_metrics or {}).get("chatbot_completion_tokens") or 0)
+    wrote_chat_history = resume_incomplete and (writer.run_dir / "chat_history.jsonl").exists()
+    wrote_conversations = resume_incomplete and (writer.run_dir / "conversations.jsonl").exists()
+    wrote_turns = resume_incomplete and (writer.run_dir / "turns.jsonl").exists()
+    wrote_scores = resume_incomplete and (writer.run_dir / "scores.jsonl").exists()
+    wrote_conversations_txt = resume_incomplete and (writer.run_dir / "conversations.txt").exists()
     realtime_chat_enabled = realtime_chat
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
@@ -116,6 +135,31 @@ async def run_simulation_async(
     persona_total_convos: dict[str, int] = {}
     for planned in plan:
         persona_total_convos[planned.persona_id] = persona_total_convos.get(planned.persona_id, 0) + 1
+
+    if not resume_incomplete:
+        write_run_state(
+            writer.run_dir,
+            {
+                "version": 1,
+                "mode": "synth",
+                "status": "in_progress",
+                "run_id": run_id,
+                "started_at": started_at,
+                "updated_at": now_iso(),
+                "total_planned_conversations": planned_conversations_total,
+                "completed_conversations": 0,
+                "completed_conversation_ids": [],
+                "metrics": {
+                    "errors": 0,
+                    "total_turns": 0,
+                    "simulator_prompt_tokens": 0,
+                    "simulator_completion_tokens": 0,
+                    "chatbot_prompt_tokens": 0,
+                    "chatbot_completion_tokens": 0,
+                },
+            },
+        )
+    processed_conversation_ids = set(completed_conversation_ids)
 
     if interactive_realtime_controls and not realtime_chat:
         logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
@@ -384,6 +428,9 @@ async def run_simulation_async(
         tasks = [asyncio.create_task(limited_process(planned)) for planned in plan]
         for task in asyncio.as_completed(tasks):
             conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = await task
+            conversation_id = str(conv_row.get("conversation_id") or "")
+            if conversation_id:
+                processed_conversation_ids.add(conversation_id)
             errors += loc_errs
             total_turns += conv_row.get("turn_count", 0)
 
@@ -420,6 +467,29 @@ async def run_simulation_async(
                 writer.append_jsonl("scores.jsonl", loc_score_rows, overwrite=not wrote_scores)
                 wrote_scores = True
 
+            write_run_state(
+                writer.run_dir,
+                {
+                    "version": 1,
+                    "mode": "synth",
+                    "status": "in_progress",
+                    "run_id": run_id,
+                    "started_at": started_at,
+                    "updated_at": now_iso(),
+                    "total_planned_conversations": planned_conversations_total,
+                    "completed_conversations": len(processed_conversation_ids),
+                    "completed_conversation_ids": sorted(processed_conversation_ids),
+                    "metrics": {
+                        "errors": errors,
+                        "total_turns": total_turns,
+                        "simulator_prompt_tokens": simulator_prompt_tokens,
+                        "simulator_completion_tokens": simulator_completion_tokens,
+                        "chatbot_prompt_tokens": chatbot_prompt_tokens,
+                        "chatbot_completion_tokens": chatbot_completion_tokens,
+                    },
+                },
+            )
+
         if realtime_controller and realtime_controller.stop_requested:
             stopped_early = True
         if stop_all_requested.is_set():
@@ -439,16 +509,23 @@ async def run_simulation_async(
     # Simulator LLM Token Statistics
     simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
 
-    avg_prompt_tokens_convo = round(simulator_prompt_tokens / len(plan), 2) if plan else 0.0
-    avg_completion_tokens_convo = round(simulator_completion_tokens / len(plan), 2) if plan else 0.0
-    avg_total_tokens_convo = round(simulator_total_tokens / len(plan), 2) if plan else 0.0
+    completed_conversations = len(processed_conversation_ids)
+    avg_prompt_tokens_convo = round(simulator_prompt_tokens / completed_conversations,
+                                    2) if completed_conversations else 0.0
+    avg_completion_tokens_convo = round(simulator_completion_tokens / completed_conversations,
+                                        2) if completed_conversations else 0.0
+    avg_total_tokens_convo = round(simulator_total_tokens / completed_conversations,
+                                   2) if completed_conversations else 0.0
 
     # Chatbot LLM Token Statistics
     chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
 
-    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / len(plan), 2) if plan else 0.0
-    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / len(plan), 2) if plan else 0.0
-    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / len(plan), 2) if plan else 0.0
+    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / completed_conversations,
+                                            2) if completed_conversations else 0.0
+    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / completed_conversations,
+                                                2) if completed_conversations else 0.0
+    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / completed_conversations,
+                                           2) if completed_conversations else 0.0
 
     tokens_stats = {
         "simulator_prompt_tokens": simulator_prompt_tokens,
@@ -466,7 +543,7 @@ async def run_simulation_async(
     }
 
     # Scale Projections
-    convo_count = len(plan)
+    convo_count = completed_conversations
     rate = convo_count / elapsed_seconds if elapsed_seconds > 0 else 0.0
     time_1k = round(1000 / rate, 2) if rate > 0 else 0.0
     time_10k = round(10000 / rate, 2) if rate > 0 else 0.0
@@ -488,14 +565,14 @@ async def run_simulation_async(
         mix_targets[key] = (item.weight / total_mix_weight)
 
     actual_mix_counts = {}
-    for planned in plan:
+    for planned in full_plan:
         key = f"{planned.persona_id} + {planned.scenario_id}"
         actual_mix_counts[key] = actual_mix_counts.get(key, 0) + 1
 
     mix_realism = []
     for key, target_pct in mix_targets.items():
         actual_count = actual_mix_counts.get(key, 0)
-        actual_pct = actual_count / len(plan) if plan else 0.0
+        actual_pct = actual_count / len(full_plan) if full_plan else 0.0
         mix_realism.append({
             "mix": key,
             "target_pct": round(target_pct * 100, 2),
@@ -511,13 +588,13 @@ async def run_simulation_async(
     persona_targets = {pid: w / total_persona_weight for pid, w in persona_weights.items()}
 
     actual_persona_counts = {}
-    for planned in plan:
+    for planned in full_plan:
         actual_persona_counts[planned.persona_id] = actual_persona_counts.get(planned.persona_id, 0) + 1
 
     persona_realism = []
     for pid, target_pct in persona_targets.items():
         actual_count = actual_persona_counts.get(pid, 0)
-        actual_pct = actual_count / len(plan) if plan else 0.0
+        actual_pct = actual_count / len(full_plan) if full_plan else 0.0
         persona_realism.append({
             "persona_id": pid,
             "target_pct": round(target_pct * 100, 2),
@@ -533,13 +610,13 @@ async def run_simulation_async(
     scenario_targets = {sid: w / total_scenario_weight for sid, w in scenario_weights.items()}
 
     actual_scenario_counts = {}
-    for planned in plan:
+    for planned in full_plan:
         actual_scenario_counts[planned.scenario_id] = actual_scenario_counts.get(planned.scenario_id, 0) + 1
 
     scenario_realism = []
     for sid, target_pct in scenario_targets.items():
         actual_count = actual_scenario_counts.get(sid, 0)
-        actual_pct = actual_count / len(plan) if plan else 0.0
+        actual_pct = actual_count / len(full_plan) if full_plan else 0.0
         scenario_realism.append({
             "scenario_id": sid,
             "target_pct": round(target_pct * 100, 2),
@@ -554,7 +631,7 @@ async def run_simulation_async(
     day_targets = [w / total_day_weight for w in day_weights]
 
     actual_day_counts = [0] * contract.time_window.num_synthetic_days
-    for planned in plan:
+    for planned in full_plan:
         day_offset = (planned.synthetic_day - contract.time_window.start_day).days
         if 0 <= day_offset < len(actual_day_counts):
             actual_day_counts[day_offset] += 1
@@ -562,7 +639,7 @@ async def run_simulation_async(
     temporal_realism = []
     for idx, target_pct in enumerate(day_targets):
         actual_count = actual_day_counts[idx]
-        actual_pct = actual_count / len(plan) if plan else 0.0
+        actual_pct = actual_count / len(full_plan) if full_plan else 0.0
         temporal_realism.append({
             "day": idx + 1,
             "target_pct": round(target_pct * 100, 2),
@@ -582,7 +659,7 @@ async def run_simulation_async(
 
     summary = {
         "run_id": run_id,
-        "total_conversations": len(plan),
+        "total_conversations": completed_conversations,
         "total_turns": total_turns,
         "errors": errors,
         "dry_run": dry_run,
@@ -596,7 +673,7 @@ async def run_simulation_async(
         "production_realism": production_realism,
     }
     writer.write_json("contract.normalized.json", contract_to_dict(contract))
-    writer.write_json("run_plan.json", [item.__dict__ for item in plan])
+    writer.write_json("run_plan.json", [item.__dict__ for item in full_plan])
 
     if not wrote_chat_history:
         writer.append_chat_history_rows([], overwrite=True)
@@ -611,6 +688,31 @@ async def run_simulation_async(
 
     writer.write_json("run_summary.json", summary)
     writer.write_generation_report(summary)
+
+    write_run_state(
+        writer.run_dir,
+        {
+            "version": 1,
+            "mode": "synth",
+            "status": "completed",
+            "run_id": run_id,
+            "started_at": started_at,
+            "updated_at": now_iso(),
+            "completed_at": now_iso(),
+            "total_planned_conversations": planned_conversations_total,
+            "completed_conversations": completed_conversations,
+            "completed_conversation_ids": sorted(processed_conversation_ids),
+            "metrics": {
+                "errors": errors,
+                "total_turns": total_turns,
+                "simulator_prompt_tokens": simulator_prompt_tokens,
+                "simulator_completion_tokens": simulator_completion_tokens,
+                "chatbot_prompt_tokens": chatbot_prompt_tokens,
+                "chatbot_completion_tokens": chatbot_completion_tokens,
+            },
+            "summary": summary,
+        },
+    )
 
     return summary
 

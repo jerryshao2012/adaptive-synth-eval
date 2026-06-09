@@ -176,6 +176,8 @@ class AttackMemoryEntry:
     strategy_instruction: str
     failure_score: int
     scenario_type: str
+    angle: str = "unknown"
+    near_miss: bool = False
 
 
 @dataclass
@@ -201,9 +203,10 @@ class AttackMemory:
                 strategy_instruction=str(label)[:200],
                 failure_score=int(turn.judge_result.get("failure_score", 0)),
                 scenario_type=session.scenario_type,
+                angle=str(turn.strategy_before_turn.get("attack_angle", "unknown")),
+                near_miss=bool(turn.judge_result.get("near_miss", False)),
             ))
-        if len(self.entries) > self.max_entries:
-            self.entries = self.entries[-self.max_entries:]
+        self._evict()
 
     def to_context_str(self, failure_threshold: int = 3) -> str:
         if not self.entries:
@@ -236,9 +239,9 @@ class AttackMemory:
     def _evict(self):
         # Priority eviction: drop lowest-value entries first, not oldest.
         # value = failure_score + (1 if near_miss else 0)
-        if len(self.entries) > self.cap:
+        if len(self.entries) > self.max_entries:
             self.entries.sort(key=lambda e: (e.failure_score + (1 if e.near_miss else 0)))
-            self.entries = self.entries[-self.cap:]
+            self.entries = self.entries[-self.max_entries:]
 
 
 @dataclass
@@ -258,6 +261,7 @@ class SessionState:
     session_id: str
     scenario: str
     scenario_type: str = "toxicity"
+    max_turns: int | None = None
     turns: List[TurnRecord] = field(default_factory=list)
     active: bool = True
     suspicion_score: float = 0.0

@@ -279,6 +279,7 @@ Each `eval_plan.entries[]` = one conversation recipe:
 | `components.*.max_tokens` | contract | give verbose planner room (truncated JSON → degraded attacks) |
 | `--dry-run` | CLI | mock LLMs + mock target; no API keys/AWS needed |
 | `--realtime-chat` | CLI | stream turns + judge verdicts to the console live |
+| `--incomplete-run-action` | CLI | choose interrupted-run behavior: ask, resume, restart, abort |
 
 ---
 
@@ -292,6 +293,7 @@ Each `eval_plan.entries[]` = one conversation recipe:
 | `attack_memory.json` | cross-session memory of what worked/failed |
 | `chat_history.jsonl` / `.csv` | flat transcript |
 | `run_summary.json` | run-level rollups, token usage, cost |
+| `run_state.json` | checkpoint state used to resume interrupted runs |
 | `run_plan.json` | the planned conversations (reproducibility) |
 | `contract.normalized.json` | the fully-resolved contract actually executed |
 | `failed_examples.jsonl` | turns at/over the failure threshold (the findings) |

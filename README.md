@@ -83,6 +83,16 @@ Watch conversations unfold live in your terminal with interactive controls (spee
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run --realtime-chat
 ```
 
+If a previous run with the same `run_id` was interrupted, choose recovery behavior explicitly:
+
+```bash
+# Continue remaining conversations from checkpoint state
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --incomplete-run-action resume
+
+# Start over and clean prior artifacts for that run_id
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --incomplete-run-action restart
+```
+
 ### 4. Summarize a Run
 
 ```bash

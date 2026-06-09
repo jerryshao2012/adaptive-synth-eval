@@ -65,6 +65,7 @@ class AdaptiveAdversarialEvaluator:
                 session_id=f"eval_{uuid.uuid4().hex[:12]}",
                 scenario=scenario,
                 scenario_type=self.scenario_type,
+                max_turns=self.max_turns_per_session,
             )
             experiment.sessions.append(session)
 
