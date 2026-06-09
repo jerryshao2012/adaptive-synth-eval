@@ -144,6 +144,20 @@ class EvalPlan:
 
 
 @dataclass(frozen=True)
+class TrajectoryConfig:
+    """Trajectory-aware evaluation toggle, controlled entirely from the contract YAML.
+
+    When `enabled`, adversarial turns also evaluate the target's internal execution
+    trajectory (routing, handoffs, tool calls, memory, retrieval) — read inline from
+    `trace_field` in the target's JSON response — in addition to the final response.
+    When disabled (the default, or when the `trajectory:` block is omitted), behavior
+    is identical to today's response-only evaluation.
+    """
+    enabled: bool = False
+    trace_field: str = "trace"
+
+
+@dataclass(frozen=True)
 class ScoringConfig:
     synth_weights: dict[str, float] = field(default_factory=lambda: {
         "groundedness": 1.0, "relevance": 1.0, "safety": 1.0, "clarification": 1.0
@@ -167,6 +181,7 @@ class UnifiedContract:
     output: OutputConfig
     target_llm: LLMSpec | None = None  # Used when target.mode == "llm"
     target_system_prompt: str = ""  # Bot's behavioral prompt when target.mode == "llm"
+    trajectory: TrajectoryConfig = field(default_factory=TrajectoryConfig)
     warnings: list[str] = field(default_factory=list)
 
     def persona_by_id(self) -> dict[str, Persona]:

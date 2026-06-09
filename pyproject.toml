@@ -41,6 +41,10 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 namespaces = false
 
+[tool.setuptools.package-data]
+# Ship the attack strategy catalog (loaded via importlib.resources at runtime).
+"adaptive_synth_eval.adversarial_response_engine.engine" = ["*.yaml"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 

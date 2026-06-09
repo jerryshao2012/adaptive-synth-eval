@@ -31,6 +31,10 @@ class ChatbotClientAdapter:
             os.environ.setdefault("CHATBOT_API_TOKEN", api_key)
         self._client = ChatbotClient(endpoint=endpoint, timeout_seconds=timeout_seconds)
         self._turn_counters: dict[str, int] = {}
+        # Raw payload of the most recent send(), keyed by session_id. send() returns only
+        # the bot text (its long-standing contract); trajectory mode reads the full payload
+        # — including any embedded `trace` — from here after the call.
+        self.last_raw: dict[str, dict] = {}
 
     def send(self, session_id: str, user_input: str) -> str:
         turn_id = self._turn_counters.get(session_id, 0) + 1
@@ -41,6 +45,7 @@ class ChatbotClientAdapter:
             turn_id=turn_id,
             user_message=user_input,
         )
+        self.last_raw[session_id] = resp.raw if isinstance(resp.raw, dict) else {}
         return resp.bot_response
 
 

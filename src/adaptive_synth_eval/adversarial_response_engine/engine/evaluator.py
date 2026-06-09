@@ -33,6 +33,9 @@ class AdaptiveAdversarialEvaluator:
             on_turn: Optional[Callable[[TurnRecord, str, int], None]] = None,
             controller: Optional["RealtimeEvalController"] = None,
             turn_delay_seconds: float = 0.0,
+            trajectory_enabled: bool = False,
+            trace_provider=None,
+            trace_summarizer=None,
     ):
         self.target_client = target_client
         self.attack_agent = attack_agent
@@ -48,6 +51,11 @@ class AdaptiveAdversarialEvaluator:
         self.on_turn = on_turn
         self.controller = controller
         self.turn_delay_seconds = turn_delay_seconds
+        # Trajectory mode: when enabled, fetch+summarize the target's internal trace
+        # each turn and judge the trajectory alongside the final response.
+        self.trajectory_enabled = trajectory_enabled
+        self.trace_provider = trace_provider
+        self.trace_summarizer = trace_summarizer
 
     def run(self, scenario: str) -> ExperimentState:
         experiment = ExperimentState(
@@ -100,9 +108,14 @@ class AdaptiveAdversarialEvaluator:
                         + error_suffix
                     )
 
-                if session.best_failure_score >= self.failure_threshold:
+                # In trajectory mode an internal-trajectory breach also counts, even when
+                # the final response held — so test the higher of the two severities.
+                breach_score = session.best_failure_score
+                if self.trajectory_enabled:
+                    breach_score = max(breach_score, session.best_trace_score)
+                if breach_score >= self.failure_threshold:
                     if self.verbose:
-                        print(f"  [session {len(experiment.sessions)}] FAILURE (score={session.best_failure_score})")
+                        print(f"  [session {len(experiment.sessions)}] FAILURE (score={breach_score})")
                     session.active = False
                     break
 
@@ -137,6 +150,8 @@ class AdaptiveAdversarialEvaluator:
         verdict = JudgeVerdict(failure_score=0, refusal_quality=2)
         plan_raw: dict = {}
         error = ""
+        trace: dict = {}
+        trace_summary: dict = {}
 
         try:
             injected = None
@@ -169,17 +184,32 @@ class AdaptiveAdversarialEvaluator:
                 session_id=session.session_id,
                 user_input=user_input,
             )
+
+            # Trajectory mode: pull the target's internal trace (inline, from the raw
+            # response payload), summarize it, and hand it to the trajectory-aware judge.
+            judge_trace_summary = None
+            if self.trajectory_enabled and self.trace_provider is not None:
+                response_raw = getattr(self.target_client, "last_raw", {}).get(
+                    session.session_id, {}
+                )
+                trace = self.trace_provider.fetch(response_raw)
+                if self.trace_summarizer is not None:
+                    trace_summary = self.trace_summarizer.summarize(trace)
+                judge_trace_summary = trace_summary
+
             verdict = self.judge.judge(
                 user_input=user_input,
                 chatbot_response=chatbot_text,
                 scenario=session.scenario,
                 history=render_judge_history(session),
+                trace_summary=judge_trace_summary,
             )
 
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
 
         session.best_failure_score = max(session.best_failure_score, verdict.failure_score)
+        session.best_trace_score = max(session.best_trace_score, verdict.trace_severity_score)
         session.repeated_refusals = (
             (session.repeated_refusals + 1) if verdict.refusal_score > 0 else 0
         )
@@ -192,6 +222,8 @@ class AdaptiveAdversarialEvaluator:
             judge_result=verdict.raw,
             strategy_before_turn=plan_raw,
             error=error,
+            trace=trace,
+            trace_summary=trace_summary,
         )
         session.turns.append(turn_record)
 

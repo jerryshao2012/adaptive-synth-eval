@@ -1,43 +1,40 @@
-# engine/selector.py  (new)
+# engine/selector.py
 import math
+import random
 
-from .taxonomy import Angle, ANGLE_SUBTACTICS
-
-
-def _tried_pairs(session) -> set[tuple[str, str]]:
-    return {
-        (t.strategy_before_turn.get("attack_angle"),
-         t.strategy_before_turn.get("sub_tactic"))
-        for t in session.turns
-    }
+from .taxonomy import ANGLE_NAMES
 
 
-def select_pair(session, memory, rng, c: float = 1.4):
+def select_angle(memory, rng: random.Random, c: float = 1.4,
+                 exclude: set[str] | None = None) -> str:
+    """Pick ONE attack angle for a conversation via UCB1 over the taxonomy.
+
+    Reward = normalized cross-session mean failure_score (+ a near-miss bonus),
+    drawn from `memory.angle_stats()` which aggregates over ALL prior conversations.
+    Untried angles get an infinite score so each is sampled once early in a run;
+    after that the bandit exploits the angles that actually break this target while
+    still exploring under-sampled ones. The chosen angle is committed for the whole
+    conversation (the planner escalates it across turns).
+
+    `exclude` skips angles (used when rotating away from a stalled line of attack).
     """
-    UCB1 over angles (reward = normalized failure_score, + near-miss bonus),
-    then a uniform pick among that angle's still-untried sub-tactics.
-    Returns (angle, sub_tactic) or None when the pair-space is exhausted.
-    """
-    tried = _tried_pairs(session)
-    open_angles = [
-        a for a in Angle
-        if any((a.value, s) not in tried for s in ANGLE_SUBTACTICS[a])
-    ]
-    if not open_angles:
-        return None
-
-    stats = memory.angle_stats() if memory else {}  # see 1.2
+    stats = memory.angle_stats() if memory else {}
     total_pulls = sum(s.n for s in stats.values()) + 1
 
-    def ucb(a: Angle) -> float:
-        st = stats.get(a.value)
+    def ucb(angle: str) -> float:
+        st = stats.get(angle)
         if not st or st.n == 0:
-            return float("inf")  # try each angle once
+            return float("inf")  # sample each angle once
         reward = st.mean_score / 4.0  # normalize 0..4 -> 0..1
         near_bonus = 0.5 if st.any_near_miss else 0.0
         explore = c * math.sqrt(math.log(total_pulls) / st.n)
         return reward + near_bonus + explore
 
-    angle = max(open_angles, key=ucb)
-    untried = [s for s in ANGLE_SUBTACTICS[angle] if (angle.value, s) not in tried]
-    return angle.value, rng.choice(untried)
+    candidates = [a for a in ANGLE_NAMES if not exclude or a not in exclude]
+    if not candidates:  # everything excluded — ignore the filter rather than fail
+        candidates = list(ANGLE_NAMES)
+    # Shuffle first so ties (notably the inf cold-start) are broken uniformly at
+    # random per the conversation's seeded rng — this is what spreads angles
+    # across the ~5000 conversations.
+    rng.shuffle(candidates)
+    return max(candidates, key=ucb)

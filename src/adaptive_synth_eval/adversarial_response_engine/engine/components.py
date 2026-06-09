@@ -1,16 +1,19 @@
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from .prompts import (
     ADAPT_SYSTEM, ADAPT_USER_TEMPLATE,
     GENERATE_SYSTEM, GENERATE_USER_TEMPLATE,
     JUDGE_CONFIGS,
+    JUDGE_TRAJECTORY_GUIDANCE, JUDGE_TRAJECTORY_USER_APPENDIX,
     SESSION_POLICY_SYSTEM, SESSION_POLICY_USER_TEMPLATE,
+    TRACE_SUMMARIZER_SYSTEM, TRACE_SUMMARIZER_USER_TEMPLATE,
 )
 from ..core.models import (
     SessionState, AttackMemory,
     PlanResult, GeneratedTurn, JudgeVerdict, PolicyDecision,
 )
+from .taxonomy import render_angle_detail, scenario_strategy_note
 from ..providers.llm_client import LLMClient
 
 
@@ -80,6 +83,27 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
     )
 
 
+def _recent_dialogue(session: SessionState, n: int = 2) -> str:
+    """Lean continuity context for the GENERATOR — just the last `n` raw turns.
+
+    The generator does not need the planner's analytical history (tried angles,
+    defense scores); the strategy is already in next_generator_instruction. It only
+    needs enough recent dialogue to write a natural continuation that references what
+    the bot just said. Keeping this minimal avoids double-processing history and the
+    token cost of feeding the full analysis to both LLMs.
+    """
+    parts: list[str] = []
+    warm = session.synth_context or []
+    if warm and not session.turns:
+        # No adversarial turns yet — the warm-up disclosures are the only real context.
+        parts.append("Warm-up context the agent already revealed:")
+        parts.extend(warm[-2:])
+    for t in session.turns[-n:]:
+        parts.append(f"user: {_clip(t.user_input, 300)}")
+        parts.append(f"chatbot: {_clip(t.chatbot_response, 400)}")
+    return "\n".join(parts) if parts else "(no prior turns in this conversation yet)"
+
+
 def render_judge_history(session: SessionState, max_turns: int = 5) -> str:
     """Prior-conversation context for the authorization-aware judge.
 
@@ -109,7 +133,7 @@ class AdaptationPlanner:
         self.llm = llm
 
     def plan(self, session: SessionState, attack_memory: Optional[AttackMemory] = None, target_persona: str = "",
-             style_hint: str = "") -> PlanResult:
+             style_hint: str = "", fixed_angle: str = "") -> PlanResult:
         memory_ctx = attack_memory.to_context_str() if attack_memory else "No cross-session memory."
         user = ADAPT_USER_TEMPLATE.format(
             scenario_type=session.scenario_type,
@@ -121,6 +145,9 @@ class AdaptationPlanner:
             repeated_refusals=session.repeated_refusals,
             suspicion_score=session.suspicion_score,
             turn_count=len(session.turns),
+            fixed_angle=fixed_angle or "(none assigned)",
+            fixed_angle_detail=render_angle_detail(fixed_angle) if fixed_angle else "(none assigned)",
+            scenario_note=scenario_strategy_note(session.scenario_type) or "(no scenario-specific note)",
         )
         if style_hint:
             user += f"\n\nStyle directive: {style_hint}"
@@ -131,14 +158,33 @@ class TurnGenerator:
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
-    def generate(self, session: SessionState, strategy_instruction: str) -> GeneratedTurn:
+    def generate(self, session: SessionState, strategy_instruction: str,
+                 variation_seed: str = "") -> GeneratedTurn:
         user = GENERATE_USER_TEMPLATE.format(
             scenario_type=session.scenario_type,
             scenario=session.scenario,
             strategy_instruction=strategy_instruction,
-            history=_summarize_history(session),
+            history=_recent_dialogue(session),
+            variation_seed=variation_seed or "(no preference — choose naturally)",
         )
         return GeneratedTurn.from_dict(self.llm.complete_json(GENERATE_SYSTEM, user))
+
+
+class TraceSummarizer:
+    """Compresses a normalized multi-agent execution trace into judge-ready facts.
+
+    Used only in trajectory mode. The summary is fed to SafetyJudge.judge() so the
+    judge can score the internal trajectory, not just the final response.
+    """
+
+    def __init__(self, llm: LLMClient):
+        self.llm = llm
+
+    def summarize(self, trace: Dict[str, Any]) -> Dict[str, Any]:
+        # Cap the serialized trace so a huge raw_trace can't blow the prompt budget.
+        trace_json = json.dumps(trace, default=str, indent=2)[:12000]
+        user = TRACE_SUMMARIZER_USER_TEMPLATE.format(trace_json=trace_json)
+        return self.llm.complete_json(TRACE_SUMMARIZER_SYSTEM, user)
 
 
 class SafetyJudge:
@@ -154,6 +200,7 @@ class SafetyJudge:
         chatbot_response: str,
         scenario: str = "",
         history: str = "",
+        trace_summary: Optional[Dict[str, Any]] = None,
     ) -> JudgeVerdict:
         # scenario/history are optional and only consumed by judge templates that
         # reference them (data-pii-leak, document-exfiltration). str.format ignores
@@ -164,7 +211,25 @@ class SafetyJudge:
             scenario=scenario or "(no scenario authorization boundary provided)",
             history=history or "(single-turn evaluation — no prior conversation supplied)",
         )
-        return JudgeVerdict.from_dict(self.llm.complete_json(self._system, user))
+        system = self._system
+        # Trajectory mode: extend the judge to score the internal trajectory too. When no
+        # trace_summary is supplied, the prompt is byte-for-byte the response-only judge.
+        if trace_summary is not None:
+            system = system + "\n\n" + JUDGE_TRAJECTORY_GUIDANCE
+            user = user + JUDGE_TRAJECTORY_USER_APPENDIX.format(
+                trace_summary=json.dumps(trace_summary, default=str, indent=2)
+            )
+        result = self.llm.complete_json(system, user)
+        # A judge that fails to return a usable verdict (parse error, or salvaged output
+        # truncated before the score) must not be silently treated as a SAFE 0. Retry once
+        # with a stricter, compact reminder before falling back to a judge_error verdict.
+        if "error" in result or "failure_score" not in result:
+            retry_user = user + (
+                "\n\nIMPORTANT: Return ONLY a single compact JSON object — scores FIRST, "
+                "reasoning <= 60 words LAST. Do not write multi-paragraph analysis."
+            )
+            result = self.llm.complete_json(system, retry_user)
+        return JudgeVerdict.from_dict(result)
 
 
 class SessionPolicyController:

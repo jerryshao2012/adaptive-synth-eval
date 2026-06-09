@@ -39,6 +39,7 @@ from adaptive_synth_eval.unified_eval.config.schemas import (
     Schedule,
     ScoringConfig,
     Suite,
+    TrajectoryConfig,
     UnifiedContract,
 )
 
@@ -113,6 +114,7 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
 
     eval_plan = _parse_eval_plan(payload["eval_plan"], warnings)
     scoring = _parse_scoring(payload.get("scoring", {}))
+    trajectory = _parse_trajectory(payload.get("trajectory", {}))
 
     _validate_references(personas, scenarios, adv_scenarios, eval_plan)
     _validate_turns(eval_plan.conversation_turns)
@@ -143,6 +145,7 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
         output=output,
         target_llm=target_llm,
         target_system_prompt=target_system_prompt,
+        trajectory=trajectory,
         warnings=warnings,
     )
 
@@ -212,6 +215,7 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "adversarial": {"failure_threshold": contract.scoring.adversarial_failure_threshold},
         },
         "output": {"base_dir": str(contract.output.base_dir), "run_id": contract.output.run_id},
+        "trajectory": contract.trajectory.__dict__,
         "warnings": contract.warnings,
     }
 
@@ -335,6 +339,15 @@ def _parse_schedule(payload: dict[str, Any]) -> Schedule:
         warmup_turns=int(payload.get("warmup_turns", 2)),
         min_synth=int(payload.get("min_synth", 0)),
         min_adversarial=int(payload.get("min_adversarial", 0)),
+    )
+
+
+def _parse_trajectory(payload: dict[str, Any]) -> TrajectoryConfig:
+    if not isinstance(payload, dict):
+        return TrajectoryConfig()
+    return TrajectoryConfig(
+        enabled=bool(payload.get("enabled", False)),
+        trace_field=str(payload.get("trace_field", "trace")),
     )
 
 

@@ -46,14 +46,14 @@ llm:
 components:
   planner:
     provider: bedrock
-    model: amazon.nova-micro-v1:0
+    model: global.anthropic.claude-haiku-4-5-20251001-v1:0
     max_tokens: 1024
     temperature: 0.7
     bedrock:
       region: "${AWS_REGION:-us-east-1}"
   generator:
     provider: bedrock
-    model: amazon.nova-micro-v1:0
+    model: global.anthropic.claude-haiku-4-5-20251001-v1:0
     max_tokens: 1024
     temperature: 0.7
     bedrock:
@@ -243,7 +243,7 @@ eval_plan:
   total_conversations: 200
   conversation_turns:
     min: 3
-    max: 3
+    max: 12
   attack_memory: shared
   entries:
     # Novice saver asking about eligibility + PII leak probe
@@ -313,6 +313,18 @@ eval_plan:
         mode: phased
         warmup_turns: 2
 
+    # Investor asking about eligibility + Base64-encoded injection (filter evasion)
+    - persona_id: TFSA_P2_INVESTOR
+      synth_scenario_id: TFSA_S2_WITHDRAWALS
+      adversarial_scenario_id: TFSA_S8_DOC_EXFIL
+      weight: 0.10
+      schedule:
+        mode: phased
+        warmup_turns: 2
+
+    # s8 scenario
+    
+
 scoring:
   synth:
     weights:
@@ -326,3 +338,11 @@ scoring:
 output:
   base_dir: ../../outputs
   run_id: tfsa_aws_eval_run_reasoning
+
+# Trajectory-aware evaluation. When enabled, adversarial turns also judge the target's
+# internal execution trace (routing, handoffs, tool calls, memory, retrieval) — read
+# inline from `trace_field` in the target's JSON response — alongside the final answer.
+# Set enabled: false (or remove this block) for today's response-only behavior.
+trajectory:
+  enabled: true
+  trace_field: trace

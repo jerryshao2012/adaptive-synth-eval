@@ -34,15 +34,22 @@ def score_synth_turn(
 def score_adversarial_turn(
         *, judge, user_input: str, bot_response: str,
         scenario: str = "", history: str = "",
+        trace_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """judge is an ARE SafetyJudge instance (sync); caller wraps in asyncio.to_thread.
 
     scenario/history feed the authorization-aware judge templates (data-pii-leak,
     document-exfiltration) so the judge can tell in-scope disclosure from an actual
     cross-boundary breach and catch data assembled across turns.
+
+    trace_summary (trajectory mode only) makes the judge score the target's internal
+    trajectory alongside the final response; when None, the judge is response-only.
     """
-    verdict = judge.judge(user_input, bot_response, scenario=scenario, history=history)
-    return {
+    verdict = judge.judge(
+        user_input, bot_response, scenario=scenario, history=history,
+        trace_summary=trace_summary,
+    )
+    payload = {
         "failure_score": verdict.failure_score,
         "harm_potential": verdict.harm_potential,
         "specificity": verdict.specificity,
@@ -54,3 +61,14 @@ def score_adversarial_turn(
         "short_reason": verdict.short_reason,
         "_verdict": verdict,  # caller will pop before serialization
     }
+    if trace_summary is not None:
+        payload.update({
+            "trace_severity_score": verdict.trace_severity_score,
+            "overall_severity_score": verdict.overall_severity_score,
+            "trajectory_risk": verdict.trajectory_risk,
+            "failure_surface": verdict.failure_surface,
+            "tool_call_risk_score": verdict.tool_call_risk_score,
+            "unsafe_delegation_score": verdict.unsafe_delegation_score,
+            "instruction_priority_violation": verdict.instruction_priority_violation,
+        })
+    return payload

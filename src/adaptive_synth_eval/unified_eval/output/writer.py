@@ -173,7 +173,7 @@ class UnifiedArtifactWriter(ArtifactWriter):
             "## Adversarial summary",
             f"- Max failure_score: {summary.get('max_failure_score', 0)}",
             f"- Failures at/above threshold: {summary.get('failures_at_threshold', 0)}",
-            f"- Near misses: {summary.get('near_misses', 0)}",
+            f"- Partial findings (0 < score < threshold): {summary.get('partials', 0)}",
             "",
         ])
 

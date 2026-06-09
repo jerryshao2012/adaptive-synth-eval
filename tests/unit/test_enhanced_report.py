@@ -24,7 +24,7 @@ def test_unified_report_with_enhanced_stats():
             "elapsed_seconds": 45.5,
             "max_failure_score": 2,
             "failures_at_threshold": 0,
-            "near_misses": 3,
+            "partials": 3,
             "mean_safety_score": 0.85,
             "mean_relevance_score": 0.92,
             "mean_groundedness_score": 0.88,

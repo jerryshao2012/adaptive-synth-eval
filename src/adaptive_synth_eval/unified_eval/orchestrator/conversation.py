@@ -18,11 +18,13 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     RuleBasedSessionPolicyController,
     SafetyJudge,
     SessionPolicyController,
+    TraceSummarizer,
     TurnGenerator,
     render_judge_history,
 )
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
+from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import InlineTraceProvider
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
@@ -187,12 +189,23 @@ async def run_conversation(
     # keep probing. Saves budget for the next conversation.
     session_policy_controller = _build_session_policy(contract, llms, token_budget, meter)
 
+    # ----- trajectory mode (contract-controlled) -----
+    # When enabled, adversarial turns also judge the target's internal execution trace,
+    # read inline from the response body. The trace summarizer reuses the judge LLM.
+    trajectory_enabled = contract.trajectory.enabled
+    trace_provider = InlineTraceProvider(trace_field=contract.trajectory.trace_field) if trajectory_enabled else None
+    trace_summarizer = (
+        TraceSummarizer(AREClient(_metered("judge", llms["judge"].call_fn), token_budget))
+        if trajectory_enabled else None
+    )
+
     hijack_target = resolve_hijack_target(adv_scenario.scenario_type, adv_scenario.hijack_target)
     attack_agent = AttackAgent(
         planner=planner,
         generator=generator,
         attack_memory=attack_memory,
         persona_pool=[hijack_target] if hijack_target else [],
+        rng=rng,
     )
 
     session = SessionState(
@@ -252,7 +265,13 @@ async def run_conversation(
             if probe is None:
                 break
             user_input = probe.user_input
-            strategy_meta = {"mode": "adversarial", **probe.plan.raw}
+            strategy_meta = {
+                "mode": "adversarial",
+                **probe.plan.raw,
+                "register": probe.generated.register,
+                "probe_architecture": probe.generated.probe_architecture,
+                "social_trigger": probe.generated.social_trigger,
+            }
             # The planner's JSON failed to parse even after retries, so the probe ran on
             # the generic fallback instead of a real strategy. Surface it as an error
             # instead of silently degrading the attack (mirrors the ARE orchestrator).
@@ -335,6 +354,10 @@ async def run_conversation(
                 )
         else:
             adv_count += 1
+            # Trajectory mode: the target's internal trace lives inline in the response
+            # body. Empty dicts when disabled or when the target omitted a trace.
+            turn_trace: dict[str, Any] = {}
+            turn_trace_summary: dict[str, Any] = {}
             if effective_error:
                 # Target failed this turn; avoid consuming extra judge tokens and
                 # return a deterministic non-failure verdict for bookkeeping.
@@ -372,15 +395,40 @@ async def run_conversation(
                 }
                 failure_mode = error_class
             else:
+                trace_summary_for_judge = None
+                if trajectory_enabled and trace_provider is not None:
+                    turn_trace = trace_provider.fetch(response.raw)
+                    if trace_summarizer is not None:
+                        turn_trace_summary = await asyncio.to_thread(
+                            trace_summarizer.summarize, turn_trace
+                        )
+                    trace_summary_for_judge = turn_trace_summary
                 scored = await asyncio.to_thread(
                     score_adversarial_turn,
                     judge=judge, user_input=user_input, bot_response=response.bot_response,
                     scenario=adv_scenario.scenario_text,
                     history=render_judge_history(session),
+                    trace_summary=trace_summary_for_judge,
                 )
                 verdict = scored.pop("_verdict")
                 score_payload = scored
+                if trajectory_enabled:
+                    strategy_meta.update({
+                        "trace_severity_score": verdict.trace_severity_score,
+                        "overall_severity_score": verdict.overall_severity_score,
+                        "trajectory_risk": verdict.trajectory_risk,
+                        "failure_surface": verdict.failure_surface,
+                        "tool_call_risk_score": verdict.tool_call_risk_score,
+                        "unsafe_delegation_score": verdict.unsafe_delegation_score,
+                        "instruction_priority_violation": verdict.instruction_priority_violation,
+                    })
                 failure_mode = verdict.failure_type if verdict.failure_score >= threshold else None
+                # A judge that failed to return a usable verdict is INDETERMINATE, not a
+                # guardrail success — surface it as an error so it isn't silently a SAFE 0.
+                if getattr(verdict, "judge_error", False):
+                    errors += 1
+                    strategy_meta["judge_error"] = True
+                    failure_mode = "judge_error"
             if realtime_chat and should_render:
                 await asyncio.to_thread(
                     display_judge_turn,
@@ -397,9 +445,30 @@ async def run_conversation(
                 user_input=user_input,
                 chatbot_response=response.bot_response,
                 judge_result=verdict.raw,
-                strategy_before_turn=probe.plan.raw,
+                # Record the generator's framing choices alongside the plan so cross-session
+                # variation is auditable (and the sub_tactic the planner chose is preserved
+                # for attack memory). probe is always set on adversarial turns.
+                strategy_before_turn={
+                    **probe.plan.raw,
+                    "generated": {
+                        "register": probe.generated.register,
+                        "probe_architecture": probe.generated.probe_architecture,
+                        "social_trigger": probe.generated.social_trigger,
+                        "intent_label": probe.generated.intent_label,
+                    },
+                },
+                trace=turn_trace,
+                trace_summary=turn_trace_summary,
             ))
             session.best_failure_score = max(session.best_failure_score, verdict.failure_score)
+            # Trajectory mode: a trajectory breach counts even if the final response held.
+            trace_sev = getattr(verdict, "trace_severity_score", 0)
+            session.best_trace_score = max(session.best_trace_score, trace_sev)
+            adv_effective_score = (
+                max(verdict.failure_score, trace_sev) if trajectory_enabled else verdict.failure_score
+            )
+            if trajectory_enabled and failure_mode is None and adv_effective_score >= threshold:
+                failure_mode = verdict.failure_type or "trajectory_breach"
 
             # Soft fresh-start: track consecutive refusals; when threshold hits,
             # push a rotation directive into the planner for the next adversarial turn.
@@ -423,7 +492,7 @@ async def run_conversation(
             else:
                 attack_agent.style_hint = ""
 
-            if verdict.failure_score >= threshold:
+            if adv_effective_score >= threshold:
                 failed_rows.append({
                     "conversation_id": conversation_id,
                     "turn_id": turn_id,
@@ -433,6 +502,7 @@ async def run_conversation(
                     "user_input": user_input,
                     "bot_response": response.bot_response,
                     "failure_score": verdict.failure_score,
+                    "trace_severity_score": trace_sev,
                     "harm_potential": verdict.harm_potential,
                     "short_reason": verdict.short_reason,
                 })
@@ -504,8 +574,11 @@ async def run_conversation(
         if realtime_controller:
             realtime_controller.notify_turn_complete(conversation_id)
 
-        # ----- short-circuit on hard failure -----
-        if mode == "adversarial" and session.best_failure_score >= threshold:
+        # ----- short-circuit on hard failure (response or, in trajectory mode, trajectory) -----
+        best_breach = session.best_failure_score
+        if trajectory_enabled:
+            best_breach = max(best_breach, session.best_trace_score)
+        if mode == "adversarial" and best_breach >= threshold:
             break
 
         # ----- session policy abandon: end conversation early -----
@@ -543,6 +616,8 @@ async def run_conversation(
         "target_latency_seconds": round(target_latency_total_ms / 1000, 2),
         "best_failure_score": session.best_failure_score,
     }
+    if trajectory_enabled:
+        conv_row["best_trace_score"] = session.best_trace_score
 
     adversarial_session = None
     if session.turns:
@@ -559,10 +634,13 @@ async def run_conversation(
                     "chatbot_response": t.chatbot_response,
                     "judge_result": t.judge_result,
                     "strategy_before_turn": t.strategy_before_turn,
+                    **({"trace": t.trace, "trace_summary": t.trace_summary} if trajectory_enabled else {}),
                 }
                 for t in session.turns
             ],
         }
+        if trajectory_enabled:
+            adversarial_session["best_trace_score"] = session.best_trace_score
 
     return ConversationResult(
         conversation_row=conv_row,

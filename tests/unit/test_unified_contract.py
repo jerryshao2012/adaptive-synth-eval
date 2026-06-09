@@ -51,6 +51,20 @@ def test_ratio_out_of_range_rejected():
         parse_unified_contract(payload)
 
 
+def test_trajectory_defaults_disabled_when_block_omitted():
+    contract = parse_unified_contract(_base_payload())
+    assert contract.trajectory.enabled is False
+    assert contract.trajectory.trace_field == "trace"
+
+
+def test_trajectory_enabled_from_contract_yaml():
+    payload = _base_payload()
+    payload["trajectory"] = {"enabled": True, "trace_field": "exec_trace"}
+    contract = parse_unified_contract(payload)
+    assert contract.trajectory.enabled is True
+    assert contract.trajectory.trace_field == "exec_trace"
+
+
 def _base_payload() -> dict:
     return {
         "suite": {"suite_id": "t", "target_application": "tbot", "run_mode": "unified", "synthetic_flag": True},

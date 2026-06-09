@@ -1,8 +1,63 @@
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from .llm_backends import LLMCallFn
 from ..core.token_budget import TokenBudgetManager, TokenUsage
+
+
+def _salvage_json(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Best-effort recovery of a JSON object from a messy/truncated LLM response.
+
+    Handles three real-world cases seen from judge/planner models:
+      1. JSON wrapped in ```fences``` or surrounded by prose.
+      2. Trailing junk after a complete object.
+      3. A single object truncated by max_tokens (unterminated string / missing
+         closing braces) — we close it so the fields emitted before the cutoff
+         (the scores, which the prompt now puts first) are still parsed.
+    Returns the parsed dict, or None if nothing usable can be recovered.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    # Drop markdown fences anywhere (```json ... ``` or ``` ... ```).
+    if "```" in text:
+        fenced = text.split("```")
+        # pick the longest fenced segment that looks like JSON
+        cands = [seg for seg in fenced if "{" in seg]
+        if cands:
+            text = max(cands, key=len).strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+
+    start = text.find("{")
+    if start == -1:
+        return None
+    text = text[start:]
+
+    # Fast path: a clean object (ignoring trailing junk).
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    # Repair a truncated object: close an open string, then balance braces.
+    repaired = text
+    if repaired.count('"') % 2 == 1:
+        repaired += '"'
+    open_braces = repaired.count("{") - repaired.count("}")
+    if open_braces > 0:
+        # strip a dangling ", key":  / trailing comma so the close is valid
+        repaired = repaired.rstrip().rstrip(",")
+        repaired += "}" * open_braces
+    try:
+        obj = json.loads(repaired)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        return None
+    return None
 
 
 class LLMClient:
@@ -37,4 +92,9 @@ class LLMClient:
         try:
             return json.loads(stripped)
         except (json.JSONDecodeError, TypeError):
+            # Best-effort salvage (prose-wrapped, trailing junk, or truncated output)
+            # before declaring the response unparseable.
+            salvaged = _salvage_json(raw)
+            if salvaged is not None:
+                return salvaged
             return {"error": "invalid_json", "raw": raw}

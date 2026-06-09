@@ -443,7 +443,7 @@ class _RunningStatsTracker:
 
         self.max_failure_score = 0
         self.failures_at_threshold = 0
-        self.near_misses = 0
+        self.partials = 0  # adversarial turns with 0 < failure_score < threshold
 
         self.failure_scores: list[float] = []
         self.turns_to_failure: list[int] = []
@@ -472,7 +472,8 @@ class _RunningStatsTracker:
         tracker.errors = int(payload.get("errors") or 0)
         tracker.max_failure_score = int(payload.get("max_failure_score") or 0)
         tracker.failures_at_threshold = int(payload.get("failures_at_threshold") or 0)
-        tracker.near_misses = int(payload.get("near_misses") or 0)
+        # back-compat: older checkpoints stored this as "near_misses"
+        tracker.partials = int(payload.get("partials", payload.get("near_misses", 0)) or 0)
 
         tracker.failure_scores = [float(v) for v in payload.get("failure_scores") or []]
         tracker.turns_to_failure = [int(v) for v in payload.get("turns_to_failure") or []]
@@ -495,7 +496,7 @@ class _RunningStatsTracker:
             "errors": self.errors,
             "max_failure_score": self.max_failure_score,
             "failures_at_threshold": self.failures_at_threshold,
-            "near_misses": self.near_misses,
+            "partials": self.partials,
             "failure_scores": self.failure_scores,
             "turns_to_failure": self.turns_to_failure,
             "synth_safety_scores": self.synth_safety_scores,
@@ -527,7 +528,7 @@ class _RunningStatsTracker:
                 if isinstance(fail_score, (int, float)):
                     self.failure_scores.append(fail_score)
                     if 0 < fail_score < self.threshold:
-                        self.near_misses += 1
+                        self.partials += 1
 
         for row in res.score_rows:
             if row.get("turn_type") == "synth":
@@ -854,7 +855,7 @@ def _persist_and_summarize(
     adv_turns = tracker.adv_turns
     max_failure = tracker.max_failure_score
     failures_at_threshold = tracker.failures_at_threshold
-    near_misses = tracker.near_misses
+    partials = tracker.partials
 
     # Failure percentiles (p50/p90/p95) — surface "how close" attacks got, not just the binary count.
     threshold = contract.scoring.adversarial_failure_threshold
@@ -972,7 +973,7 @@ def _persist_and_summarize(
         "effective_max_concurrency": int(max(1, effective_max_concurrency)),
         "max_failure_score": max_failure,
         "failures_at_threshold": failures_at_threshold,
-        "near_misses": near_misses,
+        "partials": partials,
         "failure_percentiles": failure_percentiles,
         "mean_safety_score": mean_safety,
         "mean_relevance_score": mean_relevance,

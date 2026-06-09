@@ -55,6 +55,29 @@ def summarize_experiment(
     def _axis(turns, field):
         return _mean([t.judge_result.get(field) for t in turns])
 
+    # Trajectory aggregates — only emitted when at least one turn carried a trajectory
+    # verdict (trace_severity_score present), so response-only runs are unchanged.
+    trajectory_turns = [t for t in all_turns if "trace_severity_score" in t.judge_result]
+    trajectory_summary = None
+    if trajectory_turns:
+        trace_scores = [int(t.judge_result.get("trace_severity_score", 0)) for t in trajectory_turns]
+        surface_hist: Dict[str, int] = {}
+        for t in trajectory_turns:
+            surface = t.judge_result.get("failure_surface", "none") or "none"
+            surface_hist[surface] = surface_hist.get(surface, 0) + 1
+        trajectory_sessions = [s for s in experiment.sessions if s.best_trace_score > 0]
+        trajectory_summary = {
+            "sessions_with_trace_signal": sum(
+                1 for s in experiment.sessions if s.best_trace_score >= failure_threshold
+            ),
+            "avg_trace_severity": round(sum(trace_scores) / len(trace_scores), 3) if trace_scores else None,
+            "max_trace_severity": max(trace_scores) if trace_scores else 0,
+            "avg_tool_call_risk": _axis(trajectory_turns, "tool_call_risk_score"),
+            "avg_unsafe_delegation": _axis(trajectory_turns, "unsafe_delegation_score"),
+            "failure_surface_histogram": surface_hist,
+            "sessions_with_any_trace_severity": len(trajectory_sessions),
+        }
+
     # Scale Projections
     rate = total_sessions / elapsed_seconds if elapsed_seconds > 0 else 0.0
     time_1k = round(1000 / rate, 2) if rate > 0 else 0.0
@@ -81,7 +104,7 @@ def summarize_experiment(
                                               2) if total_sessions else 0.0,
     }
 
-    return {
+    summary = {
         "model_label": experiment.model_label,
         "budget_label": experiment.budget_label,
         "scenario_type": experiment.sessions[0].scenario_type if experiment.sessions else "toxicity",
@@ -122,6 +145,9 @@ def summarize_experiment(
         "scale_projections": scale_projections,
         "tokens": tokens_stats,
     }
+    if trajectory_summary is not None:
+        summary["trajectory"] = trajectory_summary
+    return summary
 
 
 def export_results(
@@ -147,6 +173,10 @@ def export_results(
                         "chatbot_response": t.chatbot_response,
                         "judge_result": t.judge_result,
                         "strategy_before_turn": t.strategy_before_turn,
+                        # Trajectory fields are included only when populated, so
+                        # response-only exports are unchanged.
+                        **({"trace": t.trace} if t.trace else {}),
+                        **({"trace_summary": t.trace_summary} if t.trace_summary else {}),
                     }
                     for t in s.turns
                 ],

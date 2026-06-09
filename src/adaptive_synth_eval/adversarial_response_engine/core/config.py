@@ -55,6 +55,19 @@ class StorageConfig:
 
 
 @dataclass
+class TrajectoryConfig:
+    """Trajectory-aware evaluation toggle.
+
+    When `enabled`, the harness extracts the target's internal execution trace
+    (inline, from `trace_field` in the response body), summarizes it, and judges
+    both the final response and the trajectory. When disabled (default), behavior
+    is identical to response-only evaluation.
+    """
+    enabled: bool = False
+    trace_field: str = "trace"
+
+
+@dataclass
 class ExperimentConfig:
     provider: str = "mock"
     model: Optional[str] = None
