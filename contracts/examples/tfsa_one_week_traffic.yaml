@@ -3,6 +3,7 @@
 # Purpose:
 # - Scale the TFSA unified evaluation into a one-week traffic-style profile.
 # - Run the full one-week simulation profile for production-like traffic behavior.
+# - AWS Bedrock Quota Limits: https://us-east-1.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
