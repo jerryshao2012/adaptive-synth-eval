@@ -23,6 +23,16 @@ Unified evaluation supports the same target surface used by synth mode:
 
 When using AgentCore, configure `target.agentcore.region` and `target.agentcore.agent_runtime_arn`.
 
+For `mode: api`, you can also set optional target LLM payload knobs in the `target` block:
+- `chatbot_model`: list of model identifiers forwarded in request payload.
+- `chatbot_temperature`: temperature forwarded in request payload.
+- `source_doc_ref`: source document reference forwarded in request payload.
+
+These can be configured directly in the contract, and if omitted, they can fall back to env vars:
+- `CHATBOT_MODEL`
+- `CHATBOT_TEMPERATURE`
+- `CHATBOT_SOURCE_DOCUMENT_REFERENCE`
+
 ## Schedule Modes
 
 Each entry in the `eval_plan` can configure a `schedule` to control how synthetic (synth) and adversarial (probe) turns are interleaved:

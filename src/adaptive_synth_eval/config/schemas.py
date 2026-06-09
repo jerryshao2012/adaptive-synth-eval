@@ -52,6 +52,14 @@ class TargetChatbot:
     retry_on_http_5xx: bool = False
     browser: BrowserChatbot | None = None
     agentcore: AgentCoreTarget | None = None
+    # Optional LLM request parameters forwarded in the chatbot API payload.
+    # When set here they take precedence over the CHATBOT_MODEL /
+    # CHATBOT_TEMPERATURE / CHATBOT_SOURCE_DOCUMENT_REFERENCE env vars,
+    # giving the contract YAML a single place to configure both the harness
+    # LLM (llm: block) and the target chatbot's own LLM knobs (target: block).
+    chatbot_model: list[str] | None = None
+    chatbot_temperature: float | None = None
+    source_doc_ref: str | None = None
 
 
 @dataclass(frozen=True)

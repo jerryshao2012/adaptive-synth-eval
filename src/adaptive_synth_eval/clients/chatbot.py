@@ -89,6 +89,9 @@ class ChatbotClient:
             retry_jitter: bool | None = None,
             retry_on_timeout: bool = True,
             retry_on_http_5xx: bool = False,
+            chatbot_model: list[str] | None = None,
+            chatbot_temperature: float | None = None,
+            source_doc_ref: str | None = None,
     ):
         logger.info("Initializing ChatbotClient")
         self.endpoint = endpoint or os.getenv("CHATBOT_ENDPOINT")
@@ -111,18 +114,27 @@ class ChatbotClient:
         self.retry_on_timeout = retry_on_timeout
         self.retry_on_http_5xx = retry_on_http_5xx
 
-        # Optional Chatbot specific configs
-        self.chatbot_model = os.getenv("CHATBOT_MODEL")
+        # Optional Chatbot specific configs — constructor args take precedence over env vars
+        if chatbot_model is not None:
+            self.chatbot_model = list(chatbot_model)
+        else:
+            env_model = os.getenv("CHATBOT_MODEL")
+            self.chatbot_model = [m.strip() for m in env_model.split(",")] if env_model else None
         if self.chatbot_model:
-            self.chatbot_model = [m.strip() for m in self.chatbot_model.split(",")]
             logger.debug(f"Chatbot models configured: {self.chatbot_model}")
 
-        self.chatbot_temperature = os.getenv("CHATBOT_TEMPERATURE")
+        if chatbot_temperature is not None:
+            self.chatbot_temperature = float(chatbot_temperature)
+        else:
+            env_temp = os.getenv("CHATBOT_TEMPERATURE")
+            self.chatbot_temperature = float(env_temp) if env_temp is not None else None
         if self.chatbot_temperature is not None:
-            self.chatbot_temperature = float(self.chatbot_temperature)
             logger.debug(f"Chatbot temperature: {self.chatbot_temperature}")
 
-        self.source_doc_ref = os.getenv("CHATBOT_SOURCE_DOCUMENT_REFERENCE")
+        if source_doc_ref is not None:
+            self.source_doc_ref = source_doc_ref
+        else:
+            self.source_doc_ref = os.getenv("CHATBOT_SOURCE_DOCUMENT_REFERENCE")
         if self.source_doc_ref:
             logger.debug(f"Source document reference: {self.source_doc_ref}")
 

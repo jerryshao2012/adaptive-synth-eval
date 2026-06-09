@@ -21,6 +21,11 @@ target:
     type: bearer
     env_var: CHATBOT_API_TOKEN
   timeout_seconds: 60.0
+  # Target chatbot LLM parameters — forwarded in the request payload.
+  # Override via env vars: CHATBOT_MODEL, CHATBOT_TEMPERATURE, CHATBOT_SOURCE_DOCUMENT_REFERENCE.
+  chatbot_model: "${CHATBOT_MODEL:-}"
+  chatbot_temperature: "${CHATBOT_TEMPERATURE:-}"
+  source_doc_ref: "${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}"
 
 time_window:
   start_day: "2026-05-16"
