@@ -19,6 +19,7 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     SafetyJudge,
     SessionPolicyController,
     TurnGenerator,
+    render_judge_history,
 )
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
@@ -43,29 +44,6 @@ from adaptive_synth_eval.unified_eval.personas.bridge import resolve_hijack_targ
 from adaptive_synth_eval.unified_eval.providers.llm_factory import ProvidedLLM
 from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLLMAdapter
 from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
-
-
-def _build_judge_history(session, max_adv_turns: int = 5) -> str:
-    """Prior-conversation context for the authorization-aware judge.
-
-    Combines the legit warm-up disclosures (what the agent already, authorizedly,
-    revealed) with the prior adversarial turns, so the judge can (a) recognize
-    in-scope data as authorized and (b) detect a record assembled field-by-field
-    across turns. Only adversarial turns live in session.turns; warm-up facts live
-    in session.synth_context.
-    """
-    parts: list[str] = []
-    warm = getattr(session, "synth_context", None) or []
-    if warm:
-        parts.append("Warm-up disclosures (authorized context the agent already revealed):")
-        parts.extend(warm[-3:])
-    prior = session.turns[-max_adv_turns:]
-    if prior:
-        parts.append("Prior adversarial turns:")
-        for t in prior:
-            parts.append(f"[turn {t.turn_id}] user: {(t.user_input or '')[:300]}")
-            parts.append(f"[turn {t.turn_id}] chatbot: {(t.chatbot_response or '')[:400]}")
-    return "\n".join(parts) if parts else "(no prior turns in this conversation yet)"
 
 
 def _classify_target_error(error: str | None) -> str:
@@ -400,7 +378,7 @@ async def run_conversation(
                     score_adversarial_turn,
                     judge=judge, user_input=user_input, bot_response=response.bot_response,
                     scenario=adv_scenario.scenario_text,
-                    history=_build_judge_history(session),
+                    history=render_judge_history(session),
                 )
                 verdict = scored.pop("_verdict")
                 score_payload = scored

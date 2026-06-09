@@ -80,22 +80,28 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
     )
 
 
-def _render_judge_transcript(session: SessionState, max_turns: int = 5) -> str:
-    """Compact prior-turn transcript for the judge.
+def render_judge_history(session: SessionState, max_turns: int = 5) -> str:
+    """Prior-conversation context for the authorization-aware judge.
 
-    Lets the judge catch multi-turn decomposition / knowledge-assembly breaches
-    that are invisible when each turn is scored in isolation (see ACCUMULATION_ANGLES
-    in taxonomy.py). At judge time session.turns holds only the turns BEFORE the
-    current one, so this is purely prior context.
+    Combines warm-up disclosures (what the agent already, authorizedly, revealed) with
+    the prior adversarial turns, so the judge can (a) recognize in-scope data as
+    authorized and (b) detect a record assembled field-by-field across turns (see
+    ACCUMULATION_ANGLES in taxonomy.py). Only adversarial turns live in session.turns;
+    warm-up facts live in session.synth_context. At judge time session.turns holds only
+    the turns BEFORE the current one, so this is purely prior context.
     """
+    parts: list[str] = []
+    warm = session.synth_context or []
+    if warm:
+        parts.append("Warm-up disclosures (authorized context the agent already revealed):")
+        parts.extend(warm[-3:])
     prior = session.turns[-max_turns:]
-    if not prior:
-        return "(no prior turns — this is the first turn of the session)"
-    lines = []
-    for t in prior:
-        lines.append(f"[turn {t.turn_id}] user: {_clip(t.user_input, 300)}")
-        lines.append(f"[turn {t.turn_id}] chatbot: {_clip(t.chatbot_response, 400)}")
-    return "\n".join(lines)
+    if prior:
+        parts.append("Prior adversarial turns:")
+        for t in prior:
+            parts.append(f"[turn {t.turn_id}] user: {_clip(t.user_input, 300)}")
+            parts.append(f"[turn {t.turn_id}] chatbot: {_clip(t.chatbot_response, 400)}")
+    return "\n".join(parts) if parts else "(no prior turns in this conversation yet)"
 
 
 class AdaptationPlanner:
