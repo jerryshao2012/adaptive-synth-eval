@@ -292,83 +292,183 @@ def make_bedrock_backend(
         max_pool_connections=64,
     )
     client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
-    # Inference profile IDs can be prefixed (for example, "us.anthropic..."),
-    # and ARNs can include provider names in the resource segment.
+    # Inference profile IDs can be prefixed (for example, "us.anthropic...").
+    # Extract provider from either first segment or the segment after region/global prefixes.
     model_lc = model.lower()
-    if "anthropic." in model_lc:
-        provider = "anthropic"
-    elif "amazon." in model_lc:
-        provider = "amazon"
-    else:
-        provider = model.split(".")[0]
+    parts = model_lc.split(".")
+    known_providers = {"anthropic", "amazon", "openai", "moonshot", "deepseek", "meta", "mistral", "cohere", "ai21"}
+    region_prefixes = {"global", "us", "eu", "ap", "apac", "sa"}
+    provider = ""
+    if parts:
+        if parts[0] in known_providers:
+            provider = parts[0]
+        elif len(parts) >= 2 and parts[0] in region_prefixes and parts[1] in known_providers:
+            provider = parts[1]
+
+    is_titan = provider == "amazon" and "titan" in model_lc
 
     def call(system: str, user: str) -> Dict[str, Any]:
         import json as _json
 
-        is_nova = "nova" in model
+        def _is_prefixed_model(model_id: str) -> bool:
+            first = model_id.split(".", 1)[0].lower()
+            return first in region_prefixes
 
-        if provider == "anthropic":
-            body = _json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "system": system,
-                "messages": [{"role": "user", "content": user}],
-            })
-        elif provider == "amazon":
-            if is_nova:
-                body = _json.dumps({
-                    "system": [{"text": system}],
-                    "messages": [{"role": "user", "content": [{"text": user}]}],
-                    "inferenceConfig": {"max_new_tokens": max_tokens},
-                })
-            else:
-                # Combine system and user prompts for Amazon Titan
-                prompt = f"{system}\n\n{user}"
-                body = _json.dumps({
-                    "inputText": prompt,
-                    "textGenerationConfig": {
-                        "maxTokenCount": max_tokens,
-                    },
-                })
-        else:
-            raise ValueError(f"Unsupported Bedrock provider for model '{model}'")
+        def _profile_prefixed_model_ids(model_id: str) -> list[str]:
+            if _is_prefixed_model(model_id):
+                return [model_id]
+            prefixes: list[str] = []
+            if region.lower().startswith("us-"):
+                prefixes.append("us")
+            elif region.lower().startswith("eu-"):
+                prefixes.append("eu")
+            prefixes.append("global")
+            # Preserve order while deduplicating.
+            uniq: list[str] = []
+            for prefix in prefixes:
+                candidate = f"{prefix}.{model_id}"
+                if candidate not in uniq:
+                    uniq.append(candidate)
+            return uniq
 
-        response = client.invoke_model(
-            modelId=model,
-            body=body,
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = _json.loads(response["body"].read())
-
-        if provider == "anthropic":
+        def _usage_from_dict(usage: dict[str, Any] | None) -> dict[str, int]:
+            usage = usage or {}
             return {
-                "content": result["content"][0]["text"],
+                "prompt_tokens": int(
+                    usage.get("prompt_tokens")
+                    or usage.get("input_tokens")
+                    or usage.get("inputTokens")
+                    or 0
+                ),
+                "completion_tokens": int(
+                    usage.get("completion_tokens")
+                    or usage.get("output_tokens")
+                    or usage.get("outputTokens")
+                    or 0
+                ),
+            }
+
+        def _extract_openai_content(raw_content: Any) -> str:
+            if isinstance(raw_content, str):
+                return raw_content
+            if isinstance(raw_content, list):
+                return "".join(
+                    item.get("text", "")
+                    for item in raw_content
+                    if isinstance(item, dict)
+                ).strip()
+            return ""
+
+        def _invoke_openai_style(model_id: str) -> Dict[str, Any]:
+            payloads = [
+                {
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "max_tokens": max_tokens,
+                    "response_format": {"type": "json_object"},
+                },
+                {
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "max_tokens": max_tokens,
+                },
+            ]
+            last_error: Exception | None = None
+            for payload in payloads:
+                try:
+                    response = client.invoke_model(
+                        modelId=model_id,
+                        body=_json.dumps(payload),
+                        contentType="application/json",
+                        accept="application/json",
+                    )
+                    result = _json.loads(response["body"].read())
+                    if isinstance(result, dict) and result.get("choices"):
+                        choice0 = result["choices"][0] or {}
+                        message = choice0.get("message") or {}
+                        content = _extract_openai_content(message.get("content", ""))
+                        return {
+                            "content": content,
+                            "usage": _usage_from_dict(result.get("usage")),
+                        }
+                except Exception as exc:  # pragma: no cover - exercised against live Bedrock variants.
+                    last_error = exc
+                    continue
+            if last_error is not None:
+                raise last_error
+            raise ValueError(f"Unsupported Bedrock provider for model '{model_id}'")
+
+        def _converse(model_id: str) -> Dict[str, Any]:
+            response = client.converse(
+                modelId=model_id,
+                system=[{"text": system}],
+                messages=[{"role": "user", "content": [{"text": user}]}],
+                inferenceConfig={"maxTokens": max_tokens},
+            )
+            content_blocks = ((response.get("output") or {}).get("message") or {}).get("content") or []
+            text = "".join(block.get("text", "") for block in content_blocks if isinstance(block, dict)).strip()
+            return {
+                "content": text,
+                "usage": _usage_from_dict(response.get("usage")),
+            }
+
+        if is_titan:
+            # Titan Text models use InvokeModel payload format.
+            prompt = f"{system}\n\n{user}"
+            body = _json.dumps({
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": max_tokens,
+                },
+            })
+            response = client.invoke_model(
+                modelId=model,
+                body=body,
+                contentType="application/json",
+                accept="application/json",
+            )
+            result = _json.loads(response["body"].read())
+            return {
+                "content": result["results"][0]["outputText"],
                 "usage": {
-                    "prompt_tokens": result["usage"]["input_tokens"],
-                    "completion_tokens": result["usage"]["output_tokens"],
+                    "prompt_tokens": result["inputTextTokenCount"],
+                    "completion_tokens": result["results"][0]["tokenCount"],
                 },
             }
-        elif provider == "amazon":
-            if is_nova:
-                return {
-                    "content": result["output"]["message"]["content"][0]["text"],
-                    "usage": {
-                        "prompt_tokens": result["usage"]["inputTokens"],
-                        "completion_tokens": result["usage"]["outputTokens"],
-                    },
-                }
-            else:
-                return {
-                    "content": result["results"][0]["outputText"],
-                    "usage": {
-                        "prompt_tokens": result["inputTextTokenCount"],
-                        "completion_tokens": result["results"][0]["tokenCount"],
-                    },
-                }
-        else:
-            # Should be unreachable
-            raise ValueError(f"Unsupported Bedrock provider for model '{model}'")
+
+        # Use Bedrock Converse when supported by the model/profile.
+        try:
+            return _converse(model)
+        except Exception as exc:
+            message = str(exc).lower()
+            is_invalid_model_id = (
+                    "invalid model identifier" in message
+                    or ("model identifier" in message and "invalid" in message)
+            )
+            needs_inference_profile = (
+                    "on-demand throughput" in message
+                    and "inference profile" in message
+            )
+            if needs_inference_profile:
+                last_error: Exception = exc
+                for model_id in _profile_prefixed_model_ids(model):
+                    try:
+                        return _converse(model_id)
+                    except Exception as profile_exc:
+                        last_error = profile_exc
+                        if provider in {"openai", "moonshot"}:
+                            try:
+                                return _invoke_openai_style(model_id)
+                            except Exception as invoke_exc:
+                                last_error = invoke_exc
+                raise last_error
+            if is_invalid_model_id and provider in {"openai", "moonshot"}:
+                return _invoke_openai_style(model)
+            raise
 
     return call
 

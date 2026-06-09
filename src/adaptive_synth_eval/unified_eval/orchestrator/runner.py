@@ -279,6 +279,16 @@ async def run_unified_async(
         effective_max_concurrency = 1
     semaphore = asyncio.Semaphore(max(1, effective_max_concurrency))
 
+    if not realtime_chat:
+        skipped_conversations = planned_conversations_total - len(plan)
+        logger.info(
+            "Starting %d conversations with max_concurrency=%d (already completed=%d, skipped=%d)",
+            len(plan),
+            effective_max_concurrency,
+            len(completed_conversation_ids),
+            skipped_conversations,
+        )
+
     # Build interactive realtime controller if requested.
     realtime_controller: RealtimeChatController | None = None
     if realtime_chat and interactive_realtime_controls:

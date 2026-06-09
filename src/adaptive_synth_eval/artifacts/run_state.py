@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import tempfile
 import time
 from datetime import datetime
@@ -96,5 +97,27 @@ def detect_incomplete_run(run_dir: Path) -> dict[str, Any] | None:
 
 
 def clear_run_directory(run_dir: Path) -> None:
-    if run_dir.exists():
-        shutil.rmtree(run_dir)
+    if not run_dir.exists():
+        return
+
+    def _handle_remove_error(func: Any, path: str, exc_info: tuple[type[BaseException], BaseException, Any]) -> None:
+        error = exc_info[1]
+        if isinstance(error, FileNotFoundError):
+            return
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except FileNotFoundError:
+            return
+
+    # OneDrive sync and antivirus scanners can hold transient file locks.
+    for attempt in range(6):
+        try:
+            shutil.rmtree(run_dir, onerror=_handle_remove_error)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt >= 5:
+                raise
+            time.sleep(0.1 * (attempt + 1))
