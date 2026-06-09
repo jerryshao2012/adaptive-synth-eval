@@ -173,6 +173,21 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class SimulatedLLMConfig:
+    provider: str | None = None
+    model: str | None = None
+    max_tokens: int = 1024
+    temperature: float = 0.7
+    api_key_env: str | None = None
+    azure_endpoint: str | None = None
+    azure_deployment: str | None = None
+    azure_api_version: str | None = None
+    bedrock_region: str | None = None
+    bedrock_endpoint: str | None = None
+    ollama_base_url: str | None = None
+
+
+@dataclass(frozen=True)
 class SimulationContract:
     simulation_suite: SimulationSuite
     target: TargetChatbot
@@ -181,6 +196,7 @@ class SimulationContract:
     scenario_catalog: list[Scenario]
     traffic: TrafficOrchestration
     output: OutputConfig
+    llm: SimulatedLLMConfig = field(default_factory=SimulatedLLMConfig)
     warnings: list[str] = field(default_factory=list)
 
     @property

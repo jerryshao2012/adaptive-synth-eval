@@ -6,8 +6,6 @@ in lockstep with the synth pipeline.
 from __future__ import annotations
 
 import json
-import os
-import re
 from dataclasses import fields
 from datetime import date
 from pathlib import Path
@@ -22,6 +20,7 @@ from adaptive_synth_eval.config.contract import (
     _parse_target_chatbot,
     _require_keys,
 )
+from adaptive_synth_eval.config.env import load_project_env, resolve_env_placeholders
 from adaptive_synth_eval.config.schemas import (
     Persona,
     Scenario,
@@ -39,7 +38,6 @@ from adaptive_synth_eval.unified_eval.config.schemas import (
     Schedule,
     ScoringConfig,
     Suite,
-    TrajectoryConfig,
     UnifiedContract,
 )
 
@@ -58,12 +56,13 @@ def load_unified_contract(path: str | Path) -> UnifiedContract:
     path = Path(path)
     if not path.exists():
         raise ContractError(f"Contract file not found: {path}")
+    load_project_env(anchor=path, override=False)
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".json":
         payload = json.loads(text)
     else:
         payload = yaml.safe_load(text)
-    payload = _resolve_env_vars(payload)
+    payload = resolve_env_placeholders(payload)
     return parse_unified_contract(payload, base_path=path.parent)
 
 
@@ -114,7 +113,6 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
 
     eval_plan = _parse_eval_plan(payload["eval_plan"], warnings)
     scoring = _parse_scoring(payload.get("scoring", {}))
-    trajectory = _parse_trajectory(payload.get("trajectory", {}))
 
     _validate_references(personas, scenarios, adv_scenarios, eval_plan)
     _validate_turns(eval_plan.conversation_turns)
@@ -145,7 +143,6 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
         output=output,
         target_llm=target_llm,
         target_system_prompt=target_system_prompt,
-        trajectory=trajectory,
         warnings=warnings,
     )
 
@@ -215,7 +212,6 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "adversarial": {"failure_threshold": contract.scoring.adversarial_failure_threshold},
         },
         "output": {"base_dir": str(contract.output.base_dir), "run_id": contract.output.run_id},
-        "trajectory": contract.trajectory.__dict__,
         "warnings": contract.warnings,
     }
 
@@ -342,15 +338,6 @@ def _parse_schedule(payload: dict[str, Any]) -> Schedule:
     )
 
 
-def _parse_trajectory(payload: dict[str, Any]) -> TrajectoryConfig:
-    if not isinstance(payload, dict):
-        return TrajectoryConfig()
-    return TrajectoryConfig(
-        enabled=bool(payload.get("enabled", False)),
-        trace_field=str(payload.get("trace_field", "trace")),
-    )
-
-
 def _parse_scoring(payload: dict[str, Any]) -> ScoringConfig:
     synth = payload.get("synth", {}) or {}
     adv = payload.get("adversarial", {}) or {}
@@ -395,25 +382,3 @@ def _target_to_dict(target) -> dict[str, Any]:
     if target.agentcore is not None:
         out["agentcore"] = target.agentcore.__dict__
     return out
-
-
-# ----- env var resolution (ported from ARE config, supports ${VAR} and ${VAR:-default}) -----
-
-_ENV_PATTERN = re.compile(r"\$\{([^}]+)}")
-
-
-def _resolve_env_vars(obj: Any) -> Any:
-    if isinstance(obj, str):
-        def repl(m: re.Match[str]) -> str:
-            expr = m.group(1)
-            if ":-" in expr:
-                name, default = expr.split(":-", 1)
-                return os.environ.get(name, default)
-            return os.environ.get(expr, m.group(0))
-
-        return _ENV_PATTERN.sub(repl, obj)
-    if isinstance(obj, dict):
-        return {k: _resolve_env_vars(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_env_vars(v) for v in obj]
-    return obj

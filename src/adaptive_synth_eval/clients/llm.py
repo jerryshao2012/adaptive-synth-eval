@@ -3,21 +3,14 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
-from dotenv import load_dotenv
 from pydantic import SecretStr
 
 from adaptive_synth_eval.clients.retry_utils import wrap_model_with_rate_limiting
 
 logger = logging.getLogger(__name__)
-
-# Load environment variables from .env file if it exists
-env_path = Path(__file__).parent.parent.parent / ".env"
-if env_path.exists():
-    load_dotenv(env_path, override=True)
 
 
 @dataclass(frozen=True)
@@ -37,10 +30,83 @@ class LLMClient:
     - Ollama (OLLAMA_BASE_URL, MODEL_NAME)
     """
 
-    def __init__(self, enabled: bool = False, model_provider: str | None = None):
+    def __init__(
+            self,
+            enabled: bool = False,
+            model_provider: str | None = None,
+            config: Mapping[str, Any] | None = None,
+    ):
         self.enabled = enabled
-        self.model_provider = model_provider or self._detect_provider()
+        self.config = dict(config or {})
+        self.model_provider = self._normalize_provider(
+            model_provider
+            or self._provider_from_config()
+            or self._detect_provider()
+        )
         self._model = None
+
+    def _provider_from_config(self) -> str | None:
+        provider = self.config.get("provider")
+        if provider is None:
+            return None
+        text = str(provider).strip()
+        return text or None
+
+    @staticmethod
+    def _normalize_provider(provider: str | None) -> str | None:
+        if provider is None:
+            return None
+        normalized = provider.strip().lower().replace("-", "_")
+        aliases = {
+            "azure": "azure_openai",
+            "azureopenai": "azure_openai",
+            "azure_openai": "azure_openai",
+            "anthropic": "anthropic",
+            "openai": "openai",
+            "ollama": "ollama",
+            "bedrock": "bedrock",
+        }
+        return aliases.get(normalized, normalized)
+
+    def _cfg(self, key: str, env_var: str, default: str = "") -> str:
+        value = self.config.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value).strip()
+        return os.getenv(env_var, default).strip()
+
+    def _cfg_float(self, key: str, env_var: str, default: float) -> float:
+        value = self.config.get(key)
+        if value is not None and str(value).strip() != "":
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                logger.warning("Invalid float for config '%s': %r; using default=%s", key, value, default)
+                return default
+        raw = os.getenv(env_var)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            logger.warning("Invalid float in env '%s': %r; using default=%s", env_var, raw, default)
+            return default
+
+    def _cfg_int(self, key: str, env_var: str, default: int) -> int:
+        value = self.config.get(key)
+        if value is not None and str(value).strip() != "":
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                logger.warning("Invalid int for config '%s': %r; using default=%s", key, value, default)
+                return default
+        raw = os.getenv(env_var)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning("Invalid int in env '%s': %r; using default=%s", env_var, raw, default)
+            return default
 
     def _detect_provider(self) -> str | None:
         """Auto-detect available LLM provider from environment variables."""
@@ -77,10 +143,12 @@ class LLMClient:
             if self.model_provider == "azure_openai":
                 from langchain_openai import AzureChatOpenAI
 
-                endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-                deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
-                api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview").strip()
+                endpoint = self._cfg("azure_endpoint", "AZURE_OPENAI_ENDPOINT")
+                deployment = self._cfg("azure_deployment", "AZURE_OPENAI_DEPLOYMENT")
+                api_version = self._cfg("azure_api_version", "AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
                 verify_ssl = os.getenv("VERIFY_SSL", "true").lower() != "false"
+                temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
 
                 logger.info(
                     f"Initializing Azure OpenAI: endpoint={endpoint}, deployment={deployment}, api_version={api_version}")
@@ -90,7 +158,8 @@ class LLMClient:
                     azure_endpoint=endpoint,
                     azure_deployment=deployment,
                     api_version=api_version,
-                    temperature=0.7,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                     http_client=httpx.Client(verify=verify_ssl),
                     **auth_kwargs,
                 )
@@ -98,40 +167,62 @@ class LLMClient:
 
             elif self.model_provider == "anthropic":
                 from langchain_anthropic import ChatAnthropic
+                temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
+                model_name = self._cfg("model", "MODEL_NAME", "claude-sonnet-4-5-20250929")
+                key_env = self._cfg("api_key_env", "ANTHROPIC_API_KEY_ENV", "ANTHROPIC_API_KEY")
 
                 self._model = ChatAnthropic(
-                    model=os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929"),
-                    temperature=0.7,
-                    api_key=SecretStr(os.getenv("ANTHROPIC_API_KEY", "")),
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    api_key=SecretStr(os.getenv(key_env, "")),
                 )
 
             elif self.model_provider == "openai":
                 from langchain_openai import ChatOpenAI
+                temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
+                model_name = self._cfg("model", "MODEL_NAME", "gpt-4o-mini")
+                key_env = self._cfg("api_key_env", "OPENAI_API_KEY_ENV", "OPENAI_API_KEY")
 
                 self._model = ChatOpenAI(
-                    model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-                    temperature=0.7,
-                    api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")),
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    api_key=SecretStr(os.getenv(key_env, "")),
                 )
 
             elif self.model_provider == "ollama":
                 from langchain_ollama import ChatOllama
+                temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                model_name = self._cfg("model", "MODEL_NAME", "qwen3.6:35b-a3b")
+                base_url = self._cfg("ollama_base_url", "OLLAMA_BASE_URL", "http://localhost:11434")
 
                 self._model = ChatOllama(
-                    model=os.getenv("MODEL_NAME", "qwen3.6:35b-a3b"),
-                    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                    temperature=0.7,
+                    model=model_name,
+                    base_url=base_url,
+                    temperature=temperature,
                     keep_alive="15m",
                     reasoning=False,
                 )
 
             elif self.model_provider == "bedrock":
                 from langchain_openai import ChatOpenAI
+                model_name = self._cfg("model", "MODEL_NAME", "amazon.nova-micro-v1:0")
+                temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
+                key_env = self._cfg("api_key_env", "AWS_BEDROCK_TOKEN_ENV", "AWS_BEARER_TOKEN_BEDROCK")
+                region = self._cfg("bedrock_region", "AWS_REGION", "us-east-1")
+                default_base_url = f"https://bedrock-mantle.{region}.api.aws/v1"
+                base_url = self._cfg("bedrock_endpoint", "AWS_BEDROCK_ENDPOINT", default_base_url)
 
                 self._model = ChatOpenAI(
-                    model=os.getenv("MODEL_NAME", "amazon.nova-micro-v1:0"),
-                    api_key=SecretStr(os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")),
-                    base_url=os.getenv("AWS_BEDROCK_ENDPOINT", "https://bedrock-mantle.us-east-1.api.aws/v1"),
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    api_key=SecretStr(os.getenv(key_env, "")),
+                    base_url=base_url,
                 )
 
             else:
@@ -161,7 +252,8 @@ class LLMClient:
             )
             return {"azure_ad_token_provider": token_provider}
         else:
-            return {"api_key": SecretStr(os.getenv("AZURE_OPENAI_API_KEY", ""))}
+            key_env = self._cfg("api_key_env", "AZURE_OPENAI_API_KEY_ENV", "AZURE_OPENAI_API_KEY")
+            return {"api_key": SecretStr(os.getenv(key_env, ""))}
 
     def complete(self, prompt: str) -> LLMResult:
         """Generate a completion using the configured LLM provider."""

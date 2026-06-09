@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import asdict
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
@@ -243,7 +244,8 @@ async def run_simulation_async(
         memory_file = writer.run_dir / "personas" / f"{planned.persona_id}_memory.md"
         simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
                                   seed=hash(planned.conversation_id) % 10_000,
-                                  memory_file=memory_file)
+                                  memory_file=memory_file,
+                                  llm_config=asdict(contract.llm))
 
         local_conversation_row = {
             "conversation_id": planned.conversation_id,
