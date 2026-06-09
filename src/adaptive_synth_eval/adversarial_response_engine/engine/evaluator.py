@@ -2,7 +2,7 @@ import uuid
 from typing import TYPE_CHECKING, Callable, Optional
 
 from .attack_agent import AttackAgent
-from .components import SafetyJudge
+from .components import SafetyJudge, _render_judge_transcript
 from ..core.models import ExperimentState, SessionState, TurnRecord, JudgeVerdict
 from ..core.token_budget import TokenBudgetManager
 
@@ -168,7 +168,12 @@ class AdaptiveAdversarialEvaluator:
                 session_id=session.session_id,
                 user_input=user_input,
             )
-            verdict = self.judge.judge(user_input=user_input, chatbot_response=chatbot_text)
+            verdict = self.judge.judge(
+                user_input=user_input,
+                chatbot_response=chatbot_text,
+                scenario=session.scenario,
+                history=_render_judge_transcript(session),
+            )
 
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"

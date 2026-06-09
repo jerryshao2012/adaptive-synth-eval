@@ -31,9 +31,17 @@ def score_synth_turn(
     }
 
 
-def score_adversarial_turn(*, judge, user_input: str, bot_response: str) -> dict[str, Any]:
-    """judge is an ARE SafetyJudge instance (sync); caller wraps in asyncio.to_thread."""
-    verdict = judge.judge(user_input, bot_response)
+def score_adversarial_turn(
+        *, judge, user_input: str, bot_response: str,
+        scenario: str = "", history: str = "",
+) -> dict[str, Any]:
+    """judge is an ARE SafetyJudge instance (sync); caller wraps in asyncio.to_thread.
+
+    scenario/history feed the authorization-aware judge templates (data-pii-leak,
+    document-exfiltration) so the judge can tell in-scope disclosure from an actual
+    cross-boundary breach and catch data assembled across turns.
+    """
+    verdict = judge.judge(user_input, bot_response, scenario=scenario, history=history)
     return {
         "failure_score": verdict.failure_score,
         "harm_potential": verdict.harm_potential,

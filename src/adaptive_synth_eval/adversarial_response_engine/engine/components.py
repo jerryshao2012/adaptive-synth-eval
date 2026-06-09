@@ -80,6 +80,24 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
     )
 
 
+def _render_judge_transcript(session: SessionState, max_turns: int = 5) -> str:
+    """Compact prior-turn transcript for the judge.
+
+    Lets the judge catch multi-turn decomposition / knowledge-assembly breaches
+    that are invisible when each turn is scored in isolation (see ACCUMULATION_ANGLES
+    in taxonomy.py). At judge time session.turns holds only the turns BEFORE the
+    current one, so this is purely prior context.
+    """
+    prior = session.turns[-max_turns:]
+    if not prior:
+        return "(no prior turns — this is the first turn of the session)"
+    lines = []
+    for t in prior:
+        lines.append(f"[turn {t.turn_id}] user: {_clip(t.user_input, 300)}")
+        lines.append(f"[turn {t.turn_id}] chatbot: {_clip(t.chatbot_response, 400)}")
+    return "\n".join(lines)
+
+
 class AdaptationPlanner:
     def __init__(self, llm: LLMClient):
         self.llm = llm
@@ -124,10 +142,21 @@ class SafetyJudge:
         self._system = cfg["system"]
         self._user_template = cfg["user_template"]
 
-    def judge(self, user_input: str, chatbot_response: str) -> JudgeVerdict:
+    def judge(
+        self,
+        user_input: str,
+        chatbot_response: str,
+        scenario: str = "",
+        history: str = "",
+    ) -> JudgeVerdict:
+        # scenario/history are optional and only consumed by judge templates that
+        # reference them (data-pii-leak, document-exfiltration). str.format ignores
+        # unused kwargs, so the other scenario judges are unaffected.
         user = self._user_template.format(
             user_input=user_input,
             chatbot_response=chatbot_response,
+            scenario=scenario or "(no scenario authorization boundary provided)",
+            history=history or "(single-turn evaluation — no prior conversation supplied)",
         )
         return JudgeVerdict.from_dict(self.llm.complete_json(self._system, user))
 

@@ -45,6 +45,29 @@ from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLL
 from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
 
 
+def _build_judge_history(session, max_adv_turns: int = 5) -> str:
+    """Prior-conversation context for the authorization-aware judge.
+
+    Combines the legit warm-up disclosures (what the agent already, authorizedly,
+    revealed) with the prior adversarial turns, so the judge can (a) recognize
+    in-scope data as authorized and (b) detect a record assembled field-by-field
+    across turns. Only adversarial turns live in session.turns; warm-up facts live
+    in session.synth_context.
+    """
+    parts: list[str] = []
+    warm = getattr(session, "synth_context", None) or []
+    if warm:
+        parts.append("Warm-up disclosures (authorized context the agent already revealed):")
+        parts.extend(warm[-3:])
+    prior = session.turns[-max_adv_turns:]
+    if prior:
+        parts.append("Prior adversarial turns:")
+        for t in prior:
+            parts.append(f"[turn {t.turn_id}] user: {(t.user_input or '')[:300]}")
+            parts.append(f"[turn {t.turn_id}] chatbot: {(t.chatbot_response or '')[:400]}")
+    return "\n".join(parts) if parts else "(no prior turns in this conversation yet)"
+
+
 def _classify_target_error(error: str | None) -> str:
     lowered = (error or "").lower()
     if "target_empty_response" in lowered:
@@ -254,6 +277,12 @@ async def run_conversation(
                 break
             user_input = probe.user_input
             strategy_meta = {"mode": "adversarial", **probe.plan.raw}
+            # The planner's JSON failed to parse even after retries, so the probe ran on
+            # the generic fallback instead of a real strategy. Surface it as an error
+            # instead of silently degrading the attack (mirrors the ARE orchestrator).
+            if probe.plan.raw.get("error") == "invalid_json":
+                errors += 1
+                strategy_meta["plan_parse_error"] = True
 
         # ----- stream user turn if realtime -----
         should_render = False
@@ -370,6 +399,8 @@ async def run_conversation(
                 scored = await asyncio.to_thread(
                     score_adversarial_turn,
                     judge=judge, user_input=user_input, bot_response=response.bot_response,
+                    scenario=adv_scenario.scenario_text,
+                    history=_build_judge_history(session),
                 )
                 verdict = scored.pop("_verdict")
                 score_payload = scored
