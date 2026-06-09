@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_backends import (
     LLMCallFn,
+    _log_reasoning,
     make_azure_openai_backend,
     make_bedrock_backend,
     make_claude_backend,
@@ -113,8 +114,13 @@ def build_llm(
         model = spec.model or "anthropic.claude-haiku-4-5-20251001-v1:0"
         region = spec.bedrock_region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         call_fn = make_bedrock_backend(model=model, region=region, max_tokens=spec.max_tokens)
-        # No ASE-side equivalent of native Bedrock today; fall back to mock for synth.
-        synth_chat = _make_mock_synth_chat()
+        # Synth (user-simulator) runs natively on Bedrock via the Converse API,
+        # which works across Bedrock model providers (Amazon Nova, Moonshot Kimi,
+        # Anthropic Claude, ...). No LangChain dependency needed.
+        synth_chat = _make_bedrock_synth_chat(
+            model=model, region=region,
+            temperature=spec.temperature, max_tokens=spec.max_tokens,
+        )
 
     elif provider == "ollama":
         # ARE has no native ollama backend; route both to mock with a clear warning.
@@ -182,6 +188,46 @@ def _make_mock_synth_chat() -> SynthChatFn:
     def call(prompt: str) -> str:
         counter[0] += 1
         return _TEMPLATES[counter[0] % len(_TEMPLATES)]
+
+    return call
+
+
+def _make_bedrock_synth_chat(
+        model: str,
+        region: str,
+        temperature: float,
+        max_tokens: int,
+) -> SynthChatFn:
+    """Adapt the Bedrock Converse API to a SynthChatFn (prompt -> text).
+
+    Lazily builds the boto3 client on first call so --dry-run and import stay
+    free of AWS dependencies. Works for any Converse-capable Bedrock model
+    (Amazon Nova, Moonshot Kimi, Anthropic Claude, ...).
+    """
+    client_ref: dict[str, Any] = {"client": None}
+
+    def _client():
+        if client_ref["client"] is None:
+            import boto3
+            from botocore.config import Config
+            cfg = Config(
+                retries={"mode": "adaptive", "max_attempts": 12},
+                max_pool_connections=64,
+            )
+            client_ref["client"] = boto3.client(
+                "bedrock-runtime", region_name=region, config=cfg
+            )
+        return client_ref["client"]
+
+    def call(prompt: str) -> str:
+        response = _client().converse(
+            modelId=model,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+        )
+        blocks = response["output"]["message"]["content"]
+        _log_reasoning(model, blocks)
+        return "".join(b.get("text", "") for b in blocks)
 
     return call
 

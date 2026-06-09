@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from dataclasses import dataclass
@@ -24,7 +25,10 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
 )
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
-from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import InlineTraceProvider
+from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import (
+    InlineTraceProvider,
+    compact_trace,
+)
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
@@ -46,6 +50,8 @@ from adaptive_synth_eval.unified_eval.personas.bridge import resolve_hijack_targ
 from adaptive_synth_eval.unified_eval.providers.llm_factory import ProvidedLLM
 from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLLMAdapter
 from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
+
+logger = logging.getLogger(__name__)
 
 
 def _classify_target_error(error: str | None) -> str:
@@ -398,6 +404,41 @@ async def run_conversation(
                 trace_summary_for_judge = None
                 if trajectory_enabled and trace_provider is not None:
                     turn_trace = trace_provider.fetch(response.raw)
+                    # Surface what the target actually returned so a silently-empty trace
+                    # (target didn't embed `trace_field`, or emitted a malformed one) is
+                    # visible instead of degrading to a trajectory judged on nothing.
+                    summary = compact_trace(turn_trace)
+                    trace_empty = not (
+                        summary["agents_called_count"]
+                        or summary["tool_call_count"]
+                        or summary["handoff_count"]
+                        or summary["retrieved_item_count"]
+                    )
+                    if trace_empty:
+                        present_in_raw = (
+                            isinstance(response.raw, dict)
+                            and contract.trajectory.trace_field in response.raw
+                        )
+                        logger.warning(
+                            "trajectory enabled but empty/missing trace for session=%s turn=%s "
+                            "(trace_field=%r present_in_raw=%s) — judged on response only",
+                            session_id, turn_id, contract.trajectory.trace_field, present_in_raw,
+                            extra={
+                                "event": "trajectory_turn", "trace_empty": True,
+                                "session_id": session_id, "turn_id": turn_id,
+                                "trace_field": contract.trajectory.trace_field,
+                                "present_in_raw": present_in_raw,
+                            },
+                        )
+                    else:
+                        logger.info(
+                            "trajectory trace session=%s turn=%s %s",
+                            session_id, turn_id, summary,
+                            extra={
+                                "event": "trajectory_turn", "trace_empty": False,
+                                "session_id": session_id, "turn_id": turn_id, **summary,
+                            },
+                        )
                     if trace_summarizer is not None:
                         turn_trace_summary = await asyncio.to_thread(
                             trace_summarizer.summarize, turn_trace

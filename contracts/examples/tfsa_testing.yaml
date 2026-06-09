@@ -21,7 +21,7 @@ suite:
 run:
   random_seed: 101
   # Throughput profile: higher parallelism to target 5k conversations in under 6 hours.
-  max_concurrency: 3
+  max_concurrency: 7
   dry_run: false
   verbose: true
   budget: 5000000
@@ -46,16 +46,16 @@ llm:
 components:
   planner:
     provider: bedrock
-    # model: global.anthropic.claude-haiku-4-5-20251001-v1:0
-    model: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+    model: global.anthropic.claude-haiku-4-5-20251001-v1:0
+    # model: global.anthropic.claude-sonnet-4-5-20250929-v1:0
     max_tokens: 1024
     temperature: 0.7
     bedrock:
       region: "${AWS_REGION:-us-east-1}"
   generator:
     provider: bedrock
-    # model: global.anthropic.claude-haiku-4-5-20251001-v1:0
-    model: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+    model: global.anthropic.claude-haiku-4-5-20251001-v1:0
+    # model: global.anthropic.claude-sonnet-4-5-20250929-v1:0
     max_tokens: 1024
     temperature: 0.7
     bedrock:
@@ -253,7 +253,7 @@ scenario_catalog:
     failure_threshold: 3
 
 eval_plan:
-  total_conversations: 1000
+  total_conversations: 200
   conversation_turns:
     min: 3
     max: 10

@@ -5,11 +5,27 @@ Pluggable LLM backends. Each backend is a callable with signature:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 from typing import Callable, Dict, Any
 
+logger = logging.getLogger(__name__)
+
 LLMCallFn = Callable[[str, str], Dict[str, Any]]
+
+
+def _log_reasoning(model: str, blocks: list) -> None:
+    """Emit any reasoning-model chain-of-thought (Converse `reasoningContent`) to the logs."""
+    parts = []
+    for b in blocks:
+        rc = b.get("reasoningContent")
+        if rc:
+            text = (rc.get("reasoningText") or {}).get("text")
+            if text:
+                parts.append(text)
+    if parts:
+        logger.info("[bedrock %s] reasoning: %s", model, " ".join(parts))
 
 
 def make_claude_backend(
@@ -300,10 +316,35 @@ def make_bedrock_backend(
     elif "amazon." in model_lc:
         provider = "amazon"
     else:
-        provider = model.split(".")[0]
+        # Everything else (e.g. moonshotai.kimi-k2.5, meta.*, mistral.*) goes
+        # through the Converse API, which normalizes request/response shapes
+        # across all Bedrock model providers.
+        provider = "converse"
+
+    def _converse_call(system: str, user: str) -> Dict[str, Any]:
+        response = client.converse(
+            modelId=model,
+            system=[{"text": system}],
+            messages=[{"role": "user", "content": [{"text": user}]}],
+            inferenceConfig={"maxTokens": max_tokens},
+        )
+        blocks = response["output"]["message"]["content"]
+        _log_reasoning(model, blocks)
+        text = "".join(b.get("text", "") for b in blocks)
+        usage = response.get("usage", {})
+        return {
+            "content": text,
+            "usage": {
+                "prompt_tokens": usage.get("inputTokens", 0),
+                "completion_tokens": usage.get("outputTokens", 0),
+            },
+        }
 
     def call(system: str, user: str) -> Dict[str, Any]:
         import json as _json
+
+        if provider == "converse":
+            return _converse_call(system, user)
 
         is_nova = "nova" in model
 

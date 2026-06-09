@@ -17,6 +17,7 @@ from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMe
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
 from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
+from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
@@ -136,8 +137,19 @@ async def run_unified_async(
         resume_incomplete: bool = False,
 ) -> dict[str, Any]:
     persona_filter = _resolve_persona_filter(contract, persona_filter)
-    run_id = run_id_override or contract.output.run_id or f"unified_run_{int(time.time())}"
+    if run_id_override:
+        # Explicit --run-id is used verbatim so resume/restart can target a known run.
+        run_id = run_id_override
+    elif contract.output.run_id:
+        # Append a runtime timestamp to the contract's run_id so re-running the same
+        # YAML writes to a fresh directory instead of overwriting prior artifacts.
+        run_id = f"{contract.output.run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    else:
+        run_id = f"unified_run_{int(time.time())}"
     writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
+    # Persist this run's log lines (including the per-turn trajectory logs) to run.log
+    # alongside the other artifacts, in addition to console / optional CloudWatch output.
+    attach_run_file_log(writer.run_dir)
     resumed_state = load_run_state(writer.run_dir) if resume_incomplete else None
     started_at = (resumed_state or {}).get("started_at") or now_iso()
     completed_conversation_ids = {
