@@ -35,12 +35,12 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def retry_call(
-    fn: Callable[[], T],
-    *,
-    max_attempts: int = 3,
-    initial_backoff: float = 1.0,
-    max_backoff: float = 30.0,
-    label: str = "llm_call",
+        fn: Callable[[], T],
+        *,
+        max_attempts: int = 3,
+        initial_backoff: float = 1.0,
+        max_backoff: float = 30.0,
+        label: str = "llm_call",
 ) -> T:
     """Call fn() with exponential backoff on transient failures."""
     attempt = 0

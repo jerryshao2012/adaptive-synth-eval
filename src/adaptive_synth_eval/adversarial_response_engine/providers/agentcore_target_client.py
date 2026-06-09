@@ -19,9 +19,8 @@ import uuid
 from typing import Any
 
 from adaptive_synth_eval.clients.chatbot import ChatbotResponse
-
-from unified_eval.config.schemas import TargetChatbot
-from unified_eval.providers.retry import retry_call
+from adaptive_synth_eval.unified_eval.config.schemas import TargetChatbot
+from adversarial_response_engine.providers.retry import retry_call
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ def _join_sse(raw: str) -> str:
         try:
             decoded = json.loads(chunk)
         except (json.JSONDecodeError, ValueError):
-            parts.append(chunk)          # not JSON — take the literal payload
+            parts.append(chunk)  # not JSON — take the literal payload
             continue
         if isinstance(decoded, str):
             parts.append(decoded)
@@ -106,13 +105,13 @@ class AgentCoreTargetClient:
     """Deployed-AgentCore-as-target chatbot. One client per run; session-aware."""
 
     def __init__(
-        self,
-        config: TargetChatbot,
-        *,
-        dry_run: bool = False,
-        retry_max_attempts: int = 3,
-        retry_initial_backoff: float = 1.0,
-        retry_max_backoff: float = 30.0,
+            self,
+            config: TargetChatbot,
+            *,
+            dry_run: bool = False,
+            retry_max_attempts: int = 3,
+            retry_initial_backoff: float = 1.0,
+            retry_max_backoff: float = 30.0,
     ):
         self.dry_run = dry_run
         self.arn = config.agent_runtime_arn
@@ -167,13 +166,13 @@ class AgentCoreTargetClient:
         return _coerce(raw)
 
     def send(
-        self,
-        *,
-        conversation_id: str,
-        session_id: str,
-        turn_id: int,
-        user_message: str,
-        metadata: dict[str, Any] | None = None,
+            self,
+            *,
+            conversation_id: str,
+            session_id: str,
+            turn_id: int,
+            user_message: str,
+            metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
         if self.dry_run:
             return ChatbotResponse.from_payload(

@@ -198,10 +198,8 @@ async def run_conversation(
         session_id=session_id,
         scenario=adv_scenario.scenario_text,
         scenario_type=adv_scenario.scenario_type,
+        max_turns=turn_count,
     )
-    # ARE's RuleBasedSessionPolicyController references session.max_turns, but
-    # SessionState doesn't declare that field. Attach it dynamically.
-    session.max_turns = turn_count  # type: ignore[attr-defined]
 
     chat_history: list[ChatHistoryRecord] = []
     turn_rows: list[dict[str, Any]] = []

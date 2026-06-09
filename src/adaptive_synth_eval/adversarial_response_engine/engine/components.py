@@ -162,7 +162,7 @@ class RuleBasedSessionPolicyController:
     def __init__(self, cfg: PolicyConfig):
         self.cfg = cfg
 
-    def decide(self, session) -> PolicyDecision:
+    def decide(self, session: SessionState) -> PolicyDecision:
         c = self.cfg
         last_was_refusal = session.turns and session.turns[-1].judge_result.get("failure_score", 0) == 0
         if last_was_refusal:
@@ -174,8 +174,11 @@ class RuleBasedSessionPolicyController:
             action, reason = "start_new_session", f"refusals>={c.max_refusals}"
         elif new_susp >= c.abandon_suspicion:
             action, reason = "start_new_session", f"suspicion>={c.abandon_suspicion}"
-        elif (len(session.turns) >= session.max_turns
-              and session.best_failure_score == 0):
+        elif (
+                session.max_turns is not None
+                and len(session.turns) >= session.max_turns
+                and session.best_failure_score == 0
+        ):
             action, reason = "start_new_session", "exhausted_no_signal"  # 1.6
         else:
             action, reason = "continue", "within thresholds"

@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from adaptive_synth_eval.adversarial_response_engine.core.models import JudgeVerdict
+from adaptive_synth_eval.adversarial_response_engine.core.models import (
+    AttackMemory,
+    JudgeVerdict,
+    SessionState,
+    TurnRecord,
+)
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
 from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import AttackAgent
-from adaptive_synth_eval.adversarial_response_engine.engine.components import SafetyJudge
+from adaptive_synth_eval.adversarial_response_engine.engine.components import (
+    RuleBasedSessionPolicyController,
+    SafetyJudge,
+)
+from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.unified_eval.personas.bridge import (
     HIJACK_TARGET_DEFAULTS,
     resolve_hijack_target,
@@ -61,3 +70,52 @@ def test_judge_verdict_from_dict_handles_null_values():
     assert verdict.near_miss is False
     assert verdict.confidence == 1.0
     assert verdict.failure_type == "unknown"
+
+
+def test_attack_memory_angle_stats_and_near_miss_aggregation():
+    memory = AttackMemory(max_entries=10)
+    session = SessionState(
+        session_id="s1",
+        scenario="scenario",
+        scenario_type="toxicity",
+        max_turns=3,
+    )
+    session.turns = [
+        TurnRecord(
+            session_id="s1",
+            turn_id=1,
+            user_input="u1",
+            chatbot_response="b1",
+            strategy_before_turn={"attack_angle": "angle_shift", "next_generator_instruction": "i1"},
+            judge_result={"failure_score": 2, "near_miss": True},
+        ),
+        TurnRecord(
+            session_id="s1",
+            turn_id=2,
+            user_input="u2",
+            chatbot_response="b2",
+            strategy_before_turn={"attack_angle": "angle_shift", "next_generator_instruction": "i2"},
+            judge_result={"failure_score": 4, "near_miss": False},
+        ),
+    ]
+
+    memory.record_session(session)
+    stats = memory.angle_stats()
+
+    assert "angle_shift" in stats
+    assert stats["angle_shift"].n == 2
+    assert stats["angle_shift"].mean_score == 3.0
+    assert stats["angle_shift"].any_near_miss is True
+
+
+def test_rule_policy_works_when_max_turns_is_unset():
+    controller = RuleBasedSessionPolicyController(PolicyConfig())
+    session = SessionState(
+        session_id="s2",
+        scenario="scenario",
+        scenario_type="toxicity",
+        max_turns=None,
+    )
+
+    decision = controller.decide(session)
+    assert decision.action == "continue"
