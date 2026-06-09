@@ -206,9 +206,41 @@ def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:
     browser = BrowserChatbot(**browser_payload) if isinstance(browser_payload, dict) else None
     agentcore_payload = payload.get("agentcore")
     agentcore = AgentCoreTarget(**agentcore_payload) if isinstance(agentcore_payload, dict) else None
-    field_names = {f.name for f in fields(TargetChatbot)} - {"browser", "agentcore"}
+    skip = {"browser", "agentcore", "chatbot_model", "chatbot_temperature", "source_doc_ref"}
+    field_names = {f.name for f in fields(TargetChatbot)} - skip
     values = {key: payload.get(key) for key in field_names if key in payload}
-    return TargetChatbot(**values, browser=browser, agentcore=agentcore)
+
+    # chatbot_model: YAML list or env-var-resolved comma-separated string.
+    raw_model = payload.get("chatbot_model")
+    if isinstance(raw_model, list):
+        chatbot_model: list[str] | None = [str(m).strip() for m in raw_model if str(m).strip()]
+    elif isinstance(raw_model, str) and raw_model.strip():
+        chatbot_model = [m.strip() for m in raw_model.split(",") if m.strip()]
+    else:
+        chatbot_model = None
+
+    # chatbot_temperature: YAML float or env-var-resolved string.
+    raw_temp = payload.get("chatbot_temperature")
+    if raw_temp is not None and str(raw_temp).strip():
+        try:
+            chatbot_temperature: float | None = float(raw_temp)
+        except (ValueError, TypeError):
+            chatbot_temperature = None
+    else:
+        chatbot_temperature = None
+
+    # source_doc_ref: plain string (or resolved from env).
+    raw_ref = payload.get("source_doc_ref")
+    source_doc_ref: str | None = str(raw_ref).strip() if isinstance(raw_ref, str) and raw_ref.strip() else None
+
+    return TargetChatbot(
+        **values,
+        browser=browser,
+        agentcore=agentcore,
+        chatbot_model=chatbot_model or None,
+        chatbot_temperature=chatbot_temperature,
+        source_doc_ref=source_doc_ref,
+    )
 
 
 def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:

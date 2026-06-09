@@ -50,4 +50,7 @@ def create_chatbot_client(config: TargetChatbot, *, dry_run: bool = False, max_c
         retry_jitter=config.retry_jitter,
         retry_on_timeout=config.retry_on_timeout,
         retry_on_http_5xx=config.retry_on_http_5xx,
+        chatbot_model=config.chatbot_model,
+        chatbot_temperature=config.chatbot_temperature,
+        source_doc_ref=config.source_doc_ref,
     )

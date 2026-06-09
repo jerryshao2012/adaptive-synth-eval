@@ -23,12 +23,21 @@ Contract files support environment variable substitution using `${VAR_NAME}` syn
 - `${CHATBOT_ENDPOINT}` - replaced with the value of the `CHATBOT_ENDPOINT` environment variable
 - `${CHATBOT_ENDPOINT:-https://default.example.com}` - uses the env var if set, otherwise falls back to the default value
 
+The same substitution pattern can also be used for target LLM payload knobs:
+
+- `${CHATBOT_MODEL:-}`
+- `${CHATBOT_TEMPERATURE:-}`
+- `${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}`
+
 This is particularly useful for the `target.endpoint` field to avoid hardcoding endpoints:
 
 ```yaml
 target:
   enabled: true
   endpoint: "${CHATBOT_ENDPOINT:-https://api.example.com/v1/chat}"
+  chatbot_model: "${CHATBOT_MODEL:-}"
+  chatbot_temperature: "${CHATBOT_TEMPERATURE:-}"
+  source_doc_ref: "${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}"
   retry_max_retries: 2
   retry_initial_backoff_seconds: 1.0
   retry_max_backoff_seconds: 20.0
@@ -42,6 +51,18 @@ target:
 ```
 
 When `CHATBOT_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
+
+For target LLM fields in the `target` block:
+
+- `chatbot_model`: optional model allow-list forwarded in the chatbot request payload.
+- `chatbot_temperature`: optional generation temperature forwarded in the chatbot request payload.
+- `source_doc_ref`: optional source document reference forwarded in the chatbot request payload.
+
+Precedence rules:
+
+- If `target.chatbot_model`, `target.chatbot_temperature`, or `target.source_doc_ref` is provided in YAML, those values are used.
+- If not provided in YAML, the runtime falls back to `CHATBOT_MODEL`, `CHATBOT_TEMPERATURE`, and `CHATBOT_SOURCE_DOCUMENT_REFERENCE`.
+- `chatbot_model` supports either a YAML list (for example `['model-a', 'model-b']`) or a comma-separated string (for example from env substitution).
 
 Retry fields are optional and control how API chatbot requests handle transient failures before the simulation marks the chatbot as unavailable:
 
@@ -198,7 +219,7 @@ Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red
   - Burst pattern: 4x traffic spike on day 12 for open enrollment (benefits, leave, payroll scenarios)
   - Traffic distribution: 35% P001+S001, 25% P001+S002, 15% P002+S001, 25% P002+S002
   - Random seed 314 for reproducibility at scale
-  - Target chatbot disabled (synthetic-only generation)
+  - Target chatbot enabled when `CHATBOT_ENDPOINT` is configured; supports forwarding `chatbot_model`, `chatbot_temperature`, and `source_doc_ref`
 - **Use Case**: Performance benchmarking, scalability testing, load testing the generation pipeline, validating system behavior under high-volume conditions
 
 #### 8. `unified_evaluation_demo.yaml`
