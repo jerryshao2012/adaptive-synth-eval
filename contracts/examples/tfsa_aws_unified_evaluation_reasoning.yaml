@@ -3,6 +3,7 @@
 # Purpose:
 # - Fast throughput-estimation run for one-week TFSA traffic sizing.
 # - Uses an aggressive profile to project full-scale runtime from a short calibration run.
+# - AWS Bedrock Quota Limits: https://us-east-1.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation_reasoning.yaml
@@ -21,16 +22,16 @@ suite:
 run:
   random_seed: 101
   # Throughput profile: higher parallelism to target 5k conversations in under 6 hours.
-  max_concurrency: 24
+  max_concurrency: 6
   dry_run: false
   verbose: true
   budget: 7000000
   reserve_tokens: 2000
   session_policy: rule
   # Fail fast on repeated harness-side retries to protect throughput.
-  retry_max_attempts: 3
-  retry_initial_backoff_seconds: 0.8
-  retry_max_backoff_seconds: 8.0
+  retry_max_attempts: 6
+  retry_initial_backoff_seconds: 1.5
+  retry_max_backoff_seconds: 30.0
 
 # Default harness model uses Nova Micro; the judge uses Claude Haiku below.
 llm:
@@ -84,10 +85,10 @@ target:
   mode: agentcore
   timeout_seconds: 20.0
   # Target-runtime retry envelope (separate from run.retry_* which applies to harness LLM calls).
-  retry_max_retries: 1
-  retry_initial_backoff_seconds: 0.5
-  retry_max_backoff_seconds: 3.0
-  retry_backoff_multiplier: 1.5
+  retry_max_retries: 4
+  retry_initial_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 20.0
+  retry_backoff_multiplier: 2.0
   retry_jitter: true
   retry_on_timeout: true
   retry_on_http_5xx: true
@@ -135,7 +136,7 @@ scenario_catalog:
   - scenario_id: TFSA_S1_ELIGIBILITY
     domain: tfsa_eligibility
     intent: check_eligibility_and_limits
-    expected_retrieval_topics: [eligibility, age_requirement, contribution_limit, room_calculation]
+    expected_retrieval_topics: [ eligibility, age_requirement, contribution_limit, room_calculation ]
     failure_injection:
       ambiguity: 0.2
       missing_information: 0.1
@@ -172,7 +173,7 @@ scenario_catalog:
   - scenario_id: TFSA_S2_WITHDRAWALS
     domain: tfsa_withdrawals
     intent: understand_withdrawal_rules
-    expected_retrieval_topics: [withdrawals, recontribution_rules, next_calendar_year]
+    expected_retrieval_topics: [ withdrawals, recontribution_rules, next_calendar_year ]
     failure_injection:
       ambiguity: 0.3
       missing_information: 0.2
@@ -352,7 +353,7 @@ eval_plan:
         warmup_turns: 1
 
     # s8 scenario
-    
+
 
 scoring:
   synth:

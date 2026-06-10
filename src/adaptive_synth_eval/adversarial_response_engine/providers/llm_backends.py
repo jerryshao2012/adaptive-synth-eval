@@ -308,8 +308,8 @@ def make_bedrock_backend(
         max_pool_connections=64,
     )
     client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
-    # Inference profile IDs can be prefixed (for example, "us.anthropic..."),
-    # and ARNs can include provider names in the resource segment.
+    # Inference profile IDs can be prefixed (for example, "us.anthropic...").
+    # Extract provider from either first segment or the segment after region/global prefixes.
     model_lc = model.lower()
     if "anthropic." in model_lc:
         provider = "anthropic"
@@ -384,32 +384,42 @@ def make_bedrock_backend(
 
         if provider == "anthropic":
             return {
-                "content": result["content"][0]["text"],
+                "content": result["results"][0]["outputText"],
                 "usage": {
-                    "prompt_tokens": result["usage"]["input_tokens"],
-                    "completion_tokens": result["usage"]["output_tokens"],
+                    "prompt_tokens": result["inputTextTokenCount"],
+                    "completion_tokens": result["results"][0]["tokenCount"],
                 },
             }
-        elif provider == "amazon":
-            if is_nova:
-                return {
-                    "content": result["output"]["message"]["content"][0]["text"],
-                    "usage": {
-                        "prompt_tokens": result["usage"]["inputTokens"],
-                        "completion_tokens": result["usage"]["outputTokens"],
-                    },
-                }
-            else:
-                return {
-                    "content": result["results"][0]["outputText"],
-                    "usage": {
-                        "prompt_tokens": result["inputTextTokenCount"],
-                        "completion_tokens": result["results"][0]["tokenCount"],
-                    },
-                }
-        else:
-            # Should be unreachable
-            raise ValueError(f"Unsupported Bedrock provider for model '{model}'")
+
+        # Use Bedrock Converse when supported by the model/profile.
+        try:
+            return _converse(model)
+        except Exception as exc:
+            message = str(exc).lower()
+            is_invalid_model_id = (
+                    "invalid model identifier" in message
+                    or ("model identifier" in message and "invalid" in message)
+            )
+            needs_inference_profile = (
+                    "on-demand throughput" in message
+                    and "inference profile" in message
+            )
+            if needs_inference_profile:
+                last_error: Exception = exc
+                for model_id in _profile_prefixed_model_ids(model):
+                    try:
+                        return _converse(model_id)
+                    except Exception as profile_exc:
+                        last_error = profile_exc
+                        if provider in {"openai", "moonshot"}:
+                            try:
+                                return _invoke_openai_style(model_id)
+                            except Exception as invoke_exc:
+                                last_error = invoke_exc
+                raise last_error
+            if is_invalid_model_id and provider in {"openai", "moonshot"}:
+                return _invoke_openai_style(model)
+            raise
 
     return call
 

@@ -58,7 +58,7 @@ def test_llm_client_auto_detects_azure_provider():
         'AZURE_OPENAI_ENDPOINT': 'https://test.openai.azure.com/',
         'AZURE_OPENAI_DEPLOYMENT': 'gpt-4',
         'AZURE_OPENAI_API_KEY': 'test-key'
-    }):
+    }, clear=True):
         client = LLMClient(enabled=False)
         assert client.model_provider == "azure_openai"
 
@@ -68,7 +68,7 @@ def test_llm_client_auto_detects_anthropic_provider():
     with patch.dict('os.environ', {
         'ANTHROPIC_API_KEY': 'test-key',
         'MODEL_NAME': 'claude-sonnet-4'
-    }):
+    }, clear=True):
         client = LLMClient(enabled=False)
         assert client.model_provider == "anthropic"
 
@@ -78,7 +78,7 @@ def test_llm_client_auto_detects_openai_provider():
     with patch.dict('os.environ', {
         'OPENAI_API_KEY': 'test-key',
         'MODEL_NAME': 'gpt-4o-mini'
-    }):
+    }, clear=True):
         client = LLMClient(enabled=False)
         assert client.model_provider == "openai"
 
@@ -88,9 +88,23 @@ def test_llm_client_auto_detects_ollama_provider():
     with patch.dict('os.environ', {
         'OLLAMA_BASE_URL': 'http://localhost:11434',
         'OLLAMA_MODEL': 'llama3'
-    }):
+    }, clear=True):
         client = LLMClient(enabled=False)
         assert client.model_provider == "ollama"
+
+
+def test_llm_client_uses_contract_style_config_provider():
+    with patch.dict('os.environ', {}, clear=True):
+        client = LLMClient(
+            enabled=False,
+            config={
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "temperature": 0.3,
+                "max_tokens": 512,
+            },
+        )
+        assert client.model_provider == "openai"
 
 
 def test_generate_turn_behavior_override_changes_fallback_and_metadata():

@@ -3,6 +3,7 @@
 # Purpose:
 # - Interleave synthetic TFSA questions with adversarial probes across personas.
 # - Evaluate AgentCore-backed target behavior with baseline unified settings.
+# - AWS Bedrock Quota Limits: https://us-east-1.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml
@@ -20,12 +21,15 @@ suite:
 
 run:
   random_seed: 101
-  max_concurrency: 16
+  max_concurrency: 6
   dry_run: false
   verbose: true
   budget: 250000
   reserve_tokens: 2000
   session_policy: rule
+  retry_max_attempts: 6
+  retry_initial_backoff_seconds: 1.5
+  retry_max_backoff_seconds: 30.0
 
 # The harness's own planner/generator/judge/user-simulator run on Bedrock Claude.
 # Planner + generator upgraded to Sonnet: a hardened target outclasses Haiku as
@@ -44,6 +48,13 @@ target:
   enabled: true
   mode: agentcore
   timeout_seconds: 60.0
+  retry_max_retries: 4
+  retry_initial_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 20.0
+  retry_backoff_multiplier: 2.0
+  retry_jitter: true
+  retry_on_timeout: true
+  retry_on_http_5xx: true
   agentcore:
     region: "${AWS_REGION:-us-east-1}"
     agent_runtime_arn: "${TFSA_AGENT_RUNTIME_ARN}"

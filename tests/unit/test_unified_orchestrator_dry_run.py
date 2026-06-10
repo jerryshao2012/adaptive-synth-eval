@@ -103,6 +103,18 @@ def test_effective_concurrency_reports_requested_value(tmp_path: Path):
     assert summary["effective_max_concurrency"] == 16
 
 
+def test_run_logs_startup_conversation_batch(tmp_path: Path, caplog):
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=4))
+
+    with caplog.at_level("INFO"):
+        run_unified(contract, dry_run=True, run_id_override="orchestrator_startup_log")
+
+    assert "Starting " in caplog.text
+    assert "max_concurrency=4" in caplog.text
+    assert "already completed=0, skipped=0" in caplog.text
+
+
 def test_realtime_persona_filter_runs_single_conversation(tmp_path: Path):
     contract = load_unified_contract(EXAMPLE)
     contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=16))

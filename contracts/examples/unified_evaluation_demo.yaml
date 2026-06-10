@@ -135,7 +135,7 @@ eval_plan:
   total_conversations: 15
   conversation_turns:
     min: 3
-    max: 5
+    max: 10
   attack_memory: shared
   entries:
     # New employee benefits + PII leak

@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.clients.utils import count_tokens
@@ -180,7 +180,8 @@ class UserSimulator:
     )
 
     def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None,
-                 memory_file: Path | None = None, llm_client: Any | None = None):
+                 memory_file: Path | None = None, llm_client: Any | None = None,
+                 llm_config: Mapping[str, Any] | None = None):
         self.persona = persona
         self.scenario = scenario
         self.turn_count = turn_count
@@ -191,8 +192,12 @@ class UserSimulator:
             self.llm_client = llm_client
         else:
             # Enable LLM client if a provider is configured in environment variables
-            _llm_client = LLMClient(enabled=False)  # Check if provider is available
-            self.llm_client = LLMClient(enabled=_llm_client.model_provider is not None)
+            config = dict(llm_config or {})
+            _llm_client = LLMClient(enabled=False, config=config)  # Check if provider is available
+            self.llm_client = LLMClient(
+                enabled=_llm_client.model_provider is not None,
+                config=config,
+            )
         self.memory_file = memory_file
         self.memory = None
 
@@ -603,7 +608,13 @@ class UserSimulator:
         return message
 
 
-def generate_turns(persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None) -> list[
+def generate_turns(
+        persona: Persona,
+        scenario: Scenario,
+        turn_count: int,
+        seed: int | None = None,
+        llm_config: Mapping[str, Any] | None = None,
+) -> list[
     GeneratedTurn]:
     """Convenience function to generate all turns for a conversation.
 
@@ -616,7 +627,13 @@ def generate_turns(persona: Persona, scenario: Scenario, turn_count: int, seed: 
     Returns:
         List of GeneratedTurn objects
     """
-    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=turn_count, seed=seed)
+    simulator = UserSimulator(
+        persona=persona,
+        scenario=scenario,
+        turn_count=turn_count,
+        seed=seed,
+        llm_config=llm_config,
+    )
     turns = []
     previous_bot_response = None
 

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 from dataclasses import fields
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from adaptive_synth_eval.config.env import load_project_env, resolve_env_placeholders
 
 from adaptive_synth_eval.config.schemas import (
     AgentCoreTarget,
@@ -20,6 +19,7 @@ from adaptive_synth_eval.config.schemas import (
     OutputConfig,
     Persona,
     Scenario,
+    SimulatedLLMConfig,
     SimulationContract,
     SimulationSuite,
     TargetChatbot,
@@ -36,6 +36,7 @@ def load_contract(path: str | Path) -> SimulationContract:
     path = Path(path)
     if not path.exists():
         raise ContractError(f"Contract file not found: {path}")
+    load_project_env(anchor=path, override=False)
     payload = _load_payload(path)
     return parse_contract(payload, base_path=path.parent)
 
@@ -56,6 +57,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
 
     suite = SimulationSuite(**payload["simulation_suite"])
     chatbot = _parse_target_chatbot(payload.get("target", {}))
+    llm = _parse_simulated_llm(payload.get("llm", {}))
     window_payload = payload["time_window"]
     window = TimeWindow(
         start_day=date.fromisoformat(str(window_payload["start_day"])),
@@ -75,6 +77,7 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
     return SimulationContract(
         simulation_suite=suite,
         target=chatbot,
+        llm=llm,
         time_window=window,
         persona_pool=personas,
         scenario_catalog=scenarios,
@@ -93,6 +96,25 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
     return {
         "simulation_suite": contract.simulation_suite.__dict__,
         "target": target_data,
+        "llm": {
+            "provider": contract.llm.provider,
+            "model": contract.llm.model,
+            "max_tokens": contract.llm.max_tokens,
+            "temperature": contract.llm.temperature,
+            "api_key_env": contract.llm.api_key_env,
+            "azure": {
+                "endpoint": contract.llm.azure_endpoint,
+                "deployment": contract.llm.azure_deployment,
+                "api_version": contract.llm.azure_api_version,
+            },
+            "bedrock": {
+                "region": contract.llm.bedrock_region,
+                "endpoint": contract.llm.bedrock_endpoint,
+            },
+            "ollama": {
+                "base_url": contract.llm.ollama_base_url,
+            },
+        },
         "time_window": {
             "start_day": contract.time_window.start_day.isoformat(),
             "num_synthetic_days": contract.time_window.num_synthetic_days,
@@ -122,53 +144,6 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
     }
 
 
-def _resolve_env_vars(value: str) -> str:
-    """Resolve environment variable references in a string.
-
-    Supports ${VAR_NAME} syntax with optional default values:
-    - ${VAR_NAME} - replaced with env var value or empty string if not set
-    - ${VAR_NAME:-default} - replaced with env var value or 'default' if not set
-
-    Args:
-        value: String potentially containing ${VAR} references
-
-    Returns:
-        String with environment variables resolved
-    """
-
-    def replace_env_var(match):
-        var_expr = match.group(1)
-        # Check for default value syntax: ${VAR:-default}
-        if ':-' in var_expr:
-            var_name, default_value = var_expr.split(':-', 1)
-            return os.getenv(var_name, default_value)
-        else:
-            return os.getenv(var_expr, '')
-
-    # Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
-    pattern = r'\$\{([^}]+)\}'
-    return re.sub(pattern, replace_env_var, value)
-
-
-def _resolve_env_vars_in_dict(obj: Any) -> Any:
-    """Recursively resolve environment variables in a dictionary structure.
-
-    Args:
-        obj: Dictionary, list, or primitive value
-
-    Returns:
-        Same structure with all string values having env vars resolved
-    """
-    if isinstance(obj, dict):
-        return {key: _resolve_env_vars_in_dict(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [_resolve_env_vars_in_dict(item) for item in obj]
-    elif isinstance(obj, str):
-        return _resolve_env_vars(obj)
-    else:
-        return obj
-
-
 def _load_payload(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".json":
@@ -177,7 +152,7 @@ def _load_payload(path: Path) -> dict[str, Any]:
         payload = yaml.safe_load(text)
 
     # Resolve environment variables in the entire payload
-    return _resolve_env_vars_in_dict(payload)
+    return resolve_env_placeholders(payload)
 
 
 def _parse_persona(payload: dict[str, Any]) -> Persona:
@@ -199,6 +174,59 @@ def _parse_persona(payload: dict[str, Any]) -> Persona:
     _require_keys(payload, required, "persona")
     field_names = {f.name for f in fields(Persona)}
     return Persona(**{key: payload.get(key) for key in field_names if key in payload})
+
+
+def _parse_simulated_llm(payload: dict[str, Any]) -> SimulatedLLMConfig:
+    if not isinstance(payload, dict):
+        payload = {}
+    azure = payload.get("azure") if isinstance(payload.get("azure"), dict) else {}
+    bedrock = payload.get("bedrock") if isinstance(payload.get("bedrock"), dict) else {}
+    ollama = payload.get("ollama") if isinstance(payload.get("ollama"), dict) else {}
+
+    provider_raw = payload.get("provider")
+    model_raw = payload.get("model")
+    api_key_env_raw = payload.get("api_key_env")
+    return SimulatedLLMConfig(
+        provider=str(provider_raw).strip() if provider_raw is not None and str(provider_raw).strip() else None,
+        model=str(model_raw).strip() if model_raw is not None and str(model_raw).strip() else None,
+        max_tokens=int(payload.get("max_tokens", 1024)),
+        temperature=float(payload.get("temperature", 0.7)),
+        api_key_env=(
+            str(api_key_env_raw).strip()
+            if api_key_env_raw is not None and str(api_key_env_raw).strip()
+            else None
+        ),
+        azure_endpoint=(
+            str(azure.get("endpoint")).strip()
+            if azure.get("endpoint") is not None and str(azure.get("endpoint")).strip()
+            else None
+        ),
+        azure_deployment=(
+            str(azure.get("deployment")).strip()
+            if azure.get("deployment") is not None and str(azure.get("deployment")).strip()
+            else None
+        ),
+        azure_api_version=(
+            str(azure.get("api_version")).strip()
+            if azure.get("api_version") is not None and str(azure.get("api_version")).strip()
+            else None
+        ),
+        bedrock_region=(
+            str(bedrock.get("region")).strip()
+            if bedrock.get("region") is not None and str(bedrock.get("region")).strip()
+            else None
+        ),
+        bedrock_endpoint=(
+            str(bedrock.get("endpoint")).strip()
+            if bedrock.get("endpoint") is not None and str(bedrock.get("endpoint")).strip()
+            else None
+        ),
+        ollama_base_url=(
+            str(ollama.get("base_url")).strip()
+            if ollama.get("base_url") is not None and str(ollama.get("base_url")).strip()
+            else None
+        ),
+    )
 
 
 def _parse_target_chatbot(payload: dict[str, Any]) -> TargetChatbot:

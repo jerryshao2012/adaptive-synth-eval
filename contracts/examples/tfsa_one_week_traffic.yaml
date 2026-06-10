@@ -3,6 +3,7 @@
 # Purpose:
 # - Scale the TFSA unified evaluation into a one-week traffic-style profile.
 # - Run the full one-week simulation profile for production-like traffic behavior.
+# - AWS Bedrock Quota Limits: https://us-east-1.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas
 #
 # Usage:
 #   uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
@@ -24,9 +25,9 @@ run:
   reserve_tokens: 10000
   session_policy: rule
   # Keep harness retries bounded to avoid long-tail stalls at scale.
-  retry_max_attempts: 4
-  retry_initial_backoff_seconds: 0.8
-  retry_max_backoff_seconds: 12.0
+  retry_max_attempts: 6
+  retry_initial_backoff_seconds: 1.5
+  retry_max_backoff_seconds: 30.0
 
 # Keep harness model aligned with tfsa_aws_unified_evaluation baseline.
 llm:
@@ -65,10 +66,10 @@ target:
   mode: agentcore
   # Cap target wait/retry envelope so one slow turn does not dominate wall clock.
   timeout_seconds: 25.0
-  retry_max_retries: 2
-  retry_initial_backoff_seconds: 0.5
-  retry_max_backoff_seconds: 6.0
-  retry_backoff_multiplier: 1.6
+  retry_max_retries: 4
+  retry_initial_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 20.0
+  retry_backoff_multiplier: 2.0
   retry_jitter: true
   retry_on_timeout: true
   retry_on_http_5xx: true
@@ -249,7 +250,7 @@ eval_plan:
   total_conversations: 1000
   conversation_turns:
     min: 3
-    max: 7
+    max: 5
   attack_memory: shared
   entries:
     # Novice saver asking about eligibility + PII leak probe

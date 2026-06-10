@@ -132,6 +132,80 @@ def test_load_contract_resolves_env_vars_without_default(tmp_path):
         assert contract.target.endpoint == ""
 
 
+def test_load_contract_resolves_env_vars_from_dotenv_file(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["target"] = {
+        "enabled": True,
+        "endpoint": "${ASE_TEST_CHATBOT_ENDPOINT}",
+        "timeout_seconds": 30.0,
+    }
+    contract_path = tmp_path / "contract.json"
+    contract_path.write_text(json.dumps(payload))
+
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("ASE_TEST_CHATBOT_ENDPOINT=https://dotenv.example.com\n", encoding="utf-8")
+
+    with patch.dict(os.environ, {"ASE_ENV_FILE": str(dotenv_path)}, clear=False):
+        if "ASE_TEST_CHATBOT_ENDPOINT" in os.environ:
+            del os.environ["ASE_TEST_CHATBOT_ENDPOINT"]
+        contract = load_contract(contract_path)
+        assert contract.target.endpoint == "https://dotenv.example.com"
+
+
+def test_load_contract_parses_simulator_llm_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["llm"] = {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "api_key_env": "OPENAI_API_KEY",
+        "azure": {
+            "endpoint": "https://example.azure.com",
+            "deployment": "my-deployment",
+            "api_version": "2024-12-01-preview",
+        },
+        "bedrock": {
+            "region": "us-east-1",
+            "endpoint": "https://bedrock-mantle.us-east-1.api.aws/v1",
+        },
+        "ollama": {
+            "base_url": "http://localhost:11434",
+        },
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+
+    contract = load_contract(path)
+
+    assert contract.llm.provider == "openai"
+    assert contract.llm.model == "gpt-4o-mini"
+    assert contract.llm.max_tokens == 2048
+    assert contract.llm.temperature == 0.2
+    assert contract.llm.api_key_env == "OPENAI_API_KEY"
+    assert contract.llm.azure_endpoint == "https://example.azure.com"
+    assert contract.llm.azure_deployment == "my-deployment"
+    assert contract.llm.azure_api_version == "2024-12-01-preview"
+    assert contract.llm.bedrock_region == "us-east-1"
+    assert contract.llm.bedrock_endpoint == "https://bedrock-mantle.us-east-1.api.aws/v1"
+    assert contract.llm.ollama_base_url == "http://localhost:11434"
+
+
+def test_load_contract_resolves_env_vars_in_simulator_llm_config(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["llm"] = {
+        "provider": "${SIM_PROVIDER:-openai}",
+        "model": "${SIM_MODEL:-gpt-4o-mini}",
+    }
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+
+    with patch.dict(os.environ, {"SIM_PROVIDER": "anthropic", "SIM_MODEL": "claude-sonnet-4"}, clear=False):
+        contract = load_contract(path)
+        assert contract.llm.provider == "anthropic"
+        assert contract.llm.model == "claude-sonnet-4"
+
+
 def test_load_contract_parses_browser_chatbot_config(tmp_path):
     payload = _base_contract(tmp_path)
     payload["target"] = {

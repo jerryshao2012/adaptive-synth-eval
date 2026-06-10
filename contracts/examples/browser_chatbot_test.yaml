@@ -14,6 +14,24 @@ simulation_suite:
   run_mode: synthetic_chat_history_generation
   synthetic_flag: true
 
+# Harness-side simulator LLM (UserSimulator -> clients/llm.py).
+# Leave provider empty to auto-detect from existing env vars.
+llm:
+  provider: "${SIMULATOR_LLM_PROVIDER:-}"
+  model: "${SIMULATOR_MODEL_NAME:-}"
+  max_tokens: "${SIMULATOR_MODEL_MAX_TOKENS:-1024}"
+  temperature: "${SIMULATOR_MODEL_TEMPERATURE:-0.7}"
+  api_key_env: "${SIMULATOR_API_KEY_ENV:-}"
+  azure:
+    endpoint: "${SIMULATOR_AZURE_OPENAI_ENDPOINT:-}"
+    deployment: "${SIMULATOR_AZURE_OPENAI_DEPLOYMENT:-}"
+    api_version: "${SIMULATOR_AZURE_OPENAI_API_VERSION:-}"
+  bedrock:
+    region: "${SIMULATOR_AWS_REGION:-}"
+    endpoint: "${SIMULATOR_AWS_BEDROCK_ENDPOINT:-}"
+  ollama:
+    base_url: "${SIMULATOR_OLLAMA_BASE_URL:-}"
+
 target:
   enabled: true
   mode: browser

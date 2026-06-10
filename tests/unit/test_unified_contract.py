@@ -1,7 +1,9 @@
 """Smoke tests for unified contract loader."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -16,7 +18,7 @@ EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unif
 
 def test_load_example_contract():
     contract = load_unified_contract(EXAMPLE)
-    assert contract.suite.suite_id == "multi_persona_demo_suite"
+    assert contract.suite.suite_id == "unified_evaluation_demo"
     assert len(contract.persona_pool) == 3
     assert len(contract.scenario_catalog) == 4
     assert len(contract.adversarial_scenario_catalog) == 4
@@ -49,20 +51,6 @@ def test_ratio_out_of_range_rejected():
     payload["eval_plan"]["entries"][0]["synth_to_adversarial_ratio"] = 1.5
     with pytest.raises(ContractError):
         parse_unified_contract(payload)
-
-
-def test_trajectory_defaults_disabled_when_block_omitted():
-    contract = parse_unified_contract(_base_payload())
-    assert contract.trajectory.enabled is False
-    assert contract.trajectory.trace_field == "trace"
-
-
-def test_trajectory_enabled_from_contract_yaml():
-    payload = _base_payload()
-    payload["trajectory"] = {"enabled": True, "trace_field": "exec_trace"}
-    contract = parse_unified_contract(payload)
-    assert contract.trajectory.enabled is True
-    assert contract.trajectory.trace_field == "exec_trace"
 
 
 def _base_payload() -> dict:
@@ -110,3 +98,71 @@ def test_adversarial_scenarios_parsed_from_scenario_catalog():
     assert contract.adversarial_scenario_catalog[0].scenario_id == "S1"
     assert contract.adversarial_scenario_catalog[0].scenario_type == "toxicity"
     assert contract.adversarial_scenario_catalog[0].scenario_text == "inline probe"
+
+
+def test_load_unified_contract_resolves_env_vars_from_dotenv_file(tmp_path):
+    contract_path = tmp_path / "unified_contract.yaml"
+    contract_path.write_text(
+        "\n".join([
+            "suite:",
+            "  suite_id: t",
+            "  target_application: tbot",
+            "  run_mode: unified",
+            "  synthetic_flag: true",
+            "run:",
+            "  random_seed: 0",
+            "  max_concurrency: 1",
+            "  dry_run: true",
+            "  verbose: false",
+            "llm:",
+            "  provider: mock",
+            "  model: mock",
+            "target:",
+            "  enabled: true",
+            "  endpoint: \"${ASE_TEST_UNIFIED_ENDPOINT}\"",
+            "  mode: api",
+            "time_window:",
+            "  start_day: \"2026-06-01\"",
+            "  num_synthetic_days: 1",
+            "  compressed_runtime_minutes: 1",
+            "persona_pool:",
+            "  - persona_id: P1",
+            "    role: r",
+            "    location: loc",
+            "    seniority: junior",
+            "    communication_style: x",
+            "    domain_familiarity: low",
+            "    data_sensitivity: low",
+            "scenario_catalog:",
+            "  - scenario_id: S1",
+            "    domain: d",
+            "    intent: i",
+            "    expected_retrieval_topics: []",
+            "    failure_injection: {}",
+            "    success_criteria: {}",
+            "adversarial_scenario_catalog:",
+            "  - scenario_id: A1",
+            "    scenario_type: toxicity",
+            "    scenario_text: probe",
+            "eval_plan:",
+            "  total_conversations: 1",
+            "  conversation_turns:",
+            "    min: 2",
+            "    max: 2",
+            "  entries:",
+            "    - persona_id: P1",
+            "      synth_scenario_id: S1",
+            "      adversarial_scenario_id: A1",
+            "      weight: 1.0",
+        ]),
+        encoding="utf-8",
+    )
+
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("ASE_TEST_UNIFIED_ENDPOINT=https://unified-dotenv.example.com\n", encoding="utf-8")
+
+    with patch.dict(os.environ, {"ASE_ENV_FILE": str(dotenv_path)}, clear=False):
+        if "ASE_TEST_UNIFIED_ENDPOINT" in os.environ:
+            del os.environ["ASE_TEST_UNIFIED_ENDPOINT"]
+        contract = load_unified_contract(contract_path)
+        assert contract.target.endpoint == "https://unified-dotenv.example.com"

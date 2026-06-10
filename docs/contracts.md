@@ -12,6 +12,10 @@ Required sections:
 - `traffic_orchestration`
 - `output`
 
+Optional sections:
+
+- `llm` (harness-side simulated chat client for synthetic conversations)
+
 Tool-call expectations are not active scope. If a legacy contract includes `tool_expectations`, validation warns and ignores the field.
 
 Conversation turn ranges must be within 3-8 turns.
@@ -28,6 +32,28 @@ The same substitution pattern can also be used for target LLM payload knobs:
 - `${CHATBOT_MODEL:-}`
 - `${CHATBOT_TEMPERATURE:-}`
 - `${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}`
+
+For harness-side persona simulation (`UserSimulator`), you can also configure an optional `llm` block:
+
+```yaml
+llm:
+  provider: "${SIMULATOR_LLM_PROVIDER:-}"
+  model: "${SIMULATOR_MODEL_NAME:-}"
+  max_tokens: "${SIMULATOR_MODEL_MAX_TOKENS:-1024}"
+  temperature: "${SIMULATOR_MODEL_TEMPERATURE:-0.7}"
+  api_key_env: "${SIMULATOR_API_KEY_ENV:-}"
+  azure:
+    endpoint: "${SIMULATOR_AZURE_OPENAI_ENDPOINT:-}"
+    deployment: "${SIMULATOR_AZURE_OPENAI_DEPLOYMENT:-}"
+    api_version: "${SIMULATOR_AZURE_OPENAI_API_VERSION:-}"
+  bedrock:
+    region: "${SIMULATOR_AWS_REGION:-}"
+    endpoint: "${SIMULATOR_AWS_BEDROCK_ENDPOINT:-}"
+  ollama:
+    base_url: "${SIMULATOR_OLLAMA_BASE_URL:-}"
+```
+
+If `llm.provider` is omitted/empty, the simulator continues to auto-detect provider from environment variables.
 
 This is particularly useful for the `target.endpoint` field to avoid hardcoding endpoints:
 
