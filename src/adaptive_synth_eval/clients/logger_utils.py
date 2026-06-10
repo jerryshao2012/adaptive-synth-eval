@@ -35,6 +35,41 @@ RUN_LOG_FILENAME = "run.log"
 # rotates to its own file instead of appending to the previous run's directory.
 _RUN_FILE_HANDLER_ATTR = "_eval_run_file_handler"
 
+# Level used to silence a console handler without removing it (above CRITICAL=50).
+_SILENCED_LEVEL = logging.CRITICAL + 10
+# Remembers a console handler's original level so console logging can be re-enabled.
+_ORIG_LEVEL_ATTR = "_eval_orig_level"
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    """Parse a boolean-ish env var. Unset → default; '0/false/no/off' → False."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def set_console_logging(enabled: bool) -> None:
+    """Enable/disable terminal log output without touching file/CloudWatch handlers.
+
+    Console output comes from the root logger's StreamHandler (added by ``basicConfig``).
+    When disabled we raise that handler's level so nothing prints, while records still flow
+    to the run.log FileHandler and the CloudWatch handler (attached to the
+    ``adaptive_synth_eval`` logger). FileHandler subclasses StreamHandler, so it is excluded
+    explicitly.
+    """
+    for handler in logging.getLogger().handlers:
+        if not isinstance(handler, logging.StreamHandler) or isinstance(handler, logging.FileHandler):
+            continue
+        if enabled:
+            original = getattr(handler, _ORIG_LEVEL_ATTR, None)
+            if original is not None:
+                handler.setLevel(original)
+                delattr(handler, _ORIG_LEVEL_ATTR)
+        elif not hasattr(handler, _ORIG_LEVEL_ATTR):
+            setattr(handler, _ORIG_LEVEL_ATTR, handler.level)
+            handler.setLevel(_SILENCED_LEVEL)
+
 
 class JsonFormatter(logging.Formatter):
     """Render each record as one JSON object so CloudWatch Logs Insights can query fields.
@@ -265,7 +300,7 @@ def setup_logger(
 
     # Default format if not provided
     if format_string is None:
-        format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format_string = _DEFAULT_FORMAT
 
     # Configure root logger only once
     root_logger = logging.getLogger()
@@ -273,8 +308,14 @@ def setup_logger(
         logging.basicConfig(
             level=getattr(logging, log_level, logging.INFO),
             format=format_string,  # type: ignore[arg-type]
-            datefmt="%Y-%m-%d %H:%M:%S"
+            datefmt=_DEFAULT_DATEFMT,
         )
+
+    # Optionally silence console output (set EVAL_LOG_CONSOLE=0/false/off) while still
+    # capturing everything to run.log and/or CloudWatch. We raise the console handler's
+    # level rather than remove it, so the records are still created and dispatched to the
+    # file/CloudWatch handlers — only the terminal stays quiet, and it's reversible.
+    set_console_logging(_env_flag("EVAL_LOG_CONSOLE", default=True))
 
     # Optional: ship eval-client logs directly to a dedicated CloudWatch log group (kept
     # separate from the target server's logs). Enabled only when EVAL_CWL_LOG_GROUP is set,

@@ -208,6 +208,8 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "total_conversations": contract.eval_plan.total_conversations,
             "conversation_turns": contract.eval_plan.conversation_turns.__dict__,
             "attack_memory": contract.eval_plan.attack_memory,
+            "seed_attack_memory_path": contract.eval_plan.seed_attack_memory_path,
+            "attack_memory_max_entries": contract.eval_plan.attack_memory_max_entries,
             "entries": [e.__dict__ for e in contract.eval_plan.entries],
         },
         "scoring": {
@@ -270,6 +272,16 @@ def _parse_adversarial(payload: dict[str, Any]) -> AdversarialScenario:
     )
 
 
+def _parse_seed_attack_memory_path(raw: Any) -> str | list[str] | None:
+    """Normalize the seed spec: a single path string, a list of paths, or None."""
+    if not raw:
+        return None
+    if isinstance(raw, (list, tuple)):
+        paths = [str(p) for p in raw if p]
+        return paths or None
+    return str(raw)
+
+
 def _parse_eval_plan(payload: dict[str, Any], warnings: list[str]) -> EvalPlan:
     # `total_conversations` is now optional — when omitted, the run is budget-driven.
     _require_keys(payload, ["conversation_turns", "entries"], "eval_plan")
@@ -283,6 +295,10 @@ def _parse_eval_plan(payload: dict[str, Any], warnings: list[str]) -> EvalPlan:
         conversation_turns=turns,
         entries=entries,
         attack_memory=str(payload.get("attack_memory", "shared")),
+        seed_attack_memory_path=_parse_seed_attack_memory_path(
+            payload.get("seed_attack_memory_path")
+        ),
+        attack_memory_max_entries=int(payload.get("attack_memory_max_entries", 50)),
     )
 
 

@@ -141,6 +141,11 @@ class EvalPlan:
     conversation_turns: ConversationTurns
     entries: list[EvalPlanEntry]
     attack_memory: str = "shared"  # shared | per_persona | none
+    # Prior attack_memory.json path(s) — single, glob, or list — pooled to seed
+    # cross-session memory. Honored only when attack_memory == "shared".
+    seed_attack_memory_path: str | list[str] | None = None
+    # Cap on retained entries; lowest-value evicted first.
+    attack_memory_max_entries: int = 50
 
 
 @dataclass(frozen=True)

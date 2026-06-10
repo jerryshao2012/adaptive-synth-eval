@@ -4,6 +4,7 @@ writes unified artifacts.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import random
@@ -11,6 +12,8 @@ import time
 from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta
+from glob import glob
+from pathlib import Path
 from typing import Any
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
@@ -33,6 +36,22 @@ from adaptive_synth_eval.unified_eval.providers.llm_factory import build_compone
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
 
 logger = logging.getLogger(__name__)
+
+
+def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory:
+    """Pool prior runs' attack memory into one capped store. Missing/bad files are skipped."""
+    specs = [spec] if isinstance(spec, str) else spec
+    paths = sorted({p for s in specs for p in glob(str(Path(s).expanduser()))})
+    memory = AttackMemory(max_entries=max_entries)
+    for path in paths:
+        try:
+            loaded = AttackMemory.from_dict(json.loads(Path(path).read_text()), max_entries)
+            memory.entries.extend(loaded.entries)
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping attack-memory seed %s: %s", path, exc)
+    memory._evict()
+    logger.info("Seeded attack memory from %d file(s): %d entries", len(paths), len(memory.entries))
+    return memory
 
 
 class _RunProgressTracker:
@@ -208,8 +227,13 @@ async def run_unified_async(
         )
 
     attack_memory = (
-        AttackMemory() if contract.eval_plan.attack_memory in {"shared"} else None
+        AttackMemory(max_entries=contract.eval_plan.attack_memory_max_entries)
+        if contract.eval_plan.attack_memory in {"shared"} else None
     )
+    if attack_memory is not None and contract.eval_plan.seed_attack_memory_path:
+        attack_memory = _seed_attack_memory(
+            contract.eval_plan.seed_attack_memory_path, attack_memory.max_entries
+        )
     attack_memory_lock = asyncio.Lock()
     writer_lock = asyncio.Lock()
     tracker = _RunningStatsTracker.from_dict(

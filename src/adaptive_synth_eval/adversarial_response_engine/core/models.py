@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dc_fields
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
@@ -308,6 +308,21 @@ class AttackMemory:
         if len(self.entries) > self.max_entries:
             self.entries.sort(key=lambda e: (e.failure_score + (1 if e.near_miss else 0)))
             self.entries = self.entries[-self.max_entries:]
+
+    @classmethod
+    def from_dict(cls, payload: dict, max_entries: int = 50) -> "AttackMemory":
+        """Rehydrate from a persisted payload; unknown keys and malformed entries are skipped."""
+        fields = {f.name for f in dc_fields(AttackMemoryEntry)}
+        entries: List[AttackMemoryEntry] = []
+        for raw in payload.get("entries") or []:
+            if isinstance(raw, dict):
+                try:
+                    entries.append(AttackMemoryEntry(**{k: v for k, v in raw.items() if k in fields}))
+                except TypeError:
+                    pass
+        mem = cls(entries=entries, max_entries=max_entries)
+        mem._evict()
+        return mem
 
 
 @dataclass
