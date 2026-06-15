@@ -1,4 +1,4 @@
-# Loop Engineering Migration Plan for Adaptive Synth Eval CLI
+# Loop Engineering Migration Plan for Adaptive Synth and Adversarial Agent Eval CLI
 
 Date: 2026-06-10
 Last Enhanced: 2026-06-15 (integrated loop engineering patterns + multi-provider LLM support)
