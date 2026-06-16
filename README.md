@@ -1,16 +1,128 @@
-# Adaptive Synthetic Evaluation
+# Adversarial Adaptive Synthetic Evaluation
 
-A Python CLI tool for generating synthetic multi-turn chat histories to evaluate HR policy chatbots. This local-first, contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
+A Python CLI tool for generating synthetic multi-turn chat histories and performing adversarial red-teaming to evaluate HR policy chatbots. This local-first, contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
 
 ## 🎯 Overview
 
-Adaptive Synthetic Eval helps you:
+Adversarial Adaptive Synthetic Eval helps you:
 - **Generate realistic test data**: Create thousands of diverse, persona-driven conversations.
 - **Test chatbot behavior**: Validate responses across different user types, scenarios, and edge cases.
 - **Inject failures**: Simulate ambiguous queries, typos, frustration, and policy boundary pressure.
 - **Evaluate at scale**: Run concurrent simulations with configurable traffic patterns.
 - **Red-team chatbots**: Perform adversarial red-teaming to uncover vulnerabilities.
 - **Run continuous loops**: Autonomously discover evaluation targets, apply constrained recoveries, and run unattended with safety guardrails (L1/L2/L3 readiness levels).
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph CLI["CLI Entry Point"]
+        Validate["validate-contract"]
+        Run["run --contract"]
+        Summarize["summarize --run-id"]
+        LoopInit["loop init"]
+        LoopRun["loop run"]
+        LoopStart["loop start --all"]
+        LoopAudit["loop audit"]
+        LoopPause["loop pause/resume"]
+    end
+
+    subgraph ContractLayer["Contract Layer"]
+        ContractParser["Contract Parser<br/>YAML/JSON"]
+        Validator["Contract Validator<br/>Schema Check"]
+        EnvResolver["Environment Resolver<br/>${VAR} substitution"]
+    end
+
+    subgraph StaticExec["Static Execution (L0)"]
+        GenEngine["Generation Engine<br/>Persona + Scenario"]
+        SimEngine["Simulation Engine<br/>Turn-by-turn chat"]
+        ScoringEngine["Scoring Engine<br/>Verdict + Metrics"]
+    end
+
+    subgraph LoopExec["Loop Execution (L1-L3)"]
+        LoopProfiles["Loop Profiles<br/>L1|L2|L3"]
+        Scheduler["Multi-Profile Scheduler<br/>Priority + Backoff"]
+        Planner["Planner<br/>AI target selection"]
+        Policy["Policy Engine<br/>Assisted actions"]
+        Verifier["Verifier/Checker<br/>Approval gates"]
+        StateStore["State Store<br/>Pause + Budget"]
+    end
+
+    subgraph AdversarialExec["Adversarial Red-Teaming"]
+        RedTeamEngine["Red-Team Engine<br/>Adaptive attacks"]
+        SafetyJudge["Safety Judge<br/>Violation scoring"]
+        AdversaryActors["Adversary Actors<br/>Escalation rules"]
+        ReflectionEngine["Reflection Engine<br/>Outcome analysis"]
+    end
+
+    subgraph LLMClients["LLM Clients & Backends"]
+        AzureOpenAI["Azure OpenAI<br/>GPT-4/3.5"]
+        AWSBedrock["AWS Bedrock<br/>Claude/Llama"]
+        Ollama["Ollama<br/>Local Models"]
+        OpenAIAPI["OpenAI API<br/>GPT-4/3.5"]
+        Anthropic["Anthropic<br/>Claude"]
+    end
+
+    subgraph Persistence["Artifact Persistence"]
+        ChatHistory["chat_history.jsonl<br/>Conversations"]
+        RunState["run_state.json<br/>Checkpoint"]
+        LoopState["loop-state.json<br/>Profile state"]
+        LoopBudget["loop-budget.md<br/>Cap tracking"]
+        LoopLog["loop-run-log.md<br/>Event log"]
+        StateArtifacts["STATE.md<br/>Human summary"]
+    end
+
+    subgraph Targets["Evaluation Targets"]
+        ChatbotEndpoint["Chatbot Endpoint<br/>HTTP/REST"]
+        BrowserUI["Browser UI<br/>Playwright"]
+        AgentCore["Agent/Core API<br/>Direct SDK"]
+    end
+
+    CLI --> ContractLayer
+    ContractLayer --> Validator
+    Validator --> StaticExec
+    Validator --> LoopExec
+    Validator --> AdversarialExec
+
+    StaticExec --> GenEngine
+    GenEngine --> SimEngine
+    SimEngine --> ScoringEngine
+    ScoringEngine --> Persistence
+
+    LoopExec --> LoopProfiles
+    LoopProfiles --> Scheduler
+    Scheduler --> Planner
+    Planner --> Policy
+    Policy --> Verifier
+    Verifier --> StateStore
+    StateStore --> Persistence
+
+    AdversarialExec --> RedTeamEngine
+    RedTeamEngine --> SafetyJudge
+    SafetyJudge --> AdversaryActors
+    AdversaryActors --> ReflectionEngine
+    ReflectionEngine --> Persistence
+
+    Planner -.LLM Reasoning.-> LLMClients
+    ReflectionEngine -.LLM Reasoning.-> LLMClients
+    SafetyJudge -.LLM Judgment.-> LLMClients
+    GenEngine -.LLM Messages.-> LLMClients
+
+    SimEngine --> Targets
+    RedTeamEngine --> Targets
+    Targets -.Responses.-> ScoringEngine
+
+    style CLI fill:#e1f5ff
+    style ContractLayer fill:#f3e5f5
+    style StaticExec fill:#e8f5e9
+    style LoopExec fill:#fff3e0
+    style AdversarialExec fill:#fce4ec
+    style LLMClients fill:#f1f8e9
+    style Persistence fill:#eceff1
+    style Targets fill:#ede7f6
+```
 
 ---
 
