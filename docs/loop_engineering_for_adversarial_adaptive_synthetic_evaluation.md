@@ -26,12 +26,6 @@ Readiness levels used in this repo:
 - `L2`: assisted actions with maker/checker enforcement
 - `L3`: unattended loops with kill switch, caps, and coordination
 
-Current implementation status:
-- `L0`: implemented
-- `L1`: implemented
-- `L2`: implemented
-- `L3`: implemented
-
 ## 3. Implemented Architecture
 
 ### 3.1 Runtime modules

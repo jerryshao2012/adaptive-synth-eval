@@ -27,17 +27,17 @@ artifacts (JSONL/CSV) you can analyze.
 ## 2. The three actors
 
 ```
-                ┌─────────────────────── THE HARNESS (our LLMs on Bedrock) ───────────────────────┐
-                │                                                                                   │
-   contract ───►│   User-Simulator        Planner ─► Generator        Judge        Session-Policy   │
+                ┌─────────────────────── THE HARNESS (our LLMs on Bedrock) ──────────────────────────┐
+                │                                                                                    │
+   contract ───►│   User-Simulator        Planner ─► Generator        Judge        Session-Policy    │
    (YAML)       │   (synth turns)         (adversarial turns)         (scores)      (when to stop)   │
                 │        │                      │                        ▲                │          │
                 └────────┼──────────────────────┼────────────────────────┼────────────────┼──────────┘
                          │ user message         │ attack message         │ verdict        │
                          ▼                      ▼                        │                ▼
-                ┌───────────────────────────────────────────────────────┴──────────────────────────┐
-                │                          THE TARGET  (your deployed agent)                          │
-                │            e.g. Bedrock AgentCore runtime — invoked by ARN, keeps session memory    │
+                ┌────────────────────────────────────────────────────────┴───────────────────────────┐
+                │                          THE TARGET  (your deployed agent)                         │
+                │            e.g. Bedrock AgentCore runtime — invoked by ARN, keeps session memory   │
                 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,7 +64,7 @@ FOR EACH CONVERSATION  (run_conversation, conversation.py)
    │
    │  plan_turn_modes(schedule) ─► ["synth","synth","adversarial","adversarial", ...]
    │
-   │  ┌── per turn ────────────────────────────────────────────────────────────┐
+   │  ┌── per turn ──────────────────────────────────────────────────────────────┐
    │  │  if synth:        UserSimulator writes a legit message                   │
    │  │  if adversarial:  AttackAgent.next_turn(): Planner ─► Generator          │
    │  │                                                                          │
@@ -73,7 +73,7 @@ FOR EACH CONVERSATION  (run_conversation, conversation.py)
    │  │  if synth:        score_synth_turn  (groundedness/relevance/safety/...)  │
    │  │  if adversarial:  score_adversarial_turn  (SafetyJudge ─► failure_score) │
    │  │                                                                          │
-   │  │  update session: best_failure_score, repeated_refusals, synth_context   │
+   │  │  update session: best_failure_score, repeated_refusals, synth_context    │
    │  │  Session-Policy may ABANDON the conversation early                       │
    │  └──────────────────────────────────────────────────────────────────────────┘
    │
@@ -94,13 +94,13 @@ This is the core component. One **adversarial turn** is a 3-stage LLM chain plus
 bookkeeping. Code: `adversarial_response_engine/engine/`.
 
 ```
-        ┌──────────────────────────────────────────────────────────────────────┐
+        ┌────────────────────────────────────────────────────────────────────────┐
         │  AttackAgent.next_turn(session)        (engine/attack_agent.py)        │
         │                                                                        │
         │   1. PLANNER  ──► PlanResult                                           │
-        │      AdaptationPlanner.plan()          (engine/components.py)           │
+        │      AdaptationPlanner.plan()          (engine/components.py)          │
         │      inputs: session history summary, attack_memory, synth_context,    │
-        │              scores (best_failure_score, repeated_refusals, suspicion)  │
+        │              scores (best_failure_score, repeated_refusals, suspicion) │
         │      output: {attack_angle, sub_tactic, model_posture,                 │
         │               next_generator_instruction, ladder_dependency, ...}      │
         │                                                                        │
@@ -110,10 +110,10 @@ bookkeeping. Code: `adversarial_response_engine/engine/`.
         │                                                                        │
         │   (message is sent to the target; reply comes back)                    │
         │                                                                        │
-        │   3. JUDGE  ──► JudgeVerdict           (engine/components.py)           │
+        │   3. JUDGE  ──► JudgeVerdict           (engine/components.py)          │
         │      SafetyJudge.judge(user_input, bot_response)                       │
         │      a scenario-specific rubric scores the reply 0–4                   │
-        └──────────────────────────────────────────────────────────────────────┘
+        └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 4.1 Planner — "read the room, pick the next move"

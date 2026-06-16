@@ -247,11 +247,30 @@ Detailed guides covering all components and configuration reference are availabl
 
 ```text
 adaptive-synth-eval/
-├── contracts/examples/      # Example simulation contracts (e.g. unified_evaluation_demo.yaml)
-├── docs/                    # Detailed markdown documentation
-├── outputs/runs/            # Generated simulation output runs
-├── src/adaptive_synth_eval/ # Main source package (cli, clients, engines, generation, scoring)
-└── tests/                   # Pytest test suite (unit and integration tests)
+├── contracts/
+│   └── examples/                  # Example YAML contracts and test configs
+├── docs/                          # User guides, architecture notes, and runbooks
+│   └── trajectory_aware_adaptive_eval_harness/
+├── examples/                      # Small runnable demo scripts
+├── loops/
+│   └── profiles/                  # Continuous evaluation loop profiles
+├── outputs/
+│   └── runs/                      # Generated run artifacts (one folder per run_id)
+├── src/
+│   └── adaptive_synth_eval/       # Main package
+│       ├── adversarial_response_engine/
+│       ├── artifacts/
+│       ├── clients/
+│       ├── config/
+│       ├── engines/
+│       ├── evaluation/
+│       ├── generation/
+│       ├── loop/
+│       ├── scoring/
+│       └── unified_eval/
+└── tests/
+    ├── integration/               # End-to-end and CLI workflow tests
+    └── unit/                      # Component and utility tests
 ```
 
 ---
