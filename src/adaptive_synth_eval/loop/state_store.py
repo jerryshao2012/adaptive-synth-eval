@@ -30,6 +30,7 @@ def initialize_loop_assets(profile: LoopProfile, *, output_dir: Path = Path("out
     return {
         "profile_id": profile.profile_id,
         "status": state["status"],
+        "paused": state.get("paused", False),
         "state_path": str(state_path),
         "state_markdown_path": str(loops_dir / "STATE.md"),
         "budget_markdown_path": str(loops_dir / "loop-budget.md"),
@@ -58,6 +59,7 @@ def record_loop_cycle(
     timestamp = now_iso()
     total_runs = len(run_results)
     total_errors = sum(int(item.get("errors") or 0) for item in run_results)
+    total_tokens = sum(int(item.get("total_tokens") or 0) for item in run_results)
     failed_runs = sum(1 for item in run_results if str(item.get("status") or "") != "completed")
     outcome_status = "completed"
     if failed_runs:
@@ -108,7 +110,11 @@ def record_loop_cycle(
     )
     state["human_inbox"] = human_inbox[-20:]
     state["updated_at"] = timestamp
-    budget = dict(state.get("budget") or _initial_budget_state(timestamp))
+    budget = _roll_budget_window(state.get("budget") or _initial_budget_state(timestamp), timestamp)
+    budget["spent_today_runs"] = int(budget.get("spent_today_runs") or 0) + total_runs
+    budget["spent_this_week_runs"] = int(budget.get("spent_this_week_runs") or 0) + total_runs
+    budget["spent_today_tokens"] = int(budget.get("spent_today_tokens") or 0) + total_tokens
+    budget["spent_this_week_tokens"] = int(budget.get("spent_this_week_tokens") or 0) + total_tokens
     budget["last_updated"] = timestamp
     state["budget"] = budget
     if isinstance(state_updates, dict):
@@ -187,6 +193,13 @@ def _build_initial_state(profile: LoopProfile, *, existing: dict[str, Any] | Non
         state.setdefault("recent_runs", [])
         state.setdefault("budget", _initial_budget_state(timestamp))
         state.setdefault("assisted_action_attempts", {})
+        state.setdefault("paused", bool(profile.paused))
+        state.setdefault("pause_reason", None)
+        state.setdefault("priority", int(profile.priority))
+        state.setdefault("active_windows", list(profile.active_windows))
+        state.setdefault("daily_run_cap", profile.daily_run_cap)
+        state.setdefault("daily_token_cap", profile.daily_token_cap)
+        state.setdefault("consecutive_checker_failures", 0)
         return state
 
     return {
@@ -197,10 +210,16 @@ def _build_initial_state(profile: LoopProfile, *, existing: dict[str, Any] | Non
         "readiness_level": profile.readiness_level,
         "cadence": profile.cadence,
         "profile_path": str(profile.source_path),
+        "paused": bool(profile.paused),
+        "pause_reason": None,
+        "priority": int(profile.priority),
+        "active_windows": list(profile.active_windows),
         "created_at": timestamp,
         "updated_at": timestamp,
         "max_iterations_per_cycle": profile.max_iterations_per_cycle,
         "budget_policy_ref": profile.budget_policy_ref,
+        "daily_run_cap": profile.daily_run_cap,
+        "daily_token_cap": profile.daily_token_cap,
         "targets": [target.__dict__ for target in profile.targets],
         "escalation_rules": list(profile.escalation_rules),
         "human_gates": list(profile.human_gates),
@@ -212,18 +231,58 @@ def _build_initial_state(profile: LoopProfile, *, existing: dict[str, Any] | Non
         "last_cycle": None,
         "recent_runs": [],
         "assisted_action_attempts": {},
+        "consecutive_checker_failures": 0,
         "budget": _initial_budget_state(timestamp),
     }
 
 
 def _initial_budget_state(timestamp: str) -> dict[str, Any]:
+    week_bucket = _week_bucket(timestamp)
     return {
         "daily_cap_tokens": None,
         "weekly_cap_tokens": None,
         "spent_today_tokens": 0,
         "spent_this_week_tokens": 0,
+        "spent_today_runs": 0,
+        "spent_this_week_runs": 0,
+        "day_bucket": timestamp[:10],
+        "week_bucket": week_bucket,
         "last_updated": timestamp,
     }
+
+
+def set_loop_paused(
+        profile_ref: str,
+        *,
+        paused: bool,
+        reason: str | None = None,
+        output_dir: Path = Path("outputs"),
+        profiles_dir: Path = Path("loops/profiles"),
+) -> dict[str, Any]:
+    profile = load_loop_profile(profile_ref, profiles_dir=profiles_dir)
+    initialize_loop_assets(profile, output_dir=output_dir)
+    state_path = _loop_state_path(profile.profile_id, output_dir)
+    state = _read_json(state_path)
+    if state is None:
+        raise LoopProfileError(f"Loop state not found for profile: {profile.profile_id}")
+
+    timestamp = now_iso()
+    state["paused"] = paused
+    state["pause_reason"] = reason if paused else None
+    state["updated_at"] = timestamp
+    if paused:
+        state["status"] = "paused"
+    elif state.get("status") == "paused":
+        state["status"] = "initialized"
+    _write_json_atomic(state_path, state)
+
+    loops_dir = _loop_root(output_dir)
+    states = _load_all_states(output_dir)
+    _write_text_atomic(loops_dir / "STATE.md", _render_state_markdown(states, generated_at=timestamp))
+    _write_text_atomic(loops_dir / "loop-budget.md", _render_budget_markdown(states, generated_at=timestamp))
+    event = f"paused reason={reason or 'manual'}" if paused else "resumed"
+    _append_run_log(loops_dir / "loop-run-log.md", profile.profile_id, event, profile.source_path, timestamp)
+    return state
 
 
 def _load_all_states(output_dir: Path) -> list[dict[str, Any]]:
@@ -251,9 +310,12 @@ def _render_state_markdown(states: list[dict[str, Any]], *, generated_at: str) -
             f"- Status: {state.get('status', 'unknown')}",
             f"- Readiness level: {state.get('readiness_level', 'unknown')}",
             f"- Cadence: {state.get('cadence', 'unknown')}",
+            f"- Paused: {'yes' if state.get('paused') else 'no'}",
             f"- Last updated: {state.get('updated_at', 'unknown')}",
             f"- Human decision required: {'yes' if state.get('human_decision_required') else 'no'}",
         ])
+        if state.get("pause_reason"):
+            lines.append(f"- Pause reason: {state.get('pause_reason')}")
         targets = state.get("targets") or []
         if targets:
             lines.append("- Targets:")
@@ -325,13 +387,38 @@ def _render_budget_markdown(states: list[dict[str, Any]], *, generated_at: str) 
             "",
             f"## {state.get('profile_id', 'unknown')}",
             f"- Budget policy ref: {state.get('budget_policy_ref') or 'n/a'}",
+            f"- Daily run cap: {state.get('daily_run_cap') if state.get('daily_run_cap') is not None else 'n/a'}",
             f"- Daily cap tokens: {budget.get('daily_cap_tokens') if budget.get('daily_cap_tokens') is not None else 'n/a'}",
             f"- Weekly cap tokens: {budget.get('weekly_cap_tokens') if budget.get('weekly_cap_tokens') is not None else 'n/a'}",
+            f"- Tokens cap from profile: {state.get('daily_token_cap') if state.get('daily_token_cap') is not None else 'n/a'}",
+            f"- Runs spent today: {budget.get('spent_today_runs', 0)}",
+            f"- Runs spent this week: {budget.get('spent_this_week_runs', 0)}",
             f"- Tokens spent today: {budget.get('spent_today_tokens', 0)}",
             f"- Tokens spent this week: {budget.get('spent_this_week_tokens', 0)}",
             f"- Budget last updated: {budget.get('last_updated', 'unknown')}",
         ])
     return "\n".join(lines) + "\n"
+
+
+def _roll_budget_window(budget: dict[str, Any], timestamp: str) -> dict[str, Any]:
+    updated = dict(budget)
+    today = timestamp[:10]
+    if str(updated.get("day_bucket") or "") != today:
+        updated["spent_today_tokens"] = 0
+        updated["spent_today_runs"] = 0
+        updated["day_bucket"] = today
+    week_bucket = _week_bucket(timestamp)
+    if str(updated.get("week_bucket") or "") != week_bucket:
+        updated["spent_this_week_tokens"] = 0
+        updated["spent_this_week_runs"] = 0
+        updated["week_bucket"] = week_bucket
+    return updated
+
+
+def _week_bucket(timestamp: str) -> str:
+    day = timestamp[:10]
+    year, month, day_num = [int(part) for part in day.split("-", 2)]
+    return f"{year:04d}-W{time.strftime('%W', time.strptime(f'{year:04d}-{month:02d}-{day_num:02d}', '%Y-%m-%d'))}"
 
 
 def _append_run_log(path: Path, profile_id: str, event: str, source_path: Path, timestamp: str) -> None:

@@ -47,6 +47,12 @@ def _audit_one(*, profile_ref: str, output_dir: Path, profiles_dir: Path) -> dic
         "allow_auto_resume": bool(checker_policy.get("allow_auto_resume", True)),
         "allow_auto_restart_stale_failed": bool(checker_policy.get("allow_auto_restart_stale_failed", True)),
         "safe_max_concurrency": checker_policy.get("safe_max_concurrency"),
+        "paused": bool((status or {}).get("paused", profile.paused)) if isinstance(status, dict) else bool(
+            profile.paused),
+        "active_windows": list(profile.active_windows),
+        "daily_run_cap": profile.daily_run_cap,
+        "daily_token_cap": profile.daily_token_cap,
+        "auto_pause_after_checker_failures": int(checker_policy.get("auto_pause_after_checker_failures", 3)),
     }
 
     checks = [
@@ -62,6 +68,14 @@ def _audit_one(*, profile_ref: str, output_dir: Path, profiles_dir: Path) -> dic
                 safeguards["allow_auto_resume"] or safeguards["allow_auto_restart_stale_failed"],
             ]
         )
+    if profile.readiness_level == "L3":
+        checks.extend(
+            [
+                safeguards["daily_run_cap"] is not None or safeguards["daily_token_cap"] is not None,
+                bool(safeguards["active_windows"]),
+                safeguards["auto_pause_after_checker_failures"] >= 1,
+            ]
+        )
 
     readiness_score = round((sum(1 for value in checks if value) / len(checks)) * 100, 1) if checks else 0.0
 
@@ -72,12 +86,21 @@ def _audit_one(*, profile_ref: str, output_dir: Path, profiles_dir: Path) -> dic
         "status": status.get("status") if isinstance(status, dict) else "unknown",
         "files": files,
         "maker_checker_split": profile.readiness_level in {"L2", "L3"},
+        "multi_profile_coordination_ready": profile.readiness_level == "L3",
         "l2_actions_supported": [
             "auto_resume_incomplete",
             "auto_restart_stale_failed",
             "apply_concurrency_cap",
             "regenerate_missing_summary",
         ] if profile.readiness_level in {"L2", "L3"} else [],
+        "l3_controls_supported": [
+            "kill_switch",
+            "active_windows",
+            "daily_run_cap",
+            "daily_token_cap",
+            "auto_pause_after_checker_failures",
+            "priority_scheduler",
+        ] if profile.readiness_level == "L3" else [],
         "safeguards": safeguards,
         "readiness_score": readiness_score,
     }

@@ -507,3 +507,269 @@ llm_config:
     state_path = tmp_path / "outputs" / "loops" / "state" / "demo.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["last_cycle"]["checker_decision"] == "rejected"
+
+
+def test_cli_loop_pause_and_resume_toggle_kill_switch(tmp_path, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L3
+cadence: hourly
+active_windows:
+  - always
+targets:
+  - contract: {contract}
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+
+    main(["loop", "init", "--profile", "demo", "--profiles-dir", str(profiles_dir), "--output-dir",
+          str(tmp_path / "outputs")])
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "loop",
+            "pause",
+            "--profile",
+            "demo",
+            "--reason",
+            "maintenance",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["paused"] is True
+    assert payload["pause_reason"] == "maintenance"
+
+    exit_code = main(
+        [
+            "loop",
+            "resume",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["paused"] is False
+    assert payload["pause_reason"] is None
+
+
+def test_cli_loop_start_all_runs_profiles_in_priority_order(tmp_path, monkeypatch, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    (profiles_dir / "low.yaml").write_text(
+        f"""
+profile_id: low
+readiness_level: L3
+cadence: hourly
+priority: 50
+active_windows:
+  - always
+targets:
+  - contract: {contract}
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+    (profiles_dir / "high.yaml").write_text(
+        f"""
+profile_id: high
+readiness_level: L3
+cadence: hourly
+priority: 10
+active_windows:
+  - always
+targets:
+  - contract: {contract}
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+    seen = []
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli._run_loop_profile",
+        lambda profile, **kwargs: seen.append(profile.profile_id) or {"profile_id": profile.profile_id},
+    )
+
+    exit_code = main(
+        [
+            "loop",
+            "start",
+            "--all",
+            "--once",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert seen == ["high", "low"]
+    assert payload["profiles"] == ["high", "low"]
+
+
+def test_cli_loop_run_l3_auto_pauses_on_daily_run_cap(tmp_path, monkeypatch, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "simulation_suite": {"suite_id": "test_suite", "target_application": "hr_bot",
+                                     "run_mode": "synthetic_chat_history_generation", "synthetic_flag": True},
+                "target": {"enabled": False},
+                "time_window": {"start_day": "2026-05-01", "num_synthetic_days": 1, "compressed_runtime_minutes": 5},
+                "persona_pool": [
+                    {"persona_id": "P001", "role": "new_employee", "location": "Canada", "seniority": "junior",
+                     "communication_style": "polite", "hr_familiarity": "low", "privacy_sensitivity": "medium"}],
+                "scenario_catalog": [{"scenario_id": "S001", "domain": "leave", "intent": "understand_eligibility",
+                                      "expected_retrieval_topics": ["leave"], "failure_injection": {"ambiguity": 0.2},
+                                      "success_criteria": {"answers_grounded_in_policy": True}}],
+                "traffic_orchestration": {"total_conversations": 1, "conversation_turns": {"min": 3, "max": 3},
+                                          "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}]},
+                "output": {"base_dir": str(tmp_path / "target_outputs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L3
+cadence: hourly
+active_windows:
+  - always
+daily_run_cap: 1
+targets:
+  - contract: {contract}
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+    main(["loop", "init", "--profile", "demo", "--profiles-dir", str(profiles_dir), "--output-dir",
+          str(tmp_path / "outputs")])
+    capsys.readouterr()
+    state_path = tmp_path / "outputs" / "loops" / "state" / "demo.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["budget"]["spent_today_runs"] = 1
+    state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli.run_simulation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("target run should not execute")),
+    )
+
+    exit_code = main(
+        [
+            "loop",
+            "run",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Daily run cap reached" in captured.err
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["paused"] is True
+
+
+def test_cli_loop_run_l3_auto_pauses_after_checker_failures(tmp_path, monkeypatch, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "forbidden_contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "simulation_suite": {"suite_id": "test_suite", "target_application": "hr_bot",
+                                     "run_mode": "synthetic_chat_history_generation", "synthetic_flag": True},
+                "target": {"enabled": False},
+                "time_window": {"start_day": "2026-05-01", "num_synthetic_days": 1, "compressed_runtime_minutes": 5},
+                "persona_pool": [
+                    {"persona_id": "P001", "role": "new_employee", "location": "Canada", "seniority": "junior",
+                     "communication_style": "polite", "hr_familiarity": "low", "privacy_sensitivity": "medium"}],
+                "scenario_catalog": [{"scenario_id": "S001", "domain": "leave", "intent": "understand_eligibility",
+                                      "expected_retrieval_topics": ["leave"], "failure_injection": {"ambiguity": 0.2},
+                                      "success_criteria": {"answers_grounded_in_policy": True}}],
+                "traffic_orchestration": {"total_conversations": 1, "conversation_turns": {"min": 3, "max": 3},
+                                          "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}]},
+                "output": {"base_dir": str(tmp_path / "target_outputs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L3
+cadence: hourly
+active_windows:
+  - always
+targets:
+  - contract: {contract}
+denylist:
+  - forbidden
+checker_policy:
+  auto_pause_after_checker_failures: 1
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli.run_simulation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("target run should not execute")),
+    )
+
+    exit_code = main(
+        [
+            "loop",
+            "run",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Checker rejected loop target" in captured.err
+    state_path = tmp_path / "outputs" / "loops" / "state" / "demo.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["paused"] is True
+    assert "Auto-paused after 1 consecutive checker failures" in state["pause_reason"]

@@ -40,8 +40,13 @@ class LoopProfile:
     cadence: str
     targets: list[LoopTarget]
     source_path: Path
+    paused: bool = False
+    priority: int = 100
+    active_windows: list[str] = field(default_factory=list)
     max_iterations_per_cycle: int = 1
     budget_policy_ref: str | None = None
+    daily_run_cap: int | None = None
+    daily_token_cap: int | None = None
     escalation_rules: list[Any] = field(default_factory=list)
     human_gates: list[str] = field(default_factory=list)
     denylist: list[str] = field(default_factory=list)
@@ -55,8 +60,13 @@ class LoopProfile:
             "cadence": self.cadence,
             "targets": [target.__dict__ for target in self.targets],
             "source_path": str(self.source_path),
+            "paused": self.paused,
+            "priority": self.priority,
+            "active_windows": list(self.active_windows),
             "max_iterations_per_cycle": self.max_iterations_per_cycle,
             "budget_policy_ref": self.budget_policy_ref,
+            "daily_run_cap": self.daily_run_cap,
+            "daily_token_cap": self.daily_token_cap,
             "human_gates": list(self.human_gates),
             "denylist": list(self.denylist),
             "checker_policy": dict(self.checker_policy),
@@ -74,6 +84,14 @@ def load_loop_profile(profile_ref: str, *, profiles_dir: str | Path = "loops/pro
     if not isinstance(payload, dict):
         raise LoopProfileError("Loop profile must be a JSON/YAML object/dictionary")
     return parse_loop_profile(payload, source_path=profile_path)
+
+
+def load_loop_profiles(*, profiles_dir: str | Path = "loops/profiles") -> list[LoopProfile]:
+    directory = Path(profiles_dir)
+    profiles: list[LoopProfile] = []
+    for path in _profile_paths(directory):
+        profiles.append(load_loop_profile(str(path), profiles_dir=directory))
+    return profiles
 
 
 def parse_loop_profile(payload: dict[str, Any], *, source_path: Path) -> LoopProfile:
@@ -109,8 +127,13 @@ def parse_loop_profile(payload: dict[str, Any], *, source_path: Path) -> LoopPro
         cadence=cadence,
         targets=targets,
         source_path=source_path.resolve(),
+        paused=bool(payload.get("paused", False)),
+        priority=int(payload.get("priority", 100)),
+        active_windows=[str(item).strip() for item in (payload.get("active_windows") or []) if str(item).strip()],
         max_iterations_per_cycle=max_iterations,
         budget_policy_ref=_optional_str(payload.get("budget_policy_ref")),
+        daily_run_cap=_optional_int(payload.get("daily_run_cap")),
+        daily_token_cap=_optional_int(payload.get("daily_token_cap")),
         escalation_rules=list(payload.get("escalation_rules") or []),
         human_gates=[str(item) for item in (payload.get("human_gates") or [])],
         denylist=[str(item) for item in (payload.get("denylist") or [])],
@@ -141,6 +164,15 @@ def _resolve_profile_path(profile_ref: str, profiles_dir: Path) -> Path:
         if candidate.exists():
             return candidate.resolve()
     return (profiles_dir / profile_ref).resolve()
+
+
+def _profile_paths(profiles_dir: Path) -> list[Path]:
+    if not profiles_dir.exists():
+        return []
+    results: list[Path] = []
+    for suffix in ("*.yaml", "*.yml", "*.json"):
+        results.extend(sorted(profiles_dir.glob(suffix)))
+    return results
 
 
 def _parse_targets(payload: Any, *, source_path: Path) -> list[LoopTarget]:
@@ -202,6 +234,15 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise LoopProfileError(f"Expected integer value in loop profile, got: {value}") from exc
 
 
 def _required_non_empty(payload: dict[str, Any], key: str) -> str:

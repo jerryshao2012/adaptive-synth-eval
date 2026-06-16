@@ -16,9 +16,10 @@ from adaptive_synth_eval.evaluation.modes import get_mode
 from adaptive_synth_eval.loop.audit import build_loop_audit
 from adaptive_synth_eval.loop.planner import LoopReasoner
 from adaptive_synth_eval.loop.policy import LoopPolicyEngine
-from adaptive_synth_eval.loop.profiles import LoopProfileError, load_loop_profile
-from adaptive_synth_eval.loop.scheduler import LoopScheduler
-from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle
+from adaptive_synth_eval.loop.profiles import LoopProfileError, load_loop_profile, load_loop_profiles
+from adaptive_synth_eval.loop.scheduler import LoopScheduler, MultiLoopCoordinator
+from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle, \
+    set_loop_paused
 from adaptive_synth_eval.loop.verifier import LoopVerifier
 
 logger = setup_logger(__name__)
@@ -260,22 +261,56 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
             if args.loop_command == "start":
-                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
-                scheduler = LoopScheduler()
-                summary = scheduler.run_profile(
-                    profile,
-                    cycle_fn=lambda: _run_loop_profile(
+                output_dir = Path(args.output_dir)
+                profiles_dir = Path(args.profiles_dir)
+                if args.all:
+                    profiles = load_loop_profiles(profiles_dir=profiles_dir)
+                    if not profiles:
+                        raise LoopProfileError(f"No loop profiles found in: {profiles_dir}")
+                    coordinator = MultiLoopCoordinator()
+                    summary = coordinator.run_profiles(
+                        profiles,
+                        cycle_fn=lambda profile: _run_loop_profile(
+                            profile,
+                            output_dir=output_dir,
+                            dry_run=args.dry_run,
+                            incomplete_run_action=args.incomplete_run_action,
+                            realtime_chat=args.realtime_chat,
+                            output_conversations=args.output_conversations,
+                        ),
+                        state_fn=lambda profile: get_loop_status(
+                            profile_ref=profile.profile_id,
+                            output_dir=output_dir,
+                            profiles_dir=profiles_dir,
+                        ),
+                        once=args.once,
+                        max_rounds=args.max_cycles,
+                        interval_seconds_override=args.interval_seconds,
+                    )
+                else:
+                    if not args.profile:
+                        raise LoopProfileError("loop start requires --profile <id> or --all")
+                    profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                    scheduler = LoopScheduler()
+                    summary = scheduler.run_profile(
                         profile,
-                        output_dir=Path(args.output_dir),
-                        dry_run=args.dry_run,
-                        incomplete_run_action=args.incomplete_run_action,
-                        realtime_chat=args.realtime_chat,
-                        output_conversations=args.output_conversations,
-                    ),
-                    once=args.once,
-                    max_cycles=args.max_cycles,
-                    interval_seconds_override=args.interval_seconds,
-                )
+                        cycle_fn=lambda: _run_loop_profile(
+                            profile,
+                            output_dir=output_dir,
+                            dry_run=args.dry_run,
+                            incomplete_run_action=args.incomplete_run_action,
+                            realtime_chat=args.realtime_chat,
+                            output_conversations=args.output_conversations,
+                        ),
+                        state_fn=lambda current_profile: get_loop_status(
+                            profile_ref=current_profile.profile_id,
+                            output_dir=output_dir,
+                            profiles_dir=profiles_dir,
+                        ),
+                        once=args.once,
+                        max_cycles=args.max_cycles,
+                        interval_seconds_override=args.interval_seconds,
+                    )
                 print(json.dumps(summary, indent=2, default=str))
                 return 0
 
@@ -295,6 +330,27 @@ def main(argv: list[str] | None = None) -> int:
                     profiles_dir=Path(args.profiles_dir),
                 )
                 print(json.dumps(report, indent=2, default=str))
+                return 0
+
+            if args.loop_command == "pause":
+                state = set_loop_paused(
+                    args.profile,
+                    paused=True,
+                    reason=args.reason,
+                    output_dir=Path(args.output_dir),
+                    profiles_dir=Path(args.profiles_dir),
+                )
+                print(json.dumps(state, indent=2, default=str))
+                return 0
+
+            if args.loop_command == "resume":
+                state = set_loop_paused(
+                    args.profile,
+                    paused=False,
+                    output_dir=Path(args.output_dir),
+                    profiles_dir=Path(args.profiles_dir),
+                )
+                print(json.dumps(state, indent=2, default=str))
                 return 0
 
         if args.command == "validate-contract":
@@ -449,7 +505,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="loop commands",
         description="Loop operations",
-        metavar="{init,run,start,status,audit}",
+        metavar="{init,run,start,status,audit,pause,resume}",
     )
 
     loop_init = loop_sub.add_parser(
@@ -513,7 +569,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start a recurring loop scheduler for a profile",
         description="Run the profile's loop cycle once or on its configured cadence and persist reasoning/state updates.",
     )
-    loop_start.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_start.add_argument("--profile", help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_start.add_argument(
+        "--all",
+        action="store_true",
+        help="Run all checked-in loop profiles using the multi-profile coordinator.",
+    )
     loop_start.add_argument(
         "--profiles-dir",
         default="loops/profiles",
@@ -593,6 +654,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory containing checked-in loop profiles (default: loops/profiles)",
     )
     loop_audit.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
+
+    loop_pause = loop_sub.add_parser(
+        "pause",
+        help="Pause a loop profile via persistent kill switch state",
+        description="Set paused=true in loop state so unattended schedulers skip the profile until resumed.",
+    )
+    loop_pause.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_pause.add_argument("--reason", default="manual pause", help="Reason recorded in loop state and run log")
+    loop_pause.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_pause.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
+
+    loop_resume = loop_sub.add_parser(
+        "resume",
+        help="Resume a paused loop profile",
+        description="Clear paused state so unattended schedulers can run the profile again.",
+    )
+    loop_resume.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_resume.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_resume.add_argument(
         "--output-dir",
         default="outputs",
         help="Base output directory for loop state and markdown artifacts (default: outputs)",
@@ -718,6 +814,8 @@ def _run_loop_profile(
 ) -> dict[str, Any]:
     initialize_loop_assets(profile, output_dir=output_dir)
     loop_state = get_loop_status(profile_ref=profile.profile_id, output_dir=output_dir)
+    _enforce_l3_preflight(profile, loop_state, output_dir=output_dir)
+    loop_state = get_loop_status(profile_ref=profile.profile_id, output_dir=output_dir)
     reasoner = LoopReasoner(profile)
     policy_engine = LoopPolicyEngine(profile)
     verifier = LoopVerifier(profile)
@@ -729,6 +827,12 @@ def _run_loop_profile(
         "reason": "Checker approved target execution and assisted actions.",
     }
     attempts = dict(loop_state.get("assisted_action_attempts") or {}) if isinstance(loop_state, dict) else {}
+    state_updates: dict[str, Any] = {
+        "assisted_action_attempts": attempts,
+        "consecutive_checker_failures": int(loop_state.get("consecutive_checker_failures") or 0),
+        "paused": bool(loop_state.get("paused", False)),
+        "pause_reason": loop_state.get("pause_reason"),
+    }
     targets = planner_decision.selected_targets[: profile.max_iterations_per_cycle]
 
     for target in targets:
@@ -750,6 +854,7 @@ def _run_loop_profile(
         }
         if not checker.approved and profile.readiness_level in {"L2", "L3"}:
             assisted_actions_log.extend(policy_engine.summarize_actions(plan.assisted_actions, status="rejected"))
+            state_updates = _next_checker_failure_state(profile, loop_state, checker.reason, attempts)
             record_loop_cycle(
                 profile,
                 output_dir=output_dir,
@@ -764,7 +869,7 @@ def _run_loop_profile(
                 },
                 checker_decision=checker_decision,
                 assisted_actions=assisted_actions_log,
-                state_updates={"assisted_action_attempts": attempts},
+                state_updates=state_updates,
             )
             raise LoopProfileError(f"Checker rejected loop target: {checker.reason}")
 
@@ -803,6 +908,7 @@ def _run_loop_profile(
                 "status": status,
                 "dry_run": effective_dry_run,
                 "errors": int(summary.get("errors") or 0),
+                "total_tokens": _extract_total_tokens(summary),
                 "elapsed_seconds": summary.get("elapsed_seconds"),
                 "output_dir": summary.get("output_dir"),
                 "assisted_actions": [action.action for action in approved_actions],
@@ -811,6 +917,7 @@ def _run_loop_profile(
         )
 
     reflection_decision = reasoner.reflect_on_cycle(loop_state, run_results, planner_decision)
+    state_updates = _next_success_state(profile, loop_state, run_results, attempts)
 
     state = record_loop_cycle(
         profile,
@@ -820,7 +927,7 @@ def _run_loop_profile(
         reflection_decision=reflection_decision.__dict__,
         checker_decision=checker_decision,
         assisted_actions=assisted_actions_log,
-        state_updates={"assisted_action_attempts": attempts},
+        state_updates=state_updates,
     )
     return {
         "profile_id": profile.profile_id,
@@ -878,6 +985,108 @@ def _regenerate_missing_summary(run_dir: Path, *, mode_name: str) -> bool:
         }
     summary_path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
     return True
+
+
+def _extract_total_tokens(summary: dict[str, Any]) -> int:
+    tokens = summary.get("tokens") or {}
+    if not isinstance(tokens, dict):
+        return 0
+    total = 0
+    for key in (
+            "simulator_total_tokens",
+            "chatbot_total_tokens",
+            "total_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+    ):
+        total += int(tokens.get(key) or 0)
+    return total
+
+
+def _enforce_l3_preflight(profile: Any, loop_state: dict[str, Any], *, output_dir: Path) -> None:
+    if bool(loop_state.get("paused", False)) or bool(getattr(profile, "paused", False)):
+        raise LoopProfileError(f"Loop profile is paused: {profile.profile_id}")
+
+    if profile.readiness_level != "L3":
+        return
+
+    budget = dict(loop_state.get("budget") or {})
+    daily_run_cap = loop_state.get("daily_run_cap")
+    if daily_run_cap is not None and int(budget.get("spent_today_runs") or 0) >= int(daily_run_cap):
+        reason = f"Daily run cap reached: {daily_run_cap}"
+        set_loop_paused(
+            profile.profile_id,
+            paused=True,
+            reason=reason,
+            output_dir=output_dir,
+            profiles_dir=profile.source_path.parent,
+        )
+        raise LoopProfileError(reason)
+
+    daily_token_cap = loop_state.get("daily_token_cap")
+    if daily_token_cap is not None and int(budget.get("spent_today_tokens") or 0) >= int(daily_token_cap):
+        reason = f"Daily token cap reached: {daily_token_cap}"
+        set_loop_paused(
+            profile.profile_id,
+            paused=True,
+            reason=reason,
+            output_dir=output_dir,
+            profiles_dir=profile.source_path.parent,
+        )
+        raise LoopProfileError(reason)
+
+
+def _next_checker_failure_state(
+        profile: Any,
+        loop_state: dict[str, Any],
+        checker_reason: str,
+        attempts: dict[str, Any],
+) -> dict[str, Any]:
+    failures = int(loop_state.get("consecutive_checker_failures") or 0) + 1
+    updates = {
+        "assisted_action_attempts": attempts,
+        "consecutive_checker_failures": failures,
+        "paused": bool(loop_state.get("paused", False)),
+        "pause_reason": loop_state.get("pause_reason"),
+    }
+    threshold = int(profile.checker_policy.get("auto_pause_after_checker_failures", 3) or 3)
+    if profile.readiness_level == "L3" and failures >= threshold:
+        updates["paused"] = True
+        updates["pause_reason"] = (
+            f"Auto-paused after {failures} consecutive checker failures. Last reason: {checker_reason}"
+        )
+        updates["status"] = "paused"
+    return updates
+
+
+def _next_success_state(
+        profile: Any,
+        loop_state: dict[str, Any],
+        run_results: list[dict[str, Any]],
+        attempts: dict[str, Any],
+) -> dict[str, Any]:
+    spent_today_runs = int(((loop_state.get("budget") or {}).get("spent_today_runs") or 0)) + len(run_results)
+    spent_today_tokens = int(((loop_state.get("budget") or {}).get("spent_today_tokens") or 0)) + sum(
+        int(item.get("total_tokens") or 0) for item in run_results
+    )
+    updates = {
+        "assisted_action_attempts": attempts,
+        "consecutive_checker_failures": 0,
+        "paused": False,
+        "pause_reason": None,
+    }
+    if profile.readiness_level == "L3":
+        daily_run_cap = loop_state.get("daily_run_cap")
+        if daily_run_cap is not None and spent_today_runs >= int(daily_run_cap):
+            updates["paused"] = True
+            updates["pause_reason"] = f"Auto-paused after reaching daily run cap: {daily_run_cap}"
+            updates["status"] = "paused"
+        daily_token_cap = loop_state.get("daily_token_cap")
+        if daily_token_cap is not None and spent_today_tokens >= int(daily_token_cap):
+            updates["paused"] = True
+            updates["pause_reason"] = f"Auto-paused after reaching daily token cap: {daily_token_cap}"
+            updates["status"] = "paused"
+    return updates
 
 
 def _resolve_incomplete_action(configured: str, run_dir: Path, incomplete: dict[str, Any]) -> str:

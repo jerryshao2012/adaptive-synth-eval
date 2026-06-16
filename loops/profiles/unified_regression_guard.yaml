@@ -1,0 +1,26 @@
+profile_id: unified_regression_guard
+readiness_level: L3
+cadence: "0 */2 * * *"
+priority: 20
+active_windows:
+  - MON-FRI@08:00-18:00
+daily_run_cap: 6
+daily_token_cap: 200000
+targets:
+  - contract: contracts/examples/unified_evaluation_demo.yaml
+max_iterations_per_cycle: 1
+budget_policy_ref: unattended_regression_budget
+human_gates:
+  - runtime_override_review
+checker_policy:
+  safe_max_concurrency: 8
+  max_retry_attempts: 2
+  auto_pause_after_checker_failures: 2
+  allow_auto_resume: true
+  allow_auto_restart_stale_failed: true
+llm_config:
+  provider: azure_openai
+  model_name: gpt-4-turbo
+  endpoint_url: ${AZURE_OPENAI_ENDPOINT:-https://example.invalid/openai}
+  max_tokens_per_call: 2000
+  temperature: 0.2
