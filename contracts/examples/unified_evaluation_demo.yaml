@@ -26,17 +26,60 @@ run:
   reserve_tokens: 1500
   session_policy: rule
 
-# The harness's own planner/generator/judge/user-simulator run on Bedrock Claude.
-# Planner + generator upgraded to Sonnet: a hardened target outclasses Haiku as
-# strategist/message-writer. NOTE: verify the exact Sonnet inference-profile id for
-# your account/region (bump to 4-6 if available); Haiku judge kept for cost.
+# The harness's own planner/generator/judge/user-simulator run on Azure OpenAI.
 llm:
-  provider: bedrock
-  model: global.anthropic.claude-haiku-4-5-20251001-v1:0
+  provider: azure-openai
+  deployment: "${AZURE_OPENAI_DEPLOYMENT}"
   max_tokens: 1024
   temperature: 0.7
-  bedrock:
-    region: "${AWS_REGION:-us-east-1}"
+  azure:
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+    api_key: "${AZURE_OPENAI_API_KEY}"
+    api_version: "${AZURE_OPENAI_API_VERSION}"
+
+# Hybrid component strategy: keep high-volume planner/generator on Nova,
+# keep judge on Haiku for adversarial grading quality while reducing Haiku RPM load.
+components:
+  # "synth" = the user-simulator that produces legitimate (non-adversarial) turns.
+  user_simulator:
+    provider: azure-openai
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    max_tokens: 1024
+    temperature: 0.7
+    azure:
+      endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      api_key: "${AZURE_OPENAI_API_KEY}"
+      api_version: "${AZURE_OPENAI_API_VERSION}"
+  # adversarial turn generator, producing turns with the intent to cause failure modes in the target.
+  planner:
+    provider: azure-openai
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    max_tokens: 1024
+    temperature: 0.7
+    azure:
+      endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      api_key: "${AZURE_OPENAI_API_KEY}"
+      api_version: "${AZURE_OPENAI_API_VERSION}"
+  generator:
+    provider: azure-openai
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    max_tokens: 1024
+    temperature: 0.7
+    azure:
+      endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      api_key: "${AZURE_OPENAI_API_KEY}"
+      api_version: "${AZURE_OPENAI_API_VERSION}"
+  judge:
+    provider: azure-openai
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    # Authorization-aware judges (data-pii-leak / document-exfiltration) emit long
+    # reasoning; 1024 truncated the JSON before the score and turns defaulted to SAFE/0.
+    max_tokens: 3000
+    temperature: 0.3
+    azure:
+      endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      api_key: "${AZURE_OPENAI_API_KEY}"
+      api_version: "${AZURE_OPENAI_API_VERSION}"
 
 target:
   enabled: true
