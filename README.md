@@ -18,78 +18,89 @@ Adversarial Adaptive Synthetic Eval helps you:
 
 ```mermaid
 graph TB
-    subgraph CLI["CLI Entry Point"]
+    subgraph CLI["CLI Entry Point (cli.py)"]
         Validate["validate-contract"]
         Run["run --contract"]
         Summarize["summarize --run-id"]
         LoopInit["loop init"]
-        LoopRun["loop run"]
         LoopStart["loop start --all"]
-        LoopAudit["loop audit"]
-        LoopPause["loop pause/resume"]
     end
 
-    subgraph ContractLayer["Contract Layer"]
-        ContractParser["Contract Parser<br/>YAML/JSON"]
-        Validator["Contract Validator<br/>Schema Check"]
-        EnvResolver["Environment Resolver<br/>${VAR} substitution"]
+    subgraph ContractLayer["Contract Layer (config/)"]
+        ContractParser["Contract Parser"]
+        Validator["Contract Validator"]
+        EnvResolver["Environment Resolver"]
     end
 
-    subgraph StaticExec["Static Execution (L0)"]
-        GenEngine["Generation Engine<br/>Persona + Scenario"]
-        SimEngine["Simulation Engine<br/>Turn-by-turn chat"]
-        ScoringEngine["Scoring Engine<br/>Verdict + Metrics"]
+    subgraph UnifiedEval["Unified Evaluation (unified_eval/)"]
+        Orchestrator["Orchestrator"]
+        UnifiedPersonas["Personas Engine"]
+        UnifiedProviders["Providers Factory"]
+        UnifiedScoring["Scoring Engine"]
     end
 
-    subgraph LoopExec["Loop Execution (L1-L3)"]
-        LoopProfiles["Loop Profiles<br/>L1|L2|L3"]
-        Scheduler["Multi-Profile Scheduler<br/>Priority + Backoff"]
-        Planner["Planner<br/>AI target selection"]
-        Policy["Policy Engine<br/>Assisted actions"]
-        Verifier["Verifier/Checker<br/>Approval gates"]
-        StateStore["State Store<br/>Pause + Budget"]
+    subgraph StaticExec["Synth Execution (engines/, generation/)"]
+        GenEngine["Generation Engine"]
+        SimEngine["Simulation Engine"]
+        LegacyScoring["Legacy Scoring"]
     end
 
-    subgraph AdversarialExec["Adversarial Red-Teaming"]
-        RedTeamEngine["Red-Team Engine<br/>Adaptive attacks"]
-        SafetyJudge["Safety Judge<br/>Violation scoring"]
-        AdversaryActors["Adversary Actors<br/>Escalation rules"]
-        ReflectionEngine["Reflection Engine<br/>Outcome analysis"]
+    subgraph LoopExec["Loop Execution (loop/)"]
+        LoopProfiles["Loop Profiles"]
+        Scheduler["Multi-Profile Scheduler"]
+        Planner["Planner"]
+        Policy["Policy Engine"]
+        Verifier["Verifier/Checker"]
+        StateStore["State Store"]
     end
 
-    subgraph LLMClients["LLM Clients & Backends"]
-        AzureOpenAI["Azure OpenAI<br/>GPT-4/3.5"]
-        AWSBedrock["AWS Bedrock<br/>Claude/Llama"]
-        Ollama["Ollama<br/>Local Models"]
-        OpenAIAPI["OpenAI API<br/>GPT-4/3.5"]
-        Anthropic["Anthropic<br/>Claude"]
+    subgraph AdversarialExec["Adversarial Red-Teaming (adversarial_response_engine/)"]
+        RedTeamEngine["Red-Team Engine"]
+        SafetyJudge["Safety Judge"]
+        AdversaryActors["Adversary Actors"]
+        ReflectionEngine["Reflection Engine"]
     end
 
-    subgraph Persistence["Artifact Persistence"]
-        ChatHistory["chat_history.jsonl<br/>Conversations"]
-        RunState["run_state.json<br/>Checkpoint"]
-        LoopState["loop-state.json<br/>Profile state"]
-        LoopBudget["loop-budget.md<br/>Cap tracking"]
-        LoopLog["loop-run-log.md<br/>Event log"]
-        StateArtifacts["STATE.md<br/>Human summary"]
+    subgraph LLMClients["LLM Clients & Backends (clients/)"]
+        AzureOpenAI["Azure OpenAI"]
+        AWSBedrock["AWS Bedrock"]
+        Ollama["Ollama"]
+        OpenAIAPI["OpenAI API"]
+        Anthropic["Anthropic"]
+    end
+
+    subgraph Persistence["Artifact Persistence (artifacts/, outputs/)"]
+        ChatHistory["chat_history.jsonl"]
+        RunState["run_state.json"]
+        LoopState["loop-state.json"]
+        StateArtifacts["STATE.md"]
     end
 
     subgraph Targets["Evaluation Targets"]
-        ChatbotEndpoint["Chatbot Endpoint<br/>HTTP/REST"]
-        BrowserUI["Browser UI<br/>Playwright"]
-        AgentCore["Agent/Core API<br/>Direct SDK"]
+        ChatbotEndpoint["Chatbot Endpoint"]
+        BrowserUI["Browser UI"]
+        AgentCore["Agent/Core API"]
     end
 
     CLI --> ContractLayer
     ContractLayer --> Validator
+    
+    Validator --> UnifiedEval
     Validator --> StaticExec
     Validator --> LoopExec
     Validator --> AdversarialExec
 
+    UnifiedEval --> Orchestrator
+    Orchestrator --> UnifiedPersonas
+    UnifiedPersonas --> UnifiedProviders
+    UnifiedProviders --> Targets
+    Targets --> UnifiedScoring
+    UnifiedScoring --> Persistence
+
     StaticExec --> GenEngine
     GenEngine --> SimEngine
-    SimEngine --> ScoringEngine
-    ScoringEngine --> Persistence
+    SimEngine --> LegacyScoring
+    LegacyScoring --> Persistence
 
     LoopExec --> LoopProfiles
     LoopProfiles --> Scheduler
@@ -109,19 +120,21 @@ graph TB
     ReflectionEngine -.LLM Reasoning.-> LLMClients
     SafetyJudge -.LLM Judgment.-> LLMClients
     GenEngine -.LLM Messages.-> LLMClients
+    UnifiedPersonas -.LLM Messages.-> LLMClients
+    UnifiedScoring -.LLM Evaluation.-> LLMClients
 
     SimEngine --> Targets
     RedTeamEngine --> Targets
-    Targets -.Responses.-> ScoringEngine
-
-    style CLI fill:#e1f5ff
-    style ContractLayer fill:#f3e5f5
-    style StaticExec fill:#e8f5e9
-    style LoopExec fill:#fff3e0
-    style AdversarialExec fill:#fce4ec
-    style LLMClients fill:#f1f8e9
-    style Persistence fill:#eceff1
-    style Targets fill:#ede7f6
+    
+    style CLI fill:#e1f5ff,stroke:#333,stroke-width:1px,color:#000
+    style ContractLayer fill:#f3e5f5,stroke:#333,stroke-width:1px,color:#000
+    style UnifiedEval fill:#e8eaf6,stroke:#333,stroke-width:1px,color:#000
+    style StaticExec fill:#e8f5e9,stroke:#333,stroke-width:1px,color:#000
+    style LoopExec fill:#fff3e0,stroke:#333,stroke-width:1px,color:#000
+    style AdversarialExec fill:#fce4ec,stroke:#333,stroke-width:1px,color:#000
+    style LLMClients fill:#f1f8e9,stroke:#333,stroke-width:1px,color:#000
+    style Persistence fill:#eceff1,stroke:#333,stroke-width:1px,color:#000
+    style Targets fill:#ede7f6,stroke:#333,stroke-width:1px,color:#000
 ```
 
 ---
