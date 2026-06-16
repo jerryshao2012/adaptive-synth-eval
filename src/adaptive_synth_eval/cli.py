@@ -13,6 +13,10 @@ from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 from adaptive_synth_eval.evaluation.modes import get_mode
+from adaptive_synth_eval.loop.planner import LoopReasoner
+from adaptive_synth_eval.loop.profiles import LoopProfileError, load_loop_profile
+from adaptive_synth_eval.loop.scheduler import LoopScheduler
+from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle
 
 logger = setup_logger(__name__)
 
@@ -232,6 +236,55 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "loop":
+            if args.loop_command == "init":
+                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                summary = initialize_loop_assets(profile, output_dir=Path(args.output_dir))
+                print(json.dumps(summary, indent=2, default=str))
+                return 0
+
+            if args.loop_command == "run":
+                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                summary = _run_loop_profile(
+                    profile,
+                    output_dir=Path(args.output_dir),
+                    dry_run=args.dry_run,
+                    incomplete_run_action=args.incomplete_run_action,
+                    realtime_chat=args.realtime_chat,
+                    output_conversations=args.output_conversations,
+                )
+                print(json.dumps(summary, indent=2, default=str))
+                return 0
+
+            if args.loop_command == "start":
+                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                scheduler = LoopScheduler()
+                summary = scheduler.run_profile(
+                    profile,
+                    cycle_fn=lambda: _run_loop_profile(
+                        profile,
+                        output_dir=Path(args.output_dir),
+                        dry_run=args.dry_run,
+                        incomplete_run_action=args.incomplete_run_action,
+                        realtime_chat=args.realtime_chat,
+                        output_conversations=args.output_conversations,
+                    ),
+                    once=args.once,
+                    max_cycles=args.max_cycles,
+                    interval_seconds_override=args.interval_seconds,
+                )
+                print(json.dumps(summary, indent=2, default=str))
+                return 0
+
+            if args.loop_command == "status":
+                status = get_loop_status(
+                    profile_ref=args.profile,
+                    output_dir=Path(args.output_dir),
+                    profiles_dir=Path(args.profiles_dir),
+                )
+                print(json.dumps(status, indent=2, default=str))
+                return 0
+
         if args.command == "validate-contract":
             mode_name = detect_mode_from_file(args.contract)
             mode = get_mode(mode_name)
@@ -243,83 +296,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "run":
-            mode_name = detect_mode_from_file(args.contract)
-            mode = get_mode(mode_name)
-            contract = mode.load_contract(args.contract)
-            _log_run_configuration(
-                contract,
-                mode_name=mode_name,
+            summary = _execute_contract_run(
                 contract_path=args.contract,
                 dry_run=args.dry_run,
                 persona_filter=args.persona,
                 scenario_filter=getattr(args, "scenario", None),
                 adversarial_filter=getattr(args, "adversarial_scenario", None),
                 max_concurrency_override=getattr(args, "max_concurrency", None),
+                run_id_override=getattr(args, "run_id", None),
                 realtime_chat=args.realtime_chat,
+                output_conversations=args.output_conversations,
+                interactive_realtime_controls=args.interactive_realtime_controls,
+                incomplete_run_action=args.incomplete_run_action,
             )
-
-            run_dir = _resolve_run_dir(contract, mode_name=mode_name, run_id_override=getattr(args, "run_id", None))
-            resume_incomplete = False
-            if run_dir is not None:
-                incomplete = detect_incomplete_run(run_dir)
-                if incomplete is not None:
-                    action = _resolve_incomplete_action(args.incomplete_run_action, run_dir, incomplete)
-                    if action == "abort":
-                        raise ContractError(
-                            "Detected an incomplete prior run. Re-run with "
-                            "--incomplete-run-action resume or --incomplete-run-action restart."
-                        )
-                    if action == "restart":
-                        logger.warning("Cleaning existing run artifacts before starting a new run: %s", run_dir)
-                        clear_run_directory(run_dir)
-                    elif action == "resume":
-                        logger.warning("Resuming incomplete run from existing artifacts: %s", run_dir)
-                        resume_incomplete = True
-
-            if mode_name == "synth":
-                # Check unified-only flags
-                unified_flags = []
-                if getattr(args, "scenario", None) is not None:
-                    unified_flags.append("--scenario")
-                if getattr(args, "adversarial_scenario", None) is not None:
-                    unified_flags.append("--adversarial-scenario")
-                if getattr(args, "max_concurrency", None) is not None:
-                    unified_flags.append("--max-concurrency")
-                if getattr(args, "run_id", None) is not None:
-                    unified_flags.append("--run-id")
-                if unified_flags:
-                    raise ContractError(
-                        f"Unified-only flags {', '.join(unified_flags)} cannot be used with a synth-only contract.")
-
-                interactive_controls = args.interactive_realtime_controls
-                if interactive_controls is None:
-                    interactive_controls = args.realtime_chat
-                summary = run_simulation(
-                    contract,
-                    dry_run=args.dry_run,
-                    output_conversations=args.output_conversations,
-                    realtime_chat=args.realtime_chat,
-                    interactive_realtime_controls=interactive_controls,
-                    persona_filter=args.persona,
-                    resume_incomplete=resume_incomplete,
-                )
-            else:
-                interactive_controls = args.interactive_realtime_controls
-                if interactive_controls is None:
-                    interactive_controls = args.realtime_chat
-                summary = mode.run(
-                    contract,
-                    dry_run=args.dry_run,
-                    persona_filter=args.persona,
-                    scenario_filter=args.scenario,
-                    adversarial_filter=args.adversarial_scenario,
-                    max_concurrency_override=args.max_concurrency,
-                    run_id_override=args.run_id,
-                    realtime_chat=args.realtime_chat,
-                    output_conversations=args.output_conversations,
-                    interactive_realtime_controls=interactive_controls,
-                    resume_incomplete=resume_incomplete,
-                )
 
             logger.info("Run complete: %s", summary['run_id'])
             logger.info(json.dumps(summary, indent=2, default=str))
@@ -336,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
 
         parser.print_help()
         return 1
-    except ContractError as exc:
+    except (ContractError, LoopProfileError) as exc:
         logger.error(str(exc))
         print(str(exc), file=sys.stderr)
         return 2
@@ -351,7 +340,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ase",
         description=(
             "Generate synthetic multi-turn chat history data for chatbot evaluation. "
-            "Use subcommands to validate a contract, run a simulation, or summarize a prior run."
+            "Use subcommands to validate a contract, run a simulation, summarize a prior run, "
+            "or manage loop assets."
         ),
     )
     sub = parser.add_subparsers(
@@ -359,7 +349,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="commands",
         description="Available operations",
-        metavar="{validate-contract,run,summarize}",
+        metavar="{validate-contract,run,summarize,loop}",
     )
     validate = sub.add_parser(
         "validate-contract",
@@ -436,6 +426,148 @@ def _build_parser() -> argparse.ArgumentParser:
         default="outputs",
         help="Base output directory that contains runs/<run_id>/run_summary.json (default: outputs)",
     )
+
+    loop = sub.add_parser(
+        "loop",
+        help="Initialize and inspect persistent loop assets",
+        description="Manage loop profile state under outputs/loops without affecting simulation runs.",
+    )
+    loop_sub = loop.add_subparsers(
+        dest="loop_command",
+        required=True,
+        title="loop commands",
+        description="Loop operations",
+        metavar="{init,run,start,status}",
+    )
+
+    loop_init = loop_sub.add_parser(
+        "init",
+        help="Initialize persistent assets for a loop profile",
+        description="Create loop state and markdown guardrail artifacts for a checked-in loop profile.",
+    )
+    loop_init.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_init.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_init.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
+
+    loop_run = loop_sub.add_parser(
+        "run",
+        help="Execute a report-only loop cycle for a profile",
+        description="Run the profile's configured targets through the existing ase run internals and persist cycle state.",
+    )
+    loop_run.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_run.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_run.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
+    loop_run.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run loop targets in dry-run mode by default. Use --no-dry-run to allow live target calls.",
+    )
+    loop_run.add_argument(
+        "--output-conversations",
+        action="store_true",
+        help="Output conversations in human-readable format for each target run when supported.",
+    )
+    loop_run.add_argument(
+        "--realtime-chat",
+        action="store_true",
+        help="Stream persona and chatbot messages in real time for each target run.",
+    )
+    loop_run.add_argument(
+        "--incomplete-run-action",
+        choices=("ask", "resume", "restart", "abort"),
+        default="abort",
+        help="Action when a target run directory appears incomplete (default: abort).",
+    )
+
+    loop_start = loop_sub.add_parser(
+        "start",
+        help="Start a recurring loop scheduler for a profile",
+        description="Run the profile's loop cycle once or on its configured cadence and persist reasoning/state updates.",
+    )
+    loop_start.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_start.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_start.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
+    loop_start.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run loop targets in dry-run mode by default. Use --no-dry-run to allow live target calls.",
+    )
+    loop_start.add_argument(
+        "--output-conversations",
+        action="store_true",
+        help="Output conversations in human-readable format for each target run when supported.",
+    )
+    loop_start.add_argument(
+        "--realtime-chat",
+        action="store_true",
+        help="Stream persona and chatbot messages in real time for each target run.",
+    )
+    loop_start.add_argument(
+        "--incomplete-run-action",
+        choices=("ask", "resume", "restart", "abort"),
+        default="abort",
+        help="Action when a target run directory appears incomplete (default: abort).",
+    )
+    loop_start.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single cycle immediately and exit.",
+    )
+    loop_start.add_argument(
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Optional safety cap on recurring cycles before exiting.",
+    )
+    loop_start.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=None,
+        help="Override the cadence-derived interval in seconds, mainly for testing or manual control.",
+    )
+
+    loop_status = loop_sub.add_parser(
+        "status",
+        help="Inspect persisted loop state",
+        description="Print initialized loop state summaries from outputs/loops.",
+    )
+    loop_status.add_argument("--profile", help="Optional loop profile ID to inspect")
+    loop_status.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_status.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
     return parser
 
 
@@ -452,6 +584,164 @@ def _resolve_run_dir(contract: Any, *, mode_name: str, run_id_override: str | No
     if not run_id:
         return None
     return Path(base_dir) / "runs" / run_id
+
+
+def _execute_contract_run(
+        *,
+        contract_path: str,
+        dry_run: bool,
+        persona_filter: str | None,
+        scenario_filter: str | None,
+        adversarial_filter: str | None,
+        max_concurrency_override: int | None,
+        run_id_override: str | None,
+        realtime_chat: bool,
+        output_conversations: bool,
+        interactive_realtime_controls: bool | None,
+        incomplete_run_action: str,
+) -> dict[str, Any]:
+    mode_name = detect_mode_from_file(contract_path)
+    mode = get_mode(mode_name)
+    contract = mode.load_contract(contract_path)
+    _log_run_configuration(
+        contract,
+        mode_name=mode_name,
+        contract_path=contract_path,
+        dry_run=dry_run,
+        persona_filter=persona_filter,
+        scenario_filter=scenario_filter,
+        adversarial_filter=adversarial_filter,
+        max_concurrency_override=max_concurrency_override,
+        realtime_chat=realtime_chat,
+    )
+
+    run_dir = _resolve_run_dir(contract, mode_name=mode_name, run_id_override=run_id_override)
+    resume_incomplete = False
+    if run_dir is not None:
+        incomplete = detect_incomplete_run(run_dir)
+        if incomplete is not None:
+            action = _resolve_incomplete_action(incomplete_run_action, run_dir, incomplete)
+            if action == "abort":
+                raise ContractError(
+                    "Detected an incomplete prior run. Re-run with "
+                    "--incomplete-run-action resume or --incomplete-run-action restart."
+                )
+            if action == "restart":
+                logger.warning("Cleaning existing run artifacts before starting a new run: %s", run_dir)
+                clear_run_directory(run_dir)
+            elif action == "resume":
+                logger.warning("Resuming incomplete run from existing artifacts: %s", run_dir)
+                resume_incomplete = True
+
+    if mode_name == "synth":
+        unified_flags = []
+        if scenario_filter is not None:
+            unified_flags.append("--scenario")
+        if adversarial_filter is not None:
+            unified_flags.append("--adversarial-scenario")
+        if max_concurrency_override is not None:
+            unified_flags.append("--max-concurrency")
+        if run_id_override is not None:
+            unified_flags.append("--run-id")
+        if unified_flags:
+            raise ContractError(
+                f"Unified-only flags {', '.join(unified_flags)} cannot be used with a synth-only contract.")
+
+        controls_enabled = interactive_realtime_controls
+        if controls_enabled is None:
+            controls_enabled = realtime_chat
+        return run_simulation(
+            contract,
+            dry_run=dry_run,
+            output_conversations=output_conversations,
+            realtime_chat=realtime_chat,
+            interactive_realtime_controls=controls_enabled,
+            persona_filter=persona_filter,
+            resume_incomplete=resume_incomplete,
+        )
+
+    controls_enabled = interactive_realtime_controls
+    if controls_enabled is None:
+        controls_enabled = realtime_chat
+    return mode.run(
+        contract,
+        dry_run=dry_run,
+        persona_filter=persona_filter,
+        scenario_filter=scenario_filter,
+        adversarial_filter=adversarial_filter,
+        max_concurrency_override=max_concurrency_override,
+        run_id_override=run_id_override,
+        realtime_chat=realtime_chat,
+        output_conversations=output_conversations,
+        interactive_realtime_controls=controls_enabled,
+        resume_incomplete=resume_incomplete,
+    )
+
+
+def _run_loop_profile(
+        profile: Any,
+        *,
+        output_dir: Path,
+        dry_run: bool,
+        incomplete_run_action: str,
+        realtime_chat: bool,
+        output_conversations: bool,
+) -> dict[str, Any]:
+    initialize_loop_assets(profile, output_dir=output_dir)
+    loop_state = get_loop_status(profile_ref=profile.profile_id, output_dir=output_dir)
+    reasoner = LoopReasoner(profile)
+    planner_decision = reasoner.plan_cycle(loop_state)
+    run_results: list[dict[str, Any]] = []
+    targets = planner_decision.selected_targets[: profile.max_iterations_per_cycle]
+
+    for target in targets:
+        effective_dry_run = dry_run if target.get("dry_run") is None else bool(target.get("dry_run"))
+        summary = _execute_contract_run(
+            contract_path=target["contract"],
+            dry_run=effective_dry_run,
+            persona_filter=target.get("persona"),
+            scenario_filter=target.get("scenario"),
+            adversarial_filter=target.get("adversarial_scenario"),
+            max_concurrency_override=None,
+            run_id_override=None,
+            realtime_chat=realtime_chat,
+            output_conversations=output_conversations,
+            interactive_realtime_controls=None,
+            incomplete_run_action=incomplete_run_action,
+        )
+        status = "completed_with_errors" if int(summary.get("errors") or 0) > 0 else "completed"
+        run_results.append(
+            {
+                "timestamp": summary.get("completed_at") or summary.get("started_at") or summary.get("timestamp"),
+                "mode": detect_mode_from_file(target["contract"]),
+                "contract": target["contract"],
+                "run_id": summary.get("run_id"),
+                "status": status,
+                "dry_run": effective_dry_run,
+                "errors": int(summary.get("errors") or 0),
+                "elapsed_seconds": summary.get("elapsed_seconds"),
+                "output_dir": summary.get("output_dir"),
+            }
+        )
+
+    reflection_decision = reasoner.reflect_on_cycle(loop_state, run_results, planner_decision)
+
+    state = record_loop_cycle(
+        profile,
+        output_dir=output_dir,
+        run_results=run_results,
+        planner_decision=planner_decision.__dict__,
+        reflection_decision=reflection_decision.__dict__,
+    )
+    return {
+        "profile_id": profile.profile_id,
+        "status": state.get("status"),
+        "targets_executed": len(run_results),
+        "planner": planner_decision.__dict__,
+        "reflection": reflection_decision.__dict__,
+        "run_results": run_results,
+        "state_path": str((output_dir / "loops" / "state" / f"{profile.profile_id}.json").resolve()),
+    }
 
 
 def _resolve_incomplete_action(configured: str, run_dir: Path, incomplete: dict[str, Any]) -> str:

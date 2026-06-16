@@ -578,7 +578,11 @@ def test_cli_logs_pre_run_summary_before_realtime_controls(monkeypatch, caplog):
     assert summary_index < controls_index
     assert target_index < controls_index
     assert simulator_index < controls_index
-    assert "effective_runtime=mock synth adapter" in messages[simulator_index]
+    expected_provider = (contract.llm_for("user_simulator").provider or "").lower()
+    if expected_provider == "bedrock":
+        assert "effective_runtime=mock synth adapter" in messages[simulator_index]
+    else:
+        assert "effective_runtime=mock synth adapter" not in messages[simulator_index]
 
 
 def test_cli_restart_incomplete_run_cleans_existing_artifacts(tmp_path, monkeypatch):

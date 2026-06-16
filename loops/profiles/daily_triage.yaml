@@ -1,0 +1,19 @@
+profile_id: daily_triage
+readiness_level: L1
+cadence: "0 8 * * MON-FRI"
+targets:
+  - contract: contracts/examples/chatbot_test_contract.yaml
+max_iterations_per_cycle: 1
+budget_policy_ref: default_daily_budget
+human_gates:
+  - reviewer_signoff_required
+denylist:
+  - destructive_commands
+checker_policy:
+  mode: report_only
+llm_config:
+  provider: azure_openai
+  model_name: gpt-4-turbo
+  endpoint_url: ${AZURE_OPENAI_ENDPOINT:-https://example.invalid/openai}
+  max_tokens_per_call: 2000
+  temperature: 0.3
