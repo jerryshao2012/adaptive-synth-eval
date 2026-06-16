@@ -45,6 +45,9 @@ def record_loop_cycle(
         run_results: list[dict[str, Any]],
         planner_decision: dict[str, Any] | None = None,
         reflection_decision: dict[str, Any] | None = None,
+        checker_decision: dict[str, Any] | None = None,
+        assisted_actions: list[dict[str, Any]] | None = None,
+        state_updates: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     initialize_loop_assets(profile, output_dir=output_dir)
     state_path = _loop_state_path(profile.profile_id, output_dir)
@@ -62,6 +65,8 @@ def record_loop_cycle(
 
     planner_decision = dict(planner_decision or {})
     reflection_decision = dict(reflection_decision or {})
+    checker_decision = dict(checker_decision or {})
+    assisted_actions = list(assisted_actions or [])
     human_inbox = list(state.get("human_inbox") or [])
     for item in reflection_decision.get("escalation_items") or []:
         text = str(item).strip()
@@ -75,9 +80,11 @@ def record_loop_cycle(
         "recommended_action": planner_decision.get("recommended_action") or (
             f"Review the latest {total_runs} run summaries and loop run log for follow-up decisions."
         ),
-        "checker_decision": "AUTO_APPROVED_REPORT_ONLY",
+        "checker_decision": checker_decision.get("verdict") or "AUTO_APPROVED_REPORT_ONLY",
+        "checker_reason": checker_decision.get("reason"),
         "planner_source": planner_decision.get("source"),
         "reflection_source": reflection_decision.get("source"),
+        "assisted_actions": assisted_actions,
         "outcome": {
             "run_status": outcome_status,
             "key_finding": reflection_decision.get("key_finding") or (
@@ -104,12 +111,29 @@ def record_loop_cycle(
     budget = dict(state.get("budget") or _initial_budget_state(timestamp))
     budget["last_updated"] = timestamp
     state["budget"] = budget
+    if isinstance(state_updates, dict):
+        for key, value in state_updates.items():
+            state[key] = value
     _write_json_atomic(state_path, state)
 
     states = _load_all_states(output_dir)
     loops_dir = _loop_root(output_dir)
     _write_text_atomic(loops_dir / "STATE.md", _render_state_markdown(states, generated_at=timestamp))
     _write_text_atomic(loops_dir / "loop-budget.md", _render_budget_markdown(states, generated_at=timestamp))
+    for action in assisted_actions:
+        _append_run_log(
+            loops_dir / "loop-run-log.md",
+            profile.profile_id,
+            (
+                "assisted_action "
+                f"name={action.get('action', 'unknown')} "
+                f"risk={action.get('risk_class', 'unknown')} "
+                f"status={action.get('status', 'unknown')} "
+                f"reason={action.get('reason', 'n/a')}"
+            ),
+            profile.source_path,
+            timestamp,
+        )
     for item in run_results:
         _append_run_log(
             loops_dir / "loop-run-log.md",
@@ -162,6 +186,7 @@ def _build_initial_state(profile: LoopProfile, *, existing: dict[str, Any] | Non
         state.setdefault("last_cycle", None)
         state.setdefault("recent_runs", [])
         state.setdefault("budget", _initial_budget_state(timestamp))
+        state.setdefault("assisted_action_attempts", {})
         return state
 
     return {
@@ -186,6 +211,7 @@ def _build_initial_state(profile: LoopProfile, *, existing: dict[str, Any] | Non
         "human_inbox": [],
         "last_cycle": None,
         "recent_runs": [],
+        "assisted_action_attempts": {},
         "budget": _initial_budget_state(timestamp),
     }
 
@@ -249,11 +275,22 @@ def _render_state_markdown(states: list[dict[str, Any]], *, generated_at: str) -
                 lines.append(f"- Planner reasoning: {last_cycle['ai_reasoning']}")
             if last_cycle.get("recommended_action"):
                 lines.append(f"- Recommended action: {last_cycle['recommended_action']}")
+            if last_cycle.get("checker_reason"):
+                lines.append(f"- Checker reason: {last_cycle['checker_reason']}")
             outcome = last_cycle.get("outcome")
             if isinstance(outcome, dict) and outcome.get("key_finding"):
                 lines.append(f"- Last outcome: {outcome['key_finding']}")
             if isinstance(outcome, dict) and outcome.get("ai_reflection"):
                 lines.append(f"- AI reflection: {outcome['ai_reflection']}")
+            assisted_actions = last_cycle.get("assisted_actions") or []
+            if assisted_actions:
+                lines.append("- Assisted actions:")
+                for action in assisted_actions:
+                    lines.append(
+                        "  - "
+                        f"{action.get('action', 'unknown')} "
+                        f"(risk={action.get('risk_class', 'unknown')}, status={action.get('status', 'unknown')})"
+                    )
         else:
             lines.append("- Last cycle: No cycles recorded yet")
         recent_runs = state.get("recent_runs") or []

@@ -13,10 +13,13 @@ from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 from adaptive_synth_eval.evaluation.modes import get_mode
+from adaptive_synth_eval.loop.audit import build_loop_audit
 from adaptive_synth_eval.loop.planner import LoopReasoner
+from adaptive_synth_eval.loop.policy import LoopPolicyEngine
 from adaptive_synth_eval.loop.profiles import LoopProfileError, load_loop_profile
 from adaptive_synth_eval.loop.scheduler import LoopScheduler
 from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle
+from adaptive_synth_eval.loop.verifier import LoopVerifier
 
 logger = setup_logger(__name__)
 
@@ -285,6 +288,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(status, indent=2, default=str))
                 return 0
 
+            if args.loop_command == "audit":
+                report = build_loop_audit(
+                    profile_ref=args.profile,
+                    output_dir=Path(args.output_dir),
+                    profiles_dir=Path(args.profiles_dir),
+                )
+                print(json.dumps(report, indent=2, default=str))
+                return 0
+
         if args.command == "validate-contract":
             mode_name = detect_mode_from_file(args.contract)
             mode = get_mode(mode_name)
@@ -437,7 +449,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="loop commands",
         description="Loop operations",
-        metavar="{init,run,start,status}",
+        metavar="{init,run,start,status,audit}",
     )
 
     loop_init = loop_sub.add_parser(
@@ -568,6 +580,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="outputs",
         help="Base output directory for loop state and markdown artifacts (default: outputs)",
     )
+
+    loop_audit = loop_sub.add_parser(
+        "audit",
+        help="Produce a loop readiness and safeguards audit report",
+        description="Evaluate loop profile readiness controls and persisted loop artifacts for L0-L3 progression.",
+    )
+    loop_audit.add_argument("--profile", help="Optional loop profile ID to audit")
+    loop_audit.add_argument(
+        "--profiles-dir",
+        default="loops/profiles",
+        help="Directory containing checked-in loop profiles (default: loops/profiles)",
+    )
+    loop_audit.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Base output directory for loop state and markdown artifacts (default: outputs)",
+    )
     return parser
 
 
@@ -690,11 +719,66 @@ def _run_loop_profile(
     initialize_loop_assets(profile, output_dir=output_dir)
     loop_state = get_loop_status(profile_ref=profile.profile_id, output_dir=output_dir)
     reasoner = LoopReasoner(profile)
+    policy_engine = LoopPolicyEngine(profile)
+    verifier = LoopVerifier(profile)
     planner_decision = reasoner.plan_cycle(loop_state)
     run_results: list[dict[str, Any]] = []
+    assisted_actions_log: list[dict[str, Any]] = []
+    checker_decision: dict[str, Any] = {
+        "verdict": "approved",
+        "reason": "Checker approved target execution and assisted actions.",
+    }
+    attempts = dict(loop_state.get("assisted_action_attempts") or {}) if isinstance(loop_state, dict) else {}
     targets = planner_decision.selected_targets[: profile.max_iterations_per_cycle]
 
     for target in targets:
+        target_context = _resolve_target_context(target)
+        plan = policy_engine.plan_target(
+            loop_state=loop_state,
+            target=target,
+            mode_name=target_context["mode_name"],
+            run_dir=target_context["run_dir"],
+            default_incomplete_run_action=incomplete_run_action,
+            max_concurrency=target_context["max_concurrency"],
+        )
+        checker = verifier.verify_plan(plan, loop_state=loop_state, target=target)
+        checker_decision = {
+            "verdict": checker.verdict,
+            "reason": checker.reason,
+            "approved_actions": checker.approved_actions,
+            "rejected_actions": checker.rejected_actions,
+        }
+        if not checker.approved and profile.readiness_level in {"L2", "L3"}:
+            assisted_actions_log.extend(policy_engine.summarize_actions(plan.assisted_actions, status="rejected"))
+            record_loop_cycle(
+                profile,
+                output_dir=output_dir,
+                run_results=run_results,
+                planner_decision=planner_decision.__dict__,
+                reflection_decision={
+                    "key_finding": "Checker rejected target execution before run.",
+                    "ai_reflection": checker.reason,
+                    "follow_up_enabled": True,
+                    "escalation_items": [checker.reason],
+                    "source": "checker",
+                },
+                checker_decision=checker_decision,
+                assisted_actions=assisted_actions_log,
+                state_updates={"assisted_action_attempts": attempts},
+            )
+            raise LoopProfileError(f"Checker rejected loop target: {checker.reason}")
+
+        approved_actions = [
+            action for action in plan.assisted_actions if action.action in checker.approved_actions
+        ]
+        assisted_actions_log.extend(policy_engine.summarize_actions(approved_actions, status="approved"))
+
+        for action in approved_actions:
+            key = policy_engine.retry_key(target, action.action)
+            attempts[key] = int(attempts.get(key, 0)) + 1
+            if action.action == "regenerate_missing_summary" and target_context["run_dir"] is not None:
+                _regenerate_missing_summary(target_context["run_dir"], mode_name=target_context["mode_name"])
+
         effective_dry_run = dry_run if target.get("dry_run") is None else bool(target.get("dry_run"))
         summary = _execute_contract_run(
             contract_path=target["contract"],
@@ -702,12 +786,12 @@ def _run_loop_profile(
             persona_filter=target.get("persona"),
             scenario_filter=target.get("scenario"),
             adversarial_filter=target.get("adversarial_scenario"),
-            max_concurrency_override=None,
+            max_concurrency_override=plan.max_concurrency_override,
             run_id_override=None,
             realtime_chat=realtime_chat,
             output_conversations=output_conversations,
             interactive_realtime_controls=None,
-            incomplete_run_action=incomplete_run_action,
+            incomplete_run_action=plan.incomplete_run_action,
         )
         status = "completed_with_errors" if int(summary.get("errors") or 0) > 0 else "completed"
         run_results.append(
@@ -721,6 +805,8 @@ def _run_loop_profile(
                 "errors": int(summary.get("errors") or 0),
                 "elapsed_seconds": summary.get("elapsed_seconds"),
                 "output_dir": summary.get("output_dir"),
+                "assisted_actions": [action.action for action in approved_actions],
+                "checker_verdict": checker.verdict,
             }
         )
 
@@ -732,6 +818,9 @@ def _run_loop_profile(
         run_results=run_results,
         planner_decision=planner_decision.__dict__,
         reflection_decision=reflection_decision.__dict__,
+        checker_decision=checker_decision,
+        assisted_actions=assisted_actions_log,
+        state_updates={"assisted_action_attempts": attempts},
     )
     return {
         "profile_id": profile.profile_id,
@@ -742,6 +831,53 @@ def _run_loop_profile(
         "run_results": run_results,
         "state_path": str((output_dir / "loops" / "state" / f"{profile.profile_id}.json").resolve()),
     }
+
+
+def _resolve_target_context(target: dict[str, Any]) -> dict[str, Any]:
+    contract_path = str(target.get("contract") or "")
+    mode_name = detect_mode_from_file(contract_path)
+    mode = get_mode(mode_name)
+    contract = mode.load_contract(contract_path)
+    run_dir = _resolve_run_dir(contract, mode_name=mode_name, run_id_override=None)
+    max_concurrency = None
+    if mode_name == "unified":
+        max_concurrency = int(getattr(getattr(contract, "run", None), "max_concurrency", 0) or 0)
+    return {
+        "mode_name": mode_name,
+        "run_dir": run_dir,
+        "max_concurrency": max_concurrency,
+    }
+
+
+def _regenerate_missing_summary(run_dir: Path, *, mode_name: str) -> bool:
+    if not run_dir.exists():
+        return False
+    summary_path = run_dir / "run_summary.json"
+    if summary_path.exists():
+        return False
+    run_state_path = run_dir / "run_state.json"
+    if not run_state_path.exists():
+        return False
+
+    try:
+        state = json.loads(run_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    summary = state.get("summary")
+    if not isinstance(summary, dict):
+        metrics = state.get("metrics") or {}
+        summary = {
+            "run_id": state.get("run_id") or run_dir.name,
+            "mode": mode_name,
+            "status": state.get("status") or "unknown",
+            "total_conversations": int(state.get("completed_conversations") or 0),
+            "total_turns": int((metrics or {}).get("total_turns") or 0),
+            "errors": int((metrics or {}).get("errors") or 0),
+            "regenerated": True,
+        }
+    summary_path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+    return True
 
 
 def _resolve_incomplete_action(configured: str, run_dir: Path, incomplete: dict[str, Any]) -> str:

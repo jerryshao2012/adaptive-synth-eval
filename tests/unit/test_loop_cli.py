@@ -352,3 +352,158 @@ llm_config:
     state = json.loads((tmp_path / "outputs" / "loops" / "state" / "demo.json").read_text(encoding="utf-8"))
     assert state["last_cycle"]["ai_reasoning"] == "Scheduler cycle selected the only target."
     assert state["last_cycle"]["outcome"]["follow_up_enabled"] is False
+
+
+def test_cli_loop_audit_reports_readiness(tmp_path, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+checker_policy:
+  max_retry_attempts: 2
+  allow_auto_resume: true
+denylist:
+  - destructive
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+
+    main(
+        [
+            "loop",
+            "init",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "loop",
+            "audit",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["profile_id"] == "demo"
+    assert payload["maker_checker_split"] is True
+    assert payload["safeguards"]["max_retry_attempts"] == 2
+    assert payload["files"]["STATE.md"] is True
+
+
+def test_cli_loop_run_l2_checker_rejects_denylisted_target(tmp_path, monkeypatch, capsys):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "forbidden_contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "simulation_suite": {
+                    "suite_id": "test_suite",
+                    "target_application": "hr_bot",
+                    "run_mode": "synthetic_chat_history_generation",
+                    "synthetic_flag": True,
+                },
+                "target": {"enabled": False},
+                "time_window": {
+                    "start_day": "2026-05-01",
+                    "num_synthetic_days": 1,
+                    "compressed_runtime_minutes": 5,
+                },
+                "persona_pool": [
+                    {
+                        "persona_id": "P001",
+                        "role": "new_employee",
+                        "location": "Canada",
+                        "seniority": "junior",
+                        "communication_style": "polite",
+                        "hr_familiarity": "low",
+                        "privacy_sensitivity": "medium",
+                    }
+                ],
+                "scenario_catalog": [
+                    {
+                        "scenario_id": "S001",
+                        "domain": "leave",
+                        "intent": "understand_eligibility",
+                        "expected_retrieval_topics": ["leave"],
+                        "failure_injection": {"ambiguity": 0.2},
+                        "success_criteria": {"answers_grounded_in_policy": True},
+                    }
+                ],
+                "traffic_orchestration": {
+                    "total_conversations": 1,
+                    "conversation_turns": {"min": 3, "max": 3},
+                    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+                },
+                "output": {"base_dir": str(tmp_path / "target_outputs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+denylist:
+  - forbidden
+checker_policy:
+  max_retry_attempts: 2
+llm_config:
+    provider: openai
+    model_name: gpt-4o-mini
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli.run_simulation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("target run should not execute")),
+    )
+
+    exit_code = main(
+        [
+            "loop",
+            "run",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Checker rejected loop target" in captured.err
+
+    state_path = tmp_path / "outputs" / "loops" / "state" / "demo.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["last_cycle"]["checker_decision"] == "rejected"
