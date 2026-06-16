@@ -99,6 +99,71 @@ uv run ase summarize --run-id one_week_chat_history
 
 ---
 
+## Loop Engineering (Continuous Evaluation)
+
+Run adaptive evaluation loops that continuously discover targets, apply constrained recoveries, and run unattended with safety guardrails. See [docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md](loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) for architecture and [docs/loop_operations_runbook.md](./loop_operations_runbook.md) for operations.
+
+### Loop Commands
+
+#### Initialize Loop Assets
+```bash
+uv run ase loop init --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Run a Single Loop Cycle
+```bash
+uv run ase loop run --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Start a Recurring Loop (Single Profile)
+```bash
+uv run ase loop start --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Start All Checked-In Loops (Multi-Profile Coordination)
+```bash
+uv run ase loop start --all --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Check Loop Status
+```bash
+uv run ase loop status --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Audit Loop Readiness
+```bash
+uv run ase loop audit --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Pause a Loop (Kill Switch)
+```bash
+uv run ase loop pause --profile <id> --reason "maintenance" --profiles-dir loops/profiles --output-dir outputs
+```
+
+#### Resume a Paused Loop
+```bash
+uv run ase loop resume --profile <id> --profiles-dir loops/profiles --output-dir outputs
+```
+
+### Loop Profiles
+Loop profiles are stored under `loops/profiles/*.yaml` and declare:
+- `readiness_level` (`L1|L2|L3`)
+- `cadence` (cron or interval)
+- `targets` (contract paths to evaluate)
+- `checker_policy` (retry limits, auto-pause thresholds)
+- `llm_config` (Azure OpenAI, AWS Bedrock, Ollama for AI reasoning)
+
+Example: `loops/profiles/unified_regression_guard.yaml`
+
+### Loop Runtime Artifacts
+Loop state is persisted under `outputs/loops/`:
+- `STATE.md`: Human-readable loop status and inbox
+- `loop-budget.md`: Run/token budget snapshots
+- `loop-run-log.md`: Append-only event history
+- `state/<profile_id>.json`: Machine-readable loop state
+
+---
+
 ## Real-Time Chat & Interactive Controls
 
 Stream Persona/Bot chat to the console in real time:

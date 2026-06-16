@@ -1,8 +1,16 @@
 # Loop Operations Runbook
 
+Production guide for operating continuous evaluation loops. For architecture and design, see [docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md](./loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md).
+
 ## Scope
 
-This runbook covers unattended `ase loop` operation for L3 profiles.
+This runbook covers unattended `ase loop` operation for L3 profiles (and assisted L2 loops).
+
+For an overview of the full loop readiness model and architecture, see [loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md](./loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md):
+- `L0`: static contract execution (`ase run`)
+- `L1`: report-only loops with planner + reflection
+- `L2`: assisted actions with maker/checker enforcement
+- `L3`: unattended loops with kill switch, caps, and multi-profile coordination
 
 ## Preconditions
 

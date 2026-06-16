@@ -10,6 +10,7 @@ Adaptive Synthetic Eval helps you:
 - **Inject failures**: Simulate ambiguous queries, typos, frustration, and policy boundary pressure.
 - **Evaluate at scale**: Run concurrent simulations with configurable traffic patterns.
 - **Red-team chatbots**: Perform adversarial red-teaming to uncover vulnerabilities.
+- **Run continuous loops**: Autonomously discover evaluation targets, apply constrained recoveries, and run unattended with safety guardrails (L1/L2/L3 readiness levels).
 
 ---
 
@@ -112,6 +113,8 @@ Detailed guides covering all components and configuration reference are availabl
 - [**Adversarial Agent Walkthrough**](./docs/adversarial_agent_walkthrough.md): Technical deep-dive walkthrough of the adaptive adversarial red-teaming engine, actors, and algorithms.
 - [**Persona Memory System**](./docs/persona_memory.md): isolated, markdown-based memory tracking that evolves across conversation sessions.
 - [**Output Schema & Artifacts**](./docs/output_artifacts.md): Folder structures and detailed column definitions for output `chat_history` files.
+- [**Loop Engineering**](./docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md): Continuous evaluation loops with AI-driven discovery, assisted actions, and unattended execution (L0–L3).
+- [**Loop Operations Runbook**](./docs/loop_operations_runbook.md): Production operations guide for unattended loop scheduling, kill switches, and recovery.
 
 ---
 
