@@ -249,7 +249,7 @@ Later optional step: allow referencing loop profile from unified contracts.
 
 Deliverables:
 - Loop profile schema + parser + validation tests
-- Persistent loop state store (leveraging atomic write-replace pattern from [run_state.py](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/src/adaptive_synth_eval/artifacts/run_state.py))
+- Persistent loop state store (leveraging atomic write-replace pattern from [run_state.py](./src/adaptive_synth_eval/artifacts/run_state.py))
 - `STATE.md` generation utilities (writing to gitignored `outputs/loops/` directory)
 - `loop-budget.md` and `loop-run-log.md` writers
 - `ase loop init`, `ase loop status`
@@ -289,7 +289,7 @@ Acceptance criteria:
 Goal: allow constrained low-risk actions with checker approval.
 
 Allowed actions (initial):
-- Auto-resume incomplete run when safe (reusing the incomplete-run-action logic from [cli.py](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/src/adaptive_synth_eval/cli.py))
+- Auto-resume incomplete run when safe (reusing the incomplete-run-action logic from [cli.py](./src/adaptive_synth_eval/cli.py))
 - Auto-restart stale failed run with bounded retries
 - Apply safe runtime overrides from policy (concurrency cap reductions)
 - Regenerate summaries for missing artifacts

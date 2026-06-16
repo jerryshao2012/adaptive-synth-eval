@@ -11,7 +11,7 @@ When you configure an LLM provider, the `UserSimulator` automatically uses it to
 - **Scenario intent** (what the user wants to accomplish)
 - **Conversation history** (previous turns in the dialogue)
 - **Failure injection modes** (typos, ambiguity, frustration, etc.)
-- **Persona memory** (persistent demographics, preferences, and long-term recall from prior conversations; see the [Persona Memory Guide](file:///Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval/docs/persona_memory.md))
+- **Persona memory** (persistent demographics, preferences, and long-term recall from prior conversations; see the [Persona Memory Guide](./docs/persona_memory.md))
 
 If no LLM is configured, the system falls back to deterministic template messages.
 
@@ -66,7 +66,7 @@ ollama pull qwen3.6:35b-a3b
 ### Step 2: Install Dependencies
 
 ```bash
-cd /Users/jerryshao/Documents/projects/IBM/ai/adaptive-synth-eval
+cd adaptive-synth-eval
 uv sync
 ```
 
@@ -213,7 +213,7 @@ uv run ase run --contract your_contract.yaml
 
 ## Architecture Reference
 
-The implementation follows the pattern from `/Users/jerryshao/Documents/projects/IBM/ai/deepagents-demo/deep_research/model_factory.py`:
+The implementation follows the pattern from `./deepagents-demo/deep_research/model_factory.py`:
 
 - **Lazy initialization**: Models are created only when first needed
 - **Provider abstraction**: Unified interface across different LLM vendors
