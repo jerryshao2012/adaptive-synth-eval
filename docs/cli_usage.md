@@ -5,7 +5,13 @@ For convenience, you can use the shorthand command `ase` instead of the full `ad
 ## Installation & Setup
 
 ### Running with uv
-Prefix commands with `uv run ase`:
+Ensure dependencies and the local package are installed in editable mode first:
+```bash
+uv sync
+uv pip install -e .
+```
+
+Then prefix commands with `uv run ase`:
 ```bash
 uv run ase validate-contract contracts/examples/tfsa_one_week_traffic.yaml
 ```
