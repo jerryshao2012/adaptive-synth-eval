@@ -622,7 +622,7 @@ class RealtimeChatController:
         seen_handlers: set[int] = set()
         for logger_obj in candidate_loggers:
             for handler in logger_obj.handlers:
-                if not isinstance(handler, logging.StreamHandler):
+                if not isinstance(handler, logging.StreamHandler) or isinstance(handler, logging.FileHandler):
                     continue
                 if id(handler) in seen_handlers:
                     continue
