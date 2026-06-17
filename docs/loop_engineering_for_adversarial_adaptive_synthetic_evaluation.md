@@ -7,12 +7,6 @@ Last Updated: 2026-06-16
 
 This document is the cleaned, current source of truth for loop engineering in `adaptive-synth-eval`.
 
-It replaces the original migration-plan format with an implementation-focused view of:
-- what is built and available now,
-- how to run and operate loop workflows,
-- what remains optional follow-up work.
-
-Primary objective of loop engineering in this repo:
 - continuously evaluate target chatbot behavior with adaptive synthetic and adversarial traffic,
 - reason over prior outcomes,
 - apply constrained recoveries under checker guardrails,
