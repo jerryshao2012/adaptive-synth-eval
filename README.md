@@ -1,6 +1,6 @@
 # Adversarial Adaptive Synthetic Evaluation
 
-A Python CLI tool for generating synthetic multi-turn chat histories and performing adversarial red-teaming to evaluate HR policy chatbots. This local-first, contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
+A Python CLI tool for generating synthetic multi-turn chat histories and performing adversarial red-teaming to evaluate HR policy chatbots. This contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
 
 ## 🎯 Overview
 
