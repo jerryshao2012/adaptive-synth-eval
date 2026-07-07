@@ -1,6 +1,7 @@
 import logging
-from pathlib import Path
 from types import SimpleNamespace
+
+from pathlib import Path
 
 from adaptive_synth_eval.cli import main
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
@@ -399,6 +400,216 @@ def test_cli_can_disable_interactive_controls_with_no_flag(tmp_path, monkeypatch
 
     assert exit_code == 0
     assert captured["interactive_realtime_controls"] is False
+
+
+def test_cli_disables_live_status_when_realtime_controls_enabled(tmp_path, monkeypatch):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    captured = {}
+
+    def _fake_live_status(*, title, enabled, realtime_interactive, runner):
+        captured["enabled"] = enabled
+        captured["realtime_interactive"] = realtime_interactive
+        return runner(None, None)
+
+    def _fake_run_simulation(*args, **kwargs):
+        return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("adaptive_synth_eval.cli._run_with_live_status", _fake_live_status)
+    monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
+
+    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+
+    assert exit_code == 0
+    assert captured["enabled"] is True
+    assert captured["realtime_interactive"] is True
+
+
+def test_cli_realtime_no_controls_uses_non_interactive_renderer_mode(tmp_path, monkeypatch):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    captured = {}
+
+    def _fake_live_status(*, title, enabled, realtime_interactive, runner):
+        captured["enabled"] = enabled
+        captured["realtime_interactive"] = realtime_interactive
+        return runner(None, None)
+
+    def _fake_run_simulation(*args, **kwargs):
+        return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("adaptive_synth_eval.cli._run_with_live_status", _fake_live_status)
+    monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
+
+    exit_code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--dry-run",
+            "--realtime-chat",
+            "--no-interactive-realtime-controls",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["enabled"] is True
+    assert captured["realtime_interactive"] is False
+
+
+def test_cli_realtime_interactive_fails_fast_without_prompt_toolkit(tmp_path, monkeypatch, capsys):
+    contract = tmp_path / "contract.json"
+    output_dir = tmp_path / "outputs"
+    contract.write_text(
+        """
+{
+  "simulation_suite": {
+    "suite_id": "test_suite",
+    "target_application": "hr_bot",
+    "run_mode": "synthetic_chat_history_generation",
+    "synthetic_flag": true
+  },
+  "target": {"enabled": false},
+  "time_window": {
+    "start_day": "2026-05-01",
+    "num_synthetic_days": 1,
+    "compressed_runtime_minutes": 5
+  },
+  "persona_pool": [{
+    "persona_id": "P001",
+    "role": "new_employee",
+    "location": "Canada",
+    "seniority": "junior",
+    "communication_style": "confused_but_polite",
+    "hr_familiarity": "low",
+    "privacy_sensitivity": "medium"
+  }],
+  "scenario_catalog": [{
+    "scenario_id": "S001",
+    "domain": "parental_leave_policy",
+    "intent": "understand_eligibility",
+    "expected_retrieval_topics": ["parental_leave"],
+    "failure_injection": {"ambiguity": 0.5},
+    "success_criteria": {"answers_grounded_in_policy": true}
+  }],
+  "traffic_orchestration": {
+    "total_conversations": 1,
+    "conversation_turns": {"min": 3, "max": 3},
+    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+    "random_seed": 7
+  },
+  "output": {"base_dir": "%s"}
+}
+""".strip()
+        % output_dir.as_posix()
+    )
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "prompt_toolkit":
+            raise ImportError("mocked missing prompt_toolkit")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "requires prompt_toolkit" in captured.err
 
 
 def test_cli_runs_with_persona_option(tmp_path, monkeypatch):

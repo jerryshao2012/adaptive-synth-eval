@@ -56,6 +56,7 @@ def run_simulation(
         persona_filter: str | None = None,
         resume_incomplete: bool = False,
         progress_sink: Callable[[dict[str, Any]], None] | None = None,
+        realtime_status_provider: Any | None = None,
 ) -> dict:
     """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
     return asyncio.run(
@@ -68,6 +69,7 @@ def run_simulation(
             persona_filter=persona_filter,
             resume_incomplete=resume_incomplete,
             progress_sink=progress_sink,
+            realtime_status_provider=realtime_status_provider,
         )
     )
 
@@ -82,6 +84,7 @@ async def run_simulation_async(
         persona_filter: str | None = None,
         resume_incomplete: bool = False,
         progress_sink: Callable[[dict[str, Any]], None] | None = None,
+        realtime_status_provider: Any | None = None,
 ) -> dict:
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
@@ -186,6 +189,7 @@ async def run_simulation_async(
             personas=personas,
             single_persona_mode=single_persona_mode,
             persona_total_convos=persona_total_convos,
+            status_provider=realtime_status_provider,
         )
         if matched_persona_id:
             realtime_controller.set_active_persona(matched_persona_id)

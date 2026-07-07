@@ -210,7 +210,9 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
   - `s/switch <persona_id-conversation_id|conversation_id>` (disabled in single-persona runs): Explicitly switch to another active conversation session.
 - Behavior changes apply to the active persona and persist across session switches. Each persona can have its own distinct behavior mode.
 - The prompt remains stable while logs stream above it, with active persona/session updating when switched.
-- Long-running commands now show a live bottom status bar with progress, so there is no separate realtime status command.
+- Long-running commands show a live bottom status bar with progress.
+- In realtime chat with interactive controls enabled (default), the prompt stays above a pinned bottom status bar.
+- If `prompt_toolkit` is unavailable, realtime interactive mode fails fast with a clear setup message.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
 ### Realtime Session Control Example

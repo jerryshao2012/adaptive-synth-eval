@@ -97,14 +97,21 @@ class _RunProgressTracker:
             logger.exception("Progress sink failed; continuing without live status updates.")
 
     async def mark_completed(self, conversation_id: str) -> None:
-        if not self.enabled:
-            return
         async with self._lock:
             self.completed += 1
             completed = self.completed
             elapsed_seconds = max(0.0, time.perf_counter() - self.started_monotonic)
 
             if self.total is None:
+                if not self.enabled:
+                    # Realtime mode may suppress progress logs to reduce noise, but status
+                    # consumers still need every completion update.
+                    self._emit_progress_snapshot(
+                        conversation_id=conversation_id,
+                        completed=completed,
+                        elapsed_seconds=elapsed_seconds,
+                    )
+                    return
                 # Unknown total (budget-driven runs): emit periodically to avoid noisy logs.
                 if completed != 1 and completed % 25 != 0:
                     return
@@ -133,6 +140,17 @@ class _RunProgressTracker:
                 total=self.total,
                 elapsed_seconds=elapsed_seconds,
             )
+
+            if not self.enabled:
+                self._emit_progress_snapshot(
+                    conversation_id=conversation_id,
+                    completed=completed,
+                    elapsed_seconds=elapsed_seconds,
+                    remaining=remaining,
+                    eta_seconds=eta_seconds,
+                )
+                return
+
             eta_str = _format_eta_timestamp(eta_seconds)
             completion_pct = (completed / self.total) * 100 if self.total > 0 else 100.0
             self._emit_progress_snapshot(
@@ -169,6 +187,7 @@ def run_unified(
         interactive_realtime_controls: bool = False,
         resume_incomplete: bool = False,
         progress_sink: Callable[[dict[str, Any]], None] | None = None,
+        realtime_status_provider: Any | None = None,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
     return asyncio.run(run_unified_async(
@@ -184,6 +203,7 @@ def run_unified(
         interactive_realtime_controls=interactive_realtime_controls,
         resume_incomplete=resume_incomplete,
         progress_sink=progress_sink,
+        realtime_status_provider=realtime_status_provider,
     ))
 
 
@@ -201,6 +221,7 @@ async def run_unified_async(
         interactive_realtime_controls: bool = False,
         resume_incomplete: bool = False,
         progress_sink: Callable[[dict[str, Any]], None] | None = None,
+        realtime_status_provider: Any | None = None,
 ) -> dict[str, Any]:
     persona_filter = _resolve_persona_filter(contract, persona_filter)
     if run_id_override:
@@ -396,6 +417,7 @@ async def run_unified_async(
             personas=personas_dict,
             single_persona_mode=single_persona_mode,
             persona_total_convos=persona_total_convos,
+            status_provider=realtime_status_provider,
         )
         for planned in plan[: max(1, effective_max_concurrency)]:
             realtime_controller.register_conversation_session(

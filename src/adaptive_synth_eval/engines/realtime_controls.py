@@ -12,10 +12,12 @@ from typing import Any
 
 try:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.patch_stdout import patch_stdout
     from prompt_toolkit.completion import Completer, Completion
 except Exception:  # pragma: no cover - optional dependency fallback
     PromptSession = None
+    HTML = None
     patch_stdout = None
     Completer = None
     Completion = None
@@ -119,6 +121,7 @@ class RealtimeChatController:
             personas: dict[str, Any] | None = None,
             single_persona_mode: bool = False,
             persona_total_convos: dict[str, int] | None = None,
+            status_provider: Any | None = None,
     ) -> None:
         self._delay_step_seconds = delay_step_seconds
         self._min_delay_seconds = min_delay_seconds
@@ -144,6 +147,7 @@ class RealtimeChatController:
             persona_behavior_modes={},
         )
         self._state_cv = threading.Condition(threading.Lock())
+        self._status_provider = status_provider
         self._input_thread: threading.Thread | None = None
         self._patched_logging_handlers: list[tuple[logging.StreamHandler[Any], Any]] = []
         self._temporary_logger_levels: list[tuple[logging.Logger, int]] = []
@@ -562,7 +566,13 @@ class RealtimeChatController:
             return
 
         completer = RealtimeCommandCompleter(self) if RealtimeCommandCompleter is not None else None
-        session = PromptSession(completer=completer, complete_while_typing=True)
+        session = PromptSession(
+            completer=completer,
+            complete_while_typing=True,
+            bottom_toolbar=self._bottom_toolbar_text if self._status_provider is not None else None,
+        )
+        if self._status_provider is not None and hasattr(self._status_provider, "bind_invalidate"):
+            self._status_provider.bind_invalidate(session.app.invalidate)
         while True:
             with self._state_cv:
                 if self._state.stop_requested:
@@ -583,6 +593,18 @@ class RealtimeChatController:
             message = self.apply_command(raw)
             if message:
                 logger.info(message)
+
+    def _bottom_toolbar_text(self):
+        if self._status_provider is None:
+            return ""
+        if hasattr(self._status_provider, "render_toolbar"):
+            text = self._status_provider.render_toolbar()
+        else:
+            text = ""
+        if HTML is None:
+            return text
+        safe = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return HTML(f"<style bg='#2d2d2d' fg='#ffffff'> {safe} </style>")
 
     def _input_loop_basic(self) -> None:
         """Fallback line input when prompt_toolkit is unavailable."""

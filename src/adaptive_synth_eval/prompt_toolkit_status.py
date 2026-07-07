@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import sys
 import threading
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from rich.console import Console
-from rich.live import Live
-from rich.text import Text
-
 
 @dataclass
-class LiveStatusSnapshot:
+class PromptToolkitStatusSnapshot:
     phase: str = "running"
     completed: int = 0
     total: int | None = None
@@ -36,7 +31,7 @@ def _format_duration(seconds: float | None) -> str:
     return f"{secs}s"
 
 
-def format_status_line(snapshot: LiveStatusSnapshot) -> str:
+def format_status_line(snapshot: PromptToolkitStatusSnapshot, *, title: str = "ASE RUN") -> str:
     if snapshot.total is None:
         done_text = f"done={snapshot.completed}"
     else:
@@ -53,51 +48,47 @@ def format_status_line(snapshot: LiveStatusSnapshot) -> str:
         if value is None:
             continue
         parts.append(f"{key}={value}")
-    return " | ".join(parts)
+    return f"[{title}] " + " | ".join(parts)
 
 
-class LiveStatusBar:
-    def __init__(self, *, title: str = "ASE", enabled: bool | None = None) -> None:
-        self._enabled = sys.stdout.isatty() if enabled is None else bool(enabled)
-        self._console = Console(file=sys.stdout, force_terminal=self._enabled)
+class PromptToolkitStatusBar:
+    """PromptToolkit-native status source for bottom toolbar rendering.
+
+    The prompt loop owns terminal rendering; this class only stores snapshot data
+    and requests a toolbar redraw via callback.
+    """
+
+    def __init__(self, *, title: str = "ASE RUN", enabled: bool = True) -> None:
         self._title = title
-        self._snapshot = LiveStatusSnapshot()
-        self._live: Live | None = None
+        self._enabled = bool(enabled)
+        self._snapshot = PromptToolkitStatusSnapshot()
         self._lock = threading.Lock()
+        self._invalidate: Any | None = None
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
     def start(self) -> bool:
-        if not self._enabled or self._live is not None:
-            return self._enabled
-        self._live = Live(
-            self._render(),
-            console=self._console,
-            refresh_per_second=4,
-            transient=True,
-            redirect_stdout=False,
-            redirect_stderr=False,
-        )
-        self._live.start()
-        return True
+        return self._enabled
+
+    def stop(self) -> None:
+        return
 
     def update(self, **changes: Any) -> None:
         if not self._enabled:
             return
         with self._lock:
             self._snapshot = replace(self._snapshot, **changes)
-            live = self._live
-        if live is not None:
-            live.update(self._render())
+            invalidate = self._invalidate
+        if invalidate is not None:
+            invalidate()
 
-    def stop(self) -> None:
-        live = self._live
-        self._live = None
-        if live is not None:
-            live.stop()
+    def bind_invalidate(self, invalidate: Any) -> None:
+        with self._lock:
+            self._invalidate = invalidate
 
-    def _render(self) -> Text:
-        line = f"[{self._title}] {format_status_line(self._snapshot)}"
-        return Text(line, style="bold white on rgb(45,45,45)")
+    def render_toolbar(self) -> str:
+        with self._lock:
+            snapshot = self._snapshot
+        return format_status_line(snapshot, title=self._title)

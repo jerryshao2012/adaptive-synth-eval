@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
+from pathlib import Path
 
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
@@ -131,6 +131,31 @@ def test_realtime_persona_filter_runs_single_conversation(tmp_path: Path):
     assert summary["total_conversations"] == 1
     assert summary["configured_max_concurrency"] == 16
     assert summary["effective_max_concurrency"] == 1
+
+
+def test_realtime_run_emits_progress_sink_updates(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=2))
+
+    updates = []
+
+    def _sink(payload):
+        updates.append(dict(payload))
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="orchestrator_realtime_progress_sink",
+        realtime_chat=True,
+        interactive_realtime_controls=False,
+        persona_filter="DEMO_P1",
+        progress_sink=_sink,
+    )
+
+    assert summary["total_conversations"] == 1
+    assert updates
+    assert updates[0]["completed"] == 0
+    assert any((u.get("completed") or 0) >= 1 for u in updates)
 
 
 def test_round_robin_plan_by_persona_interleaves_order():

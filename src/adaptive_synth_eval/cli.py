@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 import yaml
+from adaptive_synth_eval.prompt_toolkit_status import PromptToolkitStatusBar
 from pathlib import Path
 
 from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
@@ -207,16 +208,32 @@ def _run_with_live_status(
         *,
         title: str,
         enabled: bool,
+        realtime_interactive: bool,
         runner,
 ) -> dict[str, Any]:
-    live_status = LiveStatusBar(title=title, enabled=enabled)
-    started = live_status.start()
+    if realtime_interactive:
+        try:
+            from prompt_toolkit import PromptSession  # noqa: F401
+        except Exception as exc:  # pragma: no cover - runtime dependency check
+            raise ContractError(
+                "Realtime interactive mode with pinned bottom status bar requires prompt_toolkit. "
+                "Install dependencies (for example: uv sync or pip install prompt_toolkit) and retry."
+            ) from exc
+        status_renderer: Any = PromptToolkitStatusBar(title=title, enabled=enabled)
+    else:
+        status_renderer = LiveStatusBar(title=title, enabled=enabled)
+
+    started = status_renderer.start()
+
+    def _progress_sink(payload: dict[str, Any]) -> None:
+        status_renderer.update(**payload)
+
     try:
-        return runner(live_status.update if live_status.enabled else None)
+        return runner(_progress_sink if status_renderer.enabled else None, status_renderer)
     finally:
         if started:
-            live_status.update(phase="complete")
-        live_status.stop()
+            status_renderer.update(phase="complete")
+        status_renderer.stop()
 
 
 def detect_mode_from_file(path_str: str) -> str:
@@ -792,10 +809,12 @@ def _execute_contract_run(
         controls_enabled = interactive_realtime_controls
         if controls_enabled is None:
             controls_enabled = realtime_chat
+        live_status_enabled = sys.stdout.isatty()
         return _run_with_live_status(
             title="ASE RUN",
-            enabled=not realtime_chat and sys.stdout.isatty(),
-            runner=lambda progress_sink: run_simulation(
+            enabled=live_status_enabled,
+            realtime_interactive=realtime_chat and controls_enabled,
+            runner=lambda progress_sink, status_renderer: run_simulation(
                 contract,
                 dry_run=dry_run,
                 output_conversations=output_conversations,
@@ -804,16 +823,19 @@ def _execute_contract_run(
                 persona_filter=persona_filter,
                 resume_incomplete=resume_incomplete,
                 progress_sink=progress_sink,
+                realtime_status_provider=status_renderer if (realtime_chat and controls_enabled) else None,
             ),
         )
 
     controls_enabled = interactive_realtime_controls
     if controls_enabled is None:
         controls_enabled = realtime_chat
+    live_status_enabled = sys.stdout.isatty()
     return _run_with_live_status(
         title="ASE RUN",
-        enabled=not realtime_chat and sys.stdout.isatty(),
-        runner=lambda progress_sink: mode.run(
+        enabled=live_status_enabled,
+        realtime_interactive=realtime_chat and controls_enabled,
+        runner=lambda progress_sink, status_renderer: mode.run(
             contract,
             dry_run=dry_run,
             persona_filter=persona_filter,
@@ -826,6 +848,7 @@ def _execute_contract_run(
             interactive_realtime_controls=controls_enabled,
             resume_incomplete=resume_incomplete,
             progress_sink=progress_sink,
+            realtime_status_provider=status_renderer if (realtime_chat and controls_enabled) else None,
         ),
     )
 
