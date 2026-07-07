@@ -50,7 +50,6 @@ if Completer is not None:
             # Commands to suggest at the top level
             top_level_cmds = [
                 "help",
-                "status",
                 "list",
                 "switch",
                 "style",
@@ -105,7 +104,7 @@ class RealtimeChatController:
     }
 
     COMMAND_HELP = (
-        "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
+        "Realtime controls: [h]elp, [+] faster, [-] slower, "
         "[p]ause/resume, [q]uit, style <behavior>, list, switch <session_id>"
     )
     PROMPT_TEXT = "⚡> "
@@ -135,7 +134,7 @@ class RealtimeChatController:
         self._preferred_persona_id: str | None = None
         if self._single_persona_mode:
             self.command_help = (
-                "Realtime controls: [h]elp, [s]tatus, [+] faster, [-] slower, "
+                "Realtime controls: [h]elp, [+] faster, [-] slower, "
                 "[p]ause/resume, [q]uit, style <behavior>"
             )
         else:
@@ -270,8 +269,6 @@ class RealtimeChatController:
         normalized = command.strip().lower()
         if normalized in {"h", "help"}:
             return self.command_help
-        if normalized in {"st", "status"}:
-            return self._status_text()
         if normalized in {"l", "list"}:
             if self._single_persona_mode:
                 return "List/switch commands are disabled when running in single-persona mode."

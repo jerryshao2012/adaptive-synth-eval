@@ -9,12 +9,13 @@ import logging
 import math
 import random
 import time
-from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from glob import glob
+from typing import Any, Callable
+
+from collections import deque
 from pathlib import Path
-from typing import Any
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
@@ -57,12 +58,43 @@ def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory
 class _RunProgressTracker:
     """Emit periodic run progress as conversations complete."""
 
-    def __init__(self, *, total: int | None, enabled: bool = True):
+    def __init__(
+            self,
+            *,
+            total: int | None,
+            enabled: bool = True,
+            progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    ):
         self.total = total
         self.enabled = enabled
         self.completed = 0
         self.started_monotonic = time.perf_counter()
+        self._progress_sink = progress_sink
         self._lock = asyncio.Lock()
+
+    def _emit_progress_snapshot(
+            self,
+            *,
+            conversation_id: str,
+            completed: int,
+            elapsed_seconds: float,
+            remaining: int | None = None,
+            eta_seconds: float | None = None,
+    ) -> None:
+        if self._progress_sink is None:
+            return
+        try:
+            self._progress_sink({
+                "phase": "running",
+                "completed": completed,
+                "total": self.total,
+                "last_item": conversation_id,
+                "elapsed_seconds": elapsed_seconds,
+                "eta_seconds": eta_seconds,
+                "details": {"remaining": remaining},
+            })
+        except Exception:  # noqa: BLE001
+            logger.exception("Progress sink failed; continuing without live status updates.")
 
     async def mark_completed(self, conversation_id: str) -> None:
         if not self.enabled:
@@ -76,6 +108,11 @@ class _RunProgressTracker:
                 # Unknown total (budget-driven runs): emit periodically to avoid noisy logs.
                 if completed != 1 and completed % 25 != 0:
                     return
+                self._emit_progress_snapshot(
+                    conversation_id=conversation_id,
+                    completed=completed,
+                    elapsed_seconds=elapsed_seconds,
+                )
                 logger.info(
                     "[PROGRESS] ts=%s done=%d left=unknown elapsed=%s eta=unknown last=%s",
                     _now_iso_timestamp(),
@@ -98,6 +135,13 @@ class _RunProgressTracker:
             )
             eta_str = _format_eta_timestamp(eta_seconds)
             completion_pct = (completed / self.total) * 100 if self.total > 0 else 100.0
+            self._emit_progress_snapshot(
+                conversation_id=conversation_id,
+                completed=completed,
+                elapsed_seconds=elapsed_seconds,
+                remaining=remaining,
+                eta_seconds=eta_seconds,
+            )
             logger.info(
                 "[PROGRESS] ts=%s done=%d/%d pct=%.1f%% left=%d elapsed=%s eta=%s last=%s",
                 _now_iso_timestamp(),
@@ -124,6 +168,7 @@ def run_unified(
         output_conversations: bool = False,
         interactive_realtime_controls: bool = False,
         resume_incomplete: bool = False,
+        progress_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
     return asyncio.run(run_unified_async(
@@ -138,6 +183,7 @@ def run_unified(
         output_conversations=output_conversations,
         interactive_realtime_controls=interactive_realtime_controls,
         resume_incomplete=resume_incomplete,
+        progress_sink=progress_sink,
     ))
 
 
@@ -154,6 +200,7 @@ async def run_unified_async(
         output_conversations: bool = False,
         interactive_realtime_controls: bool = False,
         resume_incomplete: bool = False,
+        progress_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     persona_filter = _resolve_persona_filter(contract, persona_filter)
     if run_id_override:
@@ -304,7 +351,19 @@ async def run_unified_async(
         progress_total = contract.eval_plan.total_conversations
     else:
         progress_total = len(plan)
-    progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat)
+    if progress_sink is not None:
+        progress_sink({
+            "phase": "running",
+            "completed": len(completed_conversation_ids),
+            "total": progress_total,
+            "last_item": None,
+            "elapsed_seconds": 0.0,
+            "eta_seconds": None,
+            "details": {
+                "remaining": (progress_total - len(completed_conversation_ids)) if progress_total is not None else None,
+            },
+        })
+    progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat, progress_sink=progress_sink)
     processed_conversation_ids = set(completed_conversation_ids)
 
     effective_max_concurrency = (

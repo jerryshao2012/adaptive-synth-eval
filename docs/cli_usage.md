@@ -202,7 +202,6 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
 - In single-persona mode (one persona in contract or using `--persona` flag), session switching is disabled.
 - Supported commands:
   - `h/help`: Show available controls.
-  - `st/status`: Show current playback speed, mode, active behavior, active persona, active conversation session, and turn progress (`turns_completed`/`turns_remaining`) when available.
   - `+/faster` or `-/slower`: Adjust turn playback speed.
   - `p/pause`: Pause or resume conversation turns.
   - `q/stop`: Stop the simulation early.
@@ -211,6 +210,7 @@ uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --realti
   - `s/switch <persona_id-conversation_id|conversation_id>` (disabled in single-persona runs): Explicitly switch to another active conversation session.
 - Behavior changes apply to the active persona and persist across session switches. Each persona can have its own distinct behavior mode.
 - The prompt remains stable while logs stream above it, with active persona/session updating when switched.
+- Long-running commands now show a live bottom status bar with progress, so there is no separate realtime status command.
 - Controls are ephemeral and end automatically when the run completes or is stopped.
 
 ### Realtime Session Control Example
@@ -227,9 +227,6 @@ Conversation updated
 ⚡> [P002-conv_000002] style aggressive
 Behavior updated for P002
 
-# Check status (includes active session)
-⚡> [P002-conv_000002] st
-Status: delay=0.80s, mode=running, behavior=aggressive, persona=P002, session=conv_000002, active_sessions=3, turns_completed=5, turns_remaining=11, active_turns=2/6 (remaining=4)
 ```
 
 ---

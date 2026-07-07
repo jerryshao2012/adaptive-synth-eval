@@ -73,7 +73,7 @@ def test_realtime_controller_per_persona_behavior_modes():
     controller.set_active_persona("P1")
     assert controller.get_behavior_for_persona() == "polite"
 
-    # Verify status shows correct behavior for active persona
+    # Verify the internal status text shows correct behavior for active persona.
     status = controller._status_text()
     assert "behavior=polite" in status
     assert "persona=P1" in status
@@ -110,8 +110,8 @@ def test_realtime_controller_get_behavior_for_persona():
     assert controller.get_behavior_for_persona() == "aggressive"
 
 
-def test_realtime_controller_status_shows_persona_behavior():
-    """Test that status command shows the correct behavior for active persona."""
+def test_realtime_controller_status_text_shows_persona_behavior():
+    """Test that the internal status text shows the correct behavior for active persona."""
     personas = {
         "P1": {"role": "tester"},
         "P2": {"role": "manager"},
@@ -410,15 +410,15 @@ def test_realtime_controller_shortcuts_for_list_and_switch():
     assert controller.active_session_id == "conv_000002"
 
 
-def test_realtime_controller_status_shortcut_still_available():
+def test_realtime_controller_status_shortcut_is_removed():
     controller = RealtimeChatController(initial_delay_seconds=0.5)
 
     status = controller.apply_command("st")
 
-    assert status.startswith("Status:")
+    assert "Unknown command" in status
 
 
-def test_realtime_status_includes_conversation_progress_and_eta_fields():
+def test_realtime_status_text_includes_conversation_progress_and_eta_fields():
     controller = RealtimeChatController(
         initial_delay_seconds=0.5,
         personas={"P1": {}},
@@ -426,14 +426,14 @@ def test_realtime_status_includes_conversation_progress_and_eta_fields():
     )
     controller.register_conversation_session("conv_000001", "P1", total_turns=3)
 
-    status = controller.apply_command("status")
+    status = controller._status_text()
     assert "ts=" in status
     assert "conversations_done=0/2" in status
     assert "conversations_left=2" in status
     assert "eta=unknown" in status
 
     controller.notify_conversation_complete("P1", "conv_000001")
-    status = controller.apply_command("status")
+    status = controller._status_text()
     assert "conversations_done=1/2" in status
     assert "conversations_left=1" in status
     assert "eta=" in status
@@ -476,7 +476,7 @@ def test_register_conversation_session_does_not_steal_active_session():
     assert controller.active_persona_id == "P1"
 
 
-def test_realtime_status_reports_turn_progress_when_available():
+def test_realtime_status_text_reports_turn_progress_when_available():
     controller = RealtimeChatController(
         initial_delay_seconds=0.5,
         personas={"P1": {}, "P2": {}},
@@ -486,7 +486,7 @@ def test_realtime_status_reports_turn_progress_when_available():
     controller.notify_turn_complete("conv_000001", count=2)
     controller.notify_turn_complete("conv_000002", count=1)
 
-    status = controller.apply_command("status")
+    status = controller._status_text()
 
     assert "turns_completed=3" in status
     assert "turns_remaining=7" in status

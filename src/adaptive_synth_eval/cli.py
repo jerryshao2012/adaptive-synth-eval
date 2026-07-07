@@ -3,16 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 import yaml
+from pathlib import Path
 
 from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 from adaptive_synth_eval.evaluation.modes import get_mode
+from adaptive_synth_eval.live_status import LiveStatusBar
 from adaptive_synth_eval.loop.audit import build_loop_audit
 from adaptive_synth_eval.loop.planner import LoopReasoner
 from adaptive_synth_eval.loop.policy import LoopPolicyEngine
@@ -200,6 +201,22 @@ def _log_run_configuration(
             realtime_chat=realtime_chat,
     ):
         logger.info(line)
+
+
+def _run_with_live_status(
+        *,
+        title: str,
+        enabled: bool,
+        runner,
+) -> dict[str, Any]:
+    live_status = LiveStatusBar(title=title, enabled=enabled)
+    started = live_status.start()
+    try:
+        return runner(live_status.update if live_status.enabled else None)
+    finally:
+        if started:
+            live_status.update(phase="complete")
+        live_status.stop()
 
 
 def detect_mode_from_file(path_str: str) -> str:
@@ -775,31 +792,41 @@ def _execute_contract_run(
         controls_enabled = interactive_realtime_controls
         if controls_enabled is None:
             controls_enabled = realtime_chat
-        return run_simulation(
-            contract,
-            dry_run=dry_run,
-            output_conversations=output_conversations,
-            realtime_chat=realtime_chat,
-            interactive_realtime_controls=controls_enabled,
-            persona_filter=persona_filter,
-            resume_incomplete=resume_incomplete,
+        return _run_with_live_status(
+            title="ASE RUN",
+            enabled=not realtime_chat and sys.stdout.isatty(),
+            runner=lambda progress_sink: run_simulation(
+                contract,
+                dry_run=dry_run,
+                output_conversations=output_conversations,
+                realtime_chat=realtime_chat,
+                interactive_realtime_controls=controls_enabled,
+                persona_filter=persona_filter,
+                resume_incomplete=resume_incomplete,
+                progress_sink=progress_sink,
+            ),
         )
 
     controls_enabled = interactive_realtime_controls
     if controls_enabled is None:
         controls_enabled = realtime_chat
-    return mode.run(
-        contract,
-        dry_run=dry_run,
-        persona_filter=persona_filter,
-        scenario_filter=scenario_filter,
-        adversarial_filter=adversarial_filter,
-        max_concurrency_override=max_concurrency_override,
-        run_id_override=run_id_override,
-        realtime_chat=realtime_chat,
-        output_conversations=output_conversations,
-        interactive_realtime_controls=controls_enabled,
-        resume_incomplete=resume_incomplete,
+    return _run_with_live_status(
+        title="ASE RUN",
+        enabled=not realtime_chat and sys.stdout.isatty(),
+        runner=lambda progress_sink: mode.run(
+            contract,
+            dry_run=dry_run,
+            persona_filter=persona_filter,
+            scenario_filter=scenario_filter,
+            adversarial_filter=adversarial_filter,
+            max_concurrency_override=max_concurrency_override,
+            run_id_override=run_id_override,
+            realtime_chat=realtime_chat,
+            output_conversations=output_conversations,
+            interactive_realtime_controls=controls_enabled,
+            resume_incomplete=resume_incomplete,
+            progress_sink=progress_sink,
+        ),
     )
 
 

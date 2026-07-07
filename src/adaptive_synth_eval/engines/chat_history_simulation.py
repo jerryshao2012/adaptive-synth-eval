@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import asdict
+from typing import Any, Callable
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
 from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
@@ -54,6 +55,7 @@ def run_simulation(
         interactive_realtime_controls: bool = False,
         persona_filter: str | None = None,
         resume_incomplete: bool = False,
+        progress_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
     return asyncio.run(
@@ -65,6 +67,7 @@ def run_simulation(
             interactive_realtime_controls=interactive_realtime_controls,
             persona_filter=persona_filter,
             resume_incomplete=resume_incomplete,
+            progress_sink=progress_sink,
         )
     )
 
@@ -78,6 +81,7 @@ async def run_simulation_async(
         interactive_realtime_controls: bool = False,
         persona_filter: str | None = None,
         resume_incomplete: bool = False,
+        progress_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
@@ -161,6 +165,17 @@ async def run_simulation_async(
             },
         )
     processed_conversation_ids = set(completed_conversation_ids)
+
+    if progress_sink is not None:
+        progress_sink({
+            "phase": "running",
+            "completed": len(processed_conversation_ids),
+            "total": planned_conversations_total,
+            "last_item": None,
+            "elapsed_seconds": 0.0,
+            "eta_seconds": None,
+            "details": {"remaining": len(plan)},
+        })
 
     if interactive_realtime_controls and not realtime_chat:
         logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
@@ -460,6 +475,19 @@ async def run_simulation_async(
 
             writer.append_jsonl("conversations.jsonl", [conv_row], overwrite=not wrote_conversations)
             wrote_conversations = True
+
+            if progress_sink is not None:
+                completed = len(processed_conversation_ids)
+                elapsed_seconds = max(0.0, time.perf_counter() - run_start)
+                progress_sink({
+                    "phase": "running",
+                    "completed": completed,
+                    "total": planned_conversations_total,
+                    "last_item": conversation_id,
+                    "elapsed_seconds": elapsed_seconds,
+                    "eta_seconds": None,
+                    "details": {"remaining": max(planned_conversations_total - completed, 0)},
+                })
 
             if loc_turn_rows:
                 writer.append_jsonl("turns.jsonl", loc_turn_rows, overwrite=not wrote_turns)

@@ -11,3 +11,6 @@ adaptive_synth_eval.egg-info/
 .env
 .worktrees/
 .claude/
+graphify-out/
+.github/
+.vscode/
