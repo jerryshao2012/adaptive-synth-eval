@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Shield,
@@ -10,21 +11,31 @@ import {
   Activity,
   RefreshCw,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import type { TimePeriodPreset } from "@/types/evaluation";
+import type { EvalRunParameters, TimePeriodPreset } from "@/types/evaluation";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS } from "@/lib/metrics";
+import { cn } from "@/lib/utils";
 import {
   computeKpiSummary,
   extractMetricTimeSeries,
   extractLatencyTimeSeries,
   computeChartSummary,
 } from "@/lib/aggregation";
-import { useEvaluations, usePreviousPeriodEvaluations } from "@/hooks/use-evaluations";
+import {
+  useEvaluations,
+  useMonitoringStatus,
+  usePreviousPeriodEvaluations,
+  useRunList,
+  useStartMonitoring,
+} from "@/hooks/use-evaluations";
 
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { ChartCard, ChartSummaryBar } from "@/components/dashboard/chart-card";
 import { MetricLineChart } from "@/components/dashboard/metric-line-chart";
+import { RunThreadList } from "@/components/dashboard/run-thread-list";
 import { EmptyState, ErrorCard } from "@/components/shared/empty-state";
 import { DetailDialog } from "@/components/dashboard/detail-dialog";
 import type { EvaluationRecord } from "@/types/evaluation";
@@ -46,8 +57,36 @@ const LATENCY_METRICS = [
   { key: "guardrail_latency_ms" as const, label: "Guardrail Latency", fullWidth: false },
 ];
 
+const DEFAULT_MONITORING_CONFIG: EvalRunParameters = {
+  sampleSize: 1000,
+  intervalMinutes: 30,
+  metricVersion: "v1",
+  thresholdVersion: "v1",
+};
+
+function monitoringStatusLabel(status: "not_started" | "queued" | "in_progress" | "completed" | undefined): string {
+  switch (status) {
+    case "completed":
+      return "Completed";
+    case "in_progress":
+      return "In Progress";
+    case "queued":
+      return "Queued";
+    default:
+      return "Not Started";
+  }
+}
+
 export default function DashboardPage() {
-  const [globalPeriod, setGlobalPeriod] = useState<TimePeriodPreset>("this-week");
+  const [globalPeriod] = useState<TimePeriodPreset>("this-week");
+  const [selectedRunId, setSelectedRunId] = useState<string>("");
+  const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(true);
+  const [globalEvalDefaults, setGlobalEvalDefaults] =
+    useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
+  const [threadParamOverrides, setThreadParamOverrides] =
+    useState<Record<string, Partial<EvalRunParameters>>>({});
+  const [expandedOverrideRunId, setExpandedOverrideRunId] = useState<string | null>(null);
+  const [pendingActionRunId, setPendingActionRunId] = useState<string | undefined>(undefined);
   const [chartPeriods, setChartPeriods] = useState<
     Record<string, TimePeriodPreset>
   >({});
@@ -58,15 +97,95 @@ export default function DashboardPage() {
   } | null>(null);
 
   const {
+    data: runSummaries = [],
+    isLoading: isRunsLoading,
+    refetch: refetchRuns,
+  } = useRunList();
+
+  const activeRunId = useMemo(() => {
+    if (
+      selectedRunId &&
+      runSummaries.some((run) => run.runId === selectedRunId)
+    ) {
+      return selectedRunId;
+    }
+    return runSummaries[0]?.runId || "";
+  }, [runSummaries, selectedRunId]);
+
+  const selectedRun = useMemo(
+    () => runSummaries.find((run) => run.runId === activeRunId) || null,
+    [activeRunId, runSummaries]
+  );
+
+  const {
+    data: monitoringStatus,
+    refetch: refetchMonitoringStatus,
+  } = useMonitoringStatus(activeRunId || undefined);
+  const startMonitoring = useStartMonitoring();
+  const canLoadEvaluations = Boolean(activeRunId);
+
+  const {
     data: evaluations,
     isLoading,
     isError,
     error,
     refetch,
     dataUpdatedAt,
-  } = useEvaluations(globalPeriod);
+  } = useEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
   const { data: previousEvaluations } =
-    usePreviousPeriodEvaluations(globalPeriod);
+    usePreviousPeriodEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
+
+  async function handleMonitoringAction(
+    runId: string,
+    action: "start" | "continue"
+  ) {
+    if (!runId) {
+      return;
+    }
+
+    setPendingActionRunId(runId);
+    setSelectedRunId(runId);
+
+    const run = runSummaries.find((item) => item.runId === runId) || null;
+    const override = threadParamOverrides[runId] || {};
+    const metricVersion =
+      override.metricVersion ||
+      monitoringStatus?.metricVersion ||
+      run?.metricVersion ||
+      globalEvalDefaults.metricVersion;
+    const thresholdVersion =
+      override.thresholdVersion ||
+      monitoringStatus?.thresholdVersion ||
+      run?.thresholdVersion ||
+      globalEvalDefaults.thresholdVersion;
+
+    const sampleSize = Number(override.sampleSize ?? globalEvalDefaults.sampleSize);
+    const intervalMinutes = Number(
+      override.intervalMinutes ?? globalEvalDefaults.intervalMinutes
+    );
+
+    try {
+      await startMonitoring.mutateAsync({
+        runId,
+        action,
+        sampleSize,
+        intervalMinutes,
+        metricVersion,
+        thresholdVersion,
+      });
+      await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
+    } finally {
+      setPendingActionRunId(undefined);
+    }
+  }
+
+  function refreshAll() {
+    void refetchRuns();
+    if (activeRunId) {
+      void refetchMonitoringStatus();
+    }
+    void refetch();
+  }
 
   // KPI aggregation
   const kpi = useMemo(
@@ -270,6 +389,18 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setIsThreadPanelOpen((prev) => !prev)}
+            title={isThreadPanelOpen ? "Close thread list" : "Open thread list"}
+          >
+            {isThreadPanelOpen ? (
+              <ChevronLeft className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </Button>
           {dataUpdatedAt && (
             <span className="text-xs text-muted-foreground">
               Updated {formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}
@@ -278,7 +409,7 @@ export default function DashboardPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refetch()}
+            onClick={refreshAll}
             disabled={isLoading}
           >
             <RefreshCw
@@ -291,7 +422,135 @@ export default function DashboardPage() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1280px] px-6 py-6">
+        {isThreadPanelOpen && (
+          <button
+            type="button"
+            aria-label="Close thread list"
+            className="fixed inset-0 z-30 bg-black/35 lg:hidden"
+            onClick={() => setIsThreadPanelOpen(false)}
+          />
+        )}
+
+        {runSummaries.length > 0 && (
+          <aside
+            className={cn(
+              "fixed top-16 bottom-0 left-0 z-40 w-[360px] border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-transform duration-300 ease-out",
+              isThreadPanelOpen ? "translate-x-0" : "-translate-x-full"
+            )}
+          >
+            <RunThreadList
+              runs={runSummaries}
+              selectedRunId={activeRunId}
+              onSelectRun={setSelectedRunId}
+              globalDefaults={globalEvalDefaults}
+              onGlobalChange={setGlobalEvalDefaults}
+              overrides={threadParamOverrides}
+              expandedOverrideRunId={expandedOverrideRunId}
+              onToggleOverrideEditor={(runId) =>
+                setExpandedOverrideRunId((prev) => (prev === runId ? null : runId))
+              }
+              onOverrideChange={(runId, patch) => {
+                setThreadParamOverrides((prev) => ({
+                  ...prev,
+                  [runId]: {
+                    ...prev[runId],
+                    ...patch,
+                  },
+                }));
+              }}
+              onClearOverride={(runId) => {
+                setThreadParamOverrides((prev) => {
+                  const next = { ...prev };
+                  delete next[runId];
+                  return next;
+                });
+              }}
+              pendingActionRunId={pendingActionRunId}
+              onStartRun={(runId) => void handleMonitoringAction(runId, "start")}
+              onResumeRun={(runId) => void handleMonitoringAction(runId, "continue")}
+            />
+          </aside>
+        )}
+
+        <div
+          className={cn(
+            "mx-auto max-w-[1280px] px-6 py-6 transition-[padding] duration-300 ease-out",
+            isThreadPanelOpen ? "lg:pl-[390px]" : "lg:pl-6"
+          )}
+        >
+          {!isRunsLoading && runSummaries.length === 0 && (
+            <EmptyState
+              message="No run folders found under outputs/runs."
+              suggestion="Generate a run first, then start monitoring from the dashboard."
+            />
+          )}
+
+          {runSummaries.length > 0 && (
+            <div className="mb-6">
+              <Card className="border-border bg-card">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-semibold text-foreground">
+                    Monitoring Progress
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-foreground">
+                        {selectedRun ? monitoringStatusLabel(selectedRun.monitoringStatus) : "No run selected"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {monitoringStatus?.updatedAt
+                          ? `Updated ${formatDistanceToNow(new Date(monitoringStatus.updatedAt), { addSuffix: true })}`
+                          : "No monitoring state yet"}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {selectedRun?.canStart && (
+                        <Button
+                          size="sm"
+                          onClick={() => void handleMonitoringAction(selectedRun.runId, "start")}
+                          disabled={startMonitoring.isPending || !activeRunId || !!pendingActionRunId}
+                        >
+                          Start Eval
+                        </Button>
+                      )}
+                      {selectedRun?.canContinue && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleMonitoringAction(selectedRun.runId, "continue")}
+                          disabled={startMonitoring.isPending || !activeRunId || !!pendingActionRunId}
+                        >
+                          Continue Eval
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Completion</span>
+                      <span>{monitoringStatus?.progress.percent ?? selectedRun?.progress.percent ?? 0}%</span>
+                    </div>
+                    <progress
+                      className="h-2 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary"
+                      max={100}
+                      value={monitoringStatus?.progress.percent ?? selectedRun?.progress.percent ?? 0}
+                    />
+                  </div>
+
+                  <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
+                    <div className="mb-2 font-medium text-foreground">Progress Notes</div>
+                    <pre className="whitespace-pre-wrap font-sans leading-5">
+                      {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
+                    </pre>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
           {/* Error state */}
           {isError && (
             <ErrorCard
@@ -303,9 +562,17 @@ export default function DashboardPage() {
           {/* Empty state */}
           {!isLoading && !isError && evaluations?.length === 0 && (
             <EmptyState
-              message="No evaluation data for this period."
-              suggestion="Try widening the time range or run an evaluation first."
-              onAction={() => refetch()}
+              message={
+                selectedRun?.monitoringStatus === "completed"
+                  ? "No evaluation data for this period."
+                  : "Monitoring results are not complete for this run yet."
+              }
+              suggestion={
+                selectedRun?.monitoringStatus === "completed"
+                  ? "Try widening the time range or choose another run."
+                  : "Start or continue evaluation from the progress panel, then refresh when rows have been scored."
+              }
+              onAction={refreshAll}
               actionLabel="Refresh"
             />
           )}

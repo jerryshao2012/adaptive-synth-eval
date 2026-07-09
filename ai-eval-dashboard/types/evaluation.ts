@@ -47,12 +47,18 @@ export interface EvaluationRecord {
   turn_id: string;
   user_text: string;
   response_text: string;
-  variant: "raw" | "delivered";
+  variant: "raw" | "delivered" | "monitoring";
   safety_status: "pass" | "warn" | "fail";
   performance_status: "pass" | "warn" | "fail";
   safety_metrics: SafetyMetrics;
   performance_metrics: PerformanceMetrics;
   system_reliability: SystemReliability;
+  run_id?: string;
+  conversation_id?: string;
+  metric_version?: string;
+  threshold_version?: string;
+  sample_window_id?: number;
+  source_line_index?: number;
 }
 
 export interface EvaluationsResponse {
@@ -69,6 +75,65 @@ export interface BatchEvalStatus {
     total: number;
   };
   started_at?: string;
+}
+
+export interface RunSummary {
+  runId: string;
+  mode: string;
+  monitoringStatus: "not_started" | "queued" | "in_progress" | "completed";
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  progress: {
+    completed: number;
+    total: number;
+    percent: number;
+  };
+  metricVersion?: string;
+  thresholdVersion?: string;
+  hasMonitoringState: boolean;
+  hasMonitoringScores: boolean;
+  canStart: boolean;
+  canContinue: boolean;
+}
+
+export interface MonitoringRunStatus {
+  runId: string;
+  monitoringStatus: "not_started" | "queued" | "in_progress" | "completed";
+  progress: {
+    completed: number;
+    total: number;
+    percent: number;
+  };
+  metricVersion?: string;
+  thresholdVersion?: string;
+  progressMarkdown: string | null;
+  state: Record<string, unknown> | null;
+  hasMonitoringScores: boolean;
+  updatedAt?: string;
+}
+
+export interface EvalRunParameters {
+  sampleSize: number;
+  intervalMinutes: number;
+  metricVersion: string;
+  thresholdVersion: string;
+}
+
+export interface MonitoringStartRequest {
+  runId: string;
+  sampleSize?: number;
+  intervalMinutes?: number;
+  metricVersion: string;
+  thresholdVersion?: string;
+  action: "start" | "continue";
+}
+
+export interface MonitoringStartResponse {
+  runId: string;
+  started: boolean;
+  command: string;
+  monitoringStatus: "queued" | "in_progress";
 }
 
 // Per-metric threshold configuration

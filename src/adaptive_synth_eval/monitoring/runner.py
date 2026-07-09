@@ -15,6 +15,7 @@ from adaptive_synth_eval.config.contract import ContractError
 _MONITORING_STATE_FILE = "monitoring_state.json"
 _MONITORING_SCORES_FILE = "monitoring_scores.jsonl"
 _CHAT_HISTORY_FILE = "chat_history.jsonl"
+_PROGRESS_MARKDOWN_FILE = "eval_progress.md"
 
 _SAFETY_WARN_FAIL = {
     "toxicity": (85.0, 65.0),
@@ -110,6 +111,7 @@ def run_monitoring(
         llm_provider=(llm.model_provider or "none") if not dry_run else "dry_run",
     )
     _write_monitoring_state(run_dir, current_state)
+    _write_progress_markdown(run_dir, current_state)
 
     while True:
         if max_windows is not None and windows_processed_this_run >= max_windows:
@@ -172,6 +174,7 @@ def run_monitoring(
             llm_provider=(llm.model_provider or "none") if not dry_run else "dry_run",
         )
         _write_monitoring_state(run_dir, current_state)
+        _write_progress_markdown(run_dir, current_state)
 
         if next_line_index >= total_lines:
             break
@@ -192,6 +195,7 @@ def run_monitoring(
         llm_provider=(llm.model_provider or "none") if not dry_run else "dry_run",
     )
     _write_monitoring_state(run_dir, final_state)
+    _write_progress_markdown(run_dir, final_state)
 
     return {
         "run_id": run_dir.name,
@@ -523,6 +527,47 @@ def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, default=str) + "\n")
+
+
+def _write_progress_markdown(run_dir: Path, state: dict[str, Any]) -> Path:
+    total_lines = int(state.get("total_lines") or 0)
+    evaluated_rows = int(state.get("evaluated_rows") or 0)
+    skipped_rows = int(state.get("skipped_rows") or 0)
+    next_line_index = int(state.get("next_line_index") or 0)
+    windows_completed = int(state.get("windows_completed") or 0)
+    percent_complete = 0.0
+    if total_lines > 0:
+        percent_complete = round((next_line_index / total_lines) * 100.0, 2)
+
+    lines = [
+        "# Eval Progress",
+        "",
+        f"- Run ID: {state.get('run_id') or run_dir.name}",
+        f"- Status: {state.get('status') or 'unknown'}",
+        f"- Updated At: {state.get('updated_at') or now_iso()}",
+        f"- Metric Version: {state.get('metric_version') or 'unknown'}",
+        f"- Threshold Version: {state.get('threshold_version') or 'unknown'}",
+        f"- LLM Provider: {state.get('llm_provider') or 'unknown'}",
+        f"- Sampling Window Size: {state.get('sample_size') or 0}",
+        f"- Sampling Interval Minutes: {state.get('interval_minutes') or 0}",
+        f"- Windows Completed: {windows_completed}",
+        f"- Next Line Index: {next_line_index}",
+        f"- Total Lines: {total_lines}",
+        f"- Evaluated Rows: {evaluated_rows}",
+        f"- Skipped Rows: {skipped_rows}",
+        f"- Percent Complete: {percent_complete}%",
+        "",
+        "## Summary",
+        "",
+        (
+            f"Monitoring is {state.get('status') or 'unknown'} after evaluating "
+            f"{evaluated_rows} rows across {windows_completed} sampling window(s)."
+        ),
+    ]
+
+    path = run_dir / _PROGRESS_MARKDOWN_FILE
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def _resolve_incomplete_action(configured: str, run_dir: Path) -> str:

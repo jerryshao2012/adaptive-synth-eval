@@ -61,6 +61,10 @@ def test_monitoring_cli_dry_run_writes_scores_and_state(tmp_path):
     assert state["status"] == "completed"
     assert state["next_line_index"] == 3
 
+    progress_text = (run_dir / "eval_progress.md").read_text(encoding="utf-8")
+    assert "# Eval Progress" in progress_text
+    assert "- Status: completed" in progress_text
+
 
 def test_monitoring_cli_skips_duplicate_same_metric_version(tmp_path):
     run_dir = tmp_path / "outputs" / "runs" / "run_b"

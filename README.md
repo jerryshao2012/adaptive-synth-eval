@@ -183,6 +183,18 @@ To make the `ase` command available globally in your workspace without prefixing
 uv tool install --editable .
 ```
 
+### Dashboard Setup
+
+To run the monitoring dashboard with Yarn:
+
+```bash
+cd ai-eval-dashboard
+yarn install
+yarn dev
+```
+
+This starts the dashboard on `http://localhost:3000` and lets it read run artifacts from `outputs/runs/` in the repository root.
+
 ---
 
 ## Quick Start

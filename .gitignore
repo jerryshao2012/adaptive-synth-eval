@@ -14,3 +14,5 @@ adaptive_synth_eval.egg-info/
 graphify-out/
 .github/
 .vscode/
+next-env.d.ts
+yarn.lock

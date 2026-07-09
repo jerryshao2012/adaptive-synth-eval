@@ -1,24 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This is the local dashboard for monitoring evaluation runs produced by the
+Adaptive Synth Eval CLI.
 
 ## Getting Started
 
-First, run the development server:
+Install dependencies with Yarn:
 
 ```bash
-npm run dev
-# or
+yarn install
+```
+
+Then start the development server:
+
+```bash
 yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+
+If you are starting from the repository root:
+
+```bash
+cd ai-eval-dashboard
+yarn install
+yarn dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+The dashboard reads run artifacts from the parent repository, including:
+
+- `../outputs/runs/<run_id>/monitoring_scores.jsonl`
+- `../outputs/runs/<run_id>/monitoring_state.json`
+- `../outputs/runs/<run_id>/eval_progress.md`
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Useful Yarn commands:
+
+```bash
+yarn dev
+yarn build
+yarn start
+yarn lint
+```
 
 ## Learn More
 
@@ -29,8 +51,7 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
+## Notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The dashboard can trigger local monitoring runs through its server routes, so run it from this repository checkout.
+- If `yarn lint` or `yarn build` fails because dependencies are missing, rerun `yarn install` inside `ai-eval-dashboard`.
