@@ -99,7 +99,7 @@ export function MetricLineChart({
 
   return (
     <div className={cn("h-[200px] w-full", className)}>
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" key={`${period ?? "default"}-${data.length}`}>
         <LineChart
           data={formattedData}
           margin={{ top: 8, right: 8, bottom: 14, left: 0 }}

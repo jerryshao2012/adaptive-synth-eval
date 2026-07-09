@@ -54,6 +54,12 @@
   --color-surface: var(--surface);
   --color-header-bg: var(--header-bg);
   --color-border-light: var(--border-light);
+
+  /* HITL review tokens */
+  --color-human-review: var(--human-review);
+  --color-ai-review: var(--ai-review);
+  --color-delta-positive: var(--delta-positive);
+  --color-delta-negative: var(--delta-negative);
 }
 
 :root {
@@ -102,6 +108,12 @@
   --surface: #141a22;
   --header-bg: #102e40;
   --border-light: #1e2a3a;
+
+  /* HITL review tokens */
+  --human-review: #10B981;   /* emerald — human scores */
+  --ai-review: #6366F1;      /* indigo — AI scores */
+  --delta-positive: #22C55E; /* green — human scored higher */
+  --delta-negative: #EF4444; /* red — human scored lower */
 }
 
 /* BMO Light mode — matches bmo-deepagent-ui @media (prefers-color-scheme: light) */
@@ -139,7 +151,50 @@
     --surface: #ffffff;
     --header-bg: #ffffff;
     --border-light: #e3eaf3;
+
+    /* HITL review tokens — same values, suitable for light backgrounds */
+    --human-review: #059669;
+    --ai-review: #4F46E5;
+    --delta-positive: #16A34A;
+    --delta-negative: #DC2626;
   }
+}
+
+/* Manual theme toggle override — matches light mode variables above */
+[data-theme="light"] {
+  --background: hsl(220 50% 97%);
+  --foreground: hsl(213 53% 13%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(213 53% 13%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(213 53% 13%);
+  --primary: hsl(220 85% 43%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(216 29% 94%);
+  --secondary-foreground: hsl(213 53% 13%);
+  --muted: hsl(216 29% 94%);
+  --muted-foreground: hsl(214 26% 40%);
+  --accent: hsl(216 29% 94%);
+  --accent-foreground: hsl(213 53% 13%);
+  --destructive: hsl(0 100% 47%);
+  --border: hsl(214 20% 86%);
+  --input: hsl(214 20% 86%);
+  --ring: hsl(220 85% 43%);
+  --sidebar: hsl(220 50% 97%);
+  --sidebar-foreground: hsl(213 53% 13%);
+  --sidebar-primary: hsl(220 85% 43%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(216 29% 94%);
+  --sidebar-accent-foreground: hsl(213 53% 13%);
+  --sidebar-border: hsl(214 20% 86%);
+  --sidebar-ring: hsl(220 85% 43%);
+  --surface: #ffffff;
+  --header-bg: #ffffff;
+  --border-light: #e3eaf3;
+  --human-review: #059669;
+  --ai-review: #4F46E5;
+  --delta-positive: #16A34A;
+  --delta-negative: #DC2626;
 }
 
 @layer base {

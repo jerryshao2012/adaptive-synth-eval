@@ -378,11 +378,11 @@ export async function startMonitoringRun(
     incompleteAction,
   ].join(" ");
 
-  const child = spawn("cmd.exe", ["/c", command], {
+  const child = spawn(command, [], {
     cwd: REPO_ROOT,
     detached: true,
     stdio: "ignore",
-    windowsHide: true,
+    shell: true,
   });
   child.unref();
 

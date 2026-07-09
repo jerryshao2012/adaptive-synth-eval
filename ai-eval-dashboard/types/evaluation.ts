@@ -157,6 +157,7 @@ export interface MonitoringStartResponse {
 export interface MetricThreshold {
   metricKey: string;
   label: string;
+  description: string;
   warnBelow: number;
   failBelow: number;
 }
@@ -169,3 +170,107 @@ export type TimePeriodPreset =
   | "last-7-days"
   | "last-30-days"
   | "last-90-days";
+
+// ---- HITL Review Types ----
+
+export type MetricScoreStatus = "pass" | "warn" | "fail";
+
+export interface HumanReview {
+  reviewId: string;
+  evaluationRecordId: string;
+  runId: string;
+  conversationId: string;
+  turnId: string;
+  reviewerId: string;
+  reviewStatus: "draft" | "submitted" | "approved";
+
+  safetyScores: Record<
+    string,
+    { aiScore: number; humanScore: number; status: MetricScoreStatus }
+  >;
+  performanceScores: Record<
+    string,
+    { aiScore: number; humanScore: number; status: MetricScoreStatus }
+  >;
+
+  overallStatus: MetricScoreStatus;
+  notes: string;
+  flags: Array<
+    "disputed" | "needs_discussion" | "exemplar" | "reviewed_ok"
+  >;
+  reviewedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewQueueItem {
+  runId: string;
+  conversationId: string;
+  turnId: string;
+  userText: string;
+  responseText: string;
+  timestamp: string;
+  safetyStatus: MetricScoreStatus;
+  performanceStatus: MetricScoreStatus;
+  avgAiScore: number;
+  hasHumanReview: boolean;
+  reviewStatus: "none" | "draft" | "submitted" | "approved" | null;
+  flags: HumanReview["flags"];
+  reviewedAt: string | null;
+}
+
+export interface ReviewQueueFilters {
+  status?: MetricScoreStatus;
+  metricKey?: string;
+  metricMaxScore?: number;
+  metricMinScore?: number;
+  runId?: string;
+  searchText?: string;
+  disputedOnly?: boolean;
+  unreviewedOnly?: boolean;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "timestamp" | "avgAiScore" | "safetyStatus" | "reviewStatus";
+  sortOrder?: "asc" | "desc";
+}
+
+export interface ReviewQueueResponse {
+  items: ReviewQueueItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ReviewStats {
+  totalRecords: number;
+  reviewedCount: number;
+  draftCount: number;
+  approvedCount: number;
+  disputedCount: number;
+  averageAgreement: number;
+  perMetricAgreement: Record<string, number>;
+}
+
+export interface GoldenDataset {
+  datasetId: string;
+  name: string;
+  version: string;
+  status: "draft" | "published" | "archived";
+  recordRefs: Array<{
+    runId: string;
+    conversationId: string;
+    turnId: string;
+  }>;
+  filters: {
+    runIds?: string[];
+    metricKeys?: string[];
+    minScore?: number;
+  };
+  stats: {
+    totalRecords: number;
+    reviewedCount: number;
+    interRaterAgreement: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+}

@@ -8,6 +8,8 @@ import type {
   MonitoringRunStatus,
   MonitoringStartRequest,
   MonitoringStartResponse,
+  ReviewQueueResponse,
+  ReviewStats,
   RunSummary,
   TimePeriodPreset,
   TraceDetailsResponse,
@@ -158,5 +160,138 @@ export function useTraceDetails(point: MetricPointIdentity | null) {
       return (await res.json()) as TraceDetailsResponse;
     },
     enabled: Boolean(point),
+  });
+}
+
+// ---- HITL Review Hooks ----
+
+export function useReviewQueue(filters: Record<string, unknown> = {}) {
+  return useQuery({
+    queryKey: ["review-queue", filters],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== null && value !== "") {
+          params.set(key, String(value));
+        }
+      }
+      const res = await fetch("/api/review/queue?" + params.toString());
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return (await res.json()) as ReviewQueueResponse;
+    },
+    staleTime: 60_000,
+    refetchInterval: false,
+  });
+}
+
+export function useReviewStats() {
+  return useQuery<ReviewStats>({
+    queryKey: ["review-stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/review/stats");
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return (await res.json()) as ReviewStats;
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useReviewDetail(
+  runId: string | undefined,
+  turnId: string | undefined
+) {
+  return useQuery({
+    queryKey: ["review-detail", runId, turnId],
+    queryFn: async () => {
+      const res = await fetch(`/api/review/${runId}/${turnId}`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return await res.json();
+    },
+    enabled: Boolean(runId) && Boolean(turnId),
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveReview() {
+  return useMutation({
+    mutationFn: async ({
+      runId,
+      turnId,
+      review,
+    }: {
+      runId: string;
+      turnId: string;
+      review: Record<string, unknown>;
+    }) => {
+      const res = await fetch(`/api/review/${runId}/${turnId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(review),
+      });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+export function useBulkReviewAction() {
+  return useMutation({
+    mutationFn: async (payload: {
+      action: string;
+      records: Array<{ runId: string; turnId: string }>;
+      flag?: string;
+    }) => {
+      const res = await fetch("/api/review/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+export function useGoldenDatasets() {
+  return useQuery({
+    queryKey: ["golden-datasets"],
+    queryFn: async () => {
+      const res = await fetch("/api/golden-dataset");
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return await res.json();
+    },
+    staleTime: 60_000,
+    refetchInterval: false,
+  });
+}
+
+export function useGoldenDataset(id: string | undefined) {
+  return useQuery({
+    queryKey: ["golden-dataset", id],
+    queryFn: async () => {
+      const res = await fetch(`/api/golden-dataset/${id}`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return await res.json();
+    },
+    enabled: Boolean(id),
+  });
+}
+
+export function useCreateDataset() {
+  return useMutation({
+    mutationFn: async (payload: {
+      name: string;
+      version: string;
+      filters: Record<string, unknown>;
+    }) => {
+      const res = await fetch("/api/golden-dataset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return res.json();
+    },
   });
 }
