@@ -4,11 +4,13 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   EvaluationRecord,
   EvaluationsResponse,
+  MetricPointIdentity,
   MonitoringRunStatus,
   MonitoringStartRequest,
   MonitoringStartResponse,
   RunSummary,
   TimePeriodPreset,
+  TraceDetailsResponse,
 } from "@/types/evaluation";
 import { getTimePeriod, formatIntervalParam } from "@/lib/time-periods";
 
@@ -125,5 +127,36 @@ export function useStartMonitoring() {
       }
       return (await res.json()) as MonitoringStartResponse;
     },
+  });
+}
+
+export function useTraceDetails(point: MetricPointIdentity | null) {
+  return useQuery({
+    queryKey: ["trace-details", point],
+    queryFn: async () => {
+      if (!point) {
+        throw new Error("No point selected.");
+      }
+      const params = new URLSearchParams({
+        runId: point.runId,
+        turnId: point.turnId,
+        timestamp: point.timestamp,
+        metricGroup: point.metricGroup,
+        metricKey: point.metricKey,
+      });
+      if (point.conversationId) {
+        params.set("conversationId", point.conversationId);
+      }
+
+      const res = await fetch(`${API_BASE}/trace?${params}`);
+      if (!res.ok) {
+        const error = await res
+          .json()
+          .catch(() => ({ error: "Failed to fetch trace details." }));
+        throw new Error(error.error || `API error: ${res.status} ${res.statusText}`);
+      }
+      return (await res.json()) as TraceDetailsResponse;
+    },
+    enabled: Boolean(point),
   });
 }

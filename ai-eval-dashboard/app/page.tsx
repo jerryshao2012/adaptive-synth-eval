@@ -15,9 +15,12 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import type { EvalRunParameters, TimePeriodPreset } from "@/types/evaluation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { EvalRunParameters, EvaluationRecord, TimePeriodPreset } from "@/types/evaluation";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
+import { getTimePeriod } from "@/lib/time-periods";
 import {
   computeKpiSummary,
   extractMetricTimeSeries,
@@ -30,6 +33,7 @@ import {
   usePreviousPeriodEvaluations,
   useRunList,
   useStartMonitoring,
+  useTraceDetails,
 } from "@/hooks/use-evaluations";
 
 import { KpiCard } from "@/components/dashboard/kpi-card";
@@ -37,8 +41,8 @@ import { ChartCard, ChartSummaryBar } from "@/components/dashboard/chart-card";
 import { MetricLineChart } from "@/components/dashboard/metric-line-chart";
 import { RunThreadList } from "@/components/dashboard/run-thread-list";
 import { EmptyState, ErrorCard } from "@/components/shared/empty-state";
-import { DetailDialog } from "@/components/dashboard/detail-dialog";
-import type { EvaluationRecord } from "@/types/evaluation";
+import { TraceDrawer } from "@/components/dashboard/trace-drawer";
+import type { MetricPointIdentity } from "@/types/evaluation";
 
 // ---- Constants ----
 const SAFETY_METRICS = ["toxicity", "bias_fairness", "robustness", "compliance"] as const;
@@ -77,6 +81,19 @@ function monitoringStatusLabel(status: "not_started" | "queued" | "in_progress" 
   }
 }
 
+function filterEvaluationsByPeriod(
+  rows: EvaluationRecord[],
+  preset: TimePeriodPreset
+): EvaluationRecord[] {
+  const { from, to } = getTimePeriod(preset);
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+  return rows.filter((row) => {
+    const ts = new Date(row.timestamp).getTime();
+    return Number.isFinite(ts) && ts >= fromMs && ts <= toMs;
+  });
+}
+
 export default function DashboardPage() {
   const [globalPeriod] = useState<TimePeriodPreset>("this-week");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
@@ -90,11 +107,7 @@ export default function DashboardPage() {
   const [chartPeriods, setChartPeriods] = useState<
     Record<string, TimePeriodPreset>
   >({});
-  const [detailDialog, setDetailDialog] = useState<{
-    record: EvaluationRecord;
-    metricGroup: "safety" | "performance";
-    metricKey: string;
-  } | null>(null);
+  const [selectedPoint, setSelectedPoint] = useState<MetricPointIdentity | null>(null);
 
   const {
     data: runSummaries = [],
@@ -116,11 +129,18 @@ export default function DashboardPage() {
     () => runSummaries.find((run) => run.runId === activeRunId) || null,
     [activeRunId, runSummaries]
   );
+  const hasLeftPanel = isThreadPanelOpen && runSummaries.length > 0;
+  const hasRightPanel = Boolean(selectedPoint);
 
   const {
     data: monitoringStatus,
     refetch: refetchMonitoringStatus,
   } = useMonitoringStatus(activeRunId || undefined);
+  const {
+    data: traceDetails,
+    isLoading: isTraceLoading,
+    error: traceError,
+  } = useTraceDetails(selectedPoint);
   const startMonitoring = useStartMonitoring();
   const canLoadEvaluations = Boolean(activeRunId);
 
@@ -131,7 +151,7 @@ export default function DashboardPage() {
     error,
     refetch,
     dataUpdatedAt,
-  } = useEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
+  } = useEvaluations("last-90-days", activeRunId || undefined, canLoadEvaluations);
   const { data: previousEvaluations } =
     usePreviousPeriodEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
 
@@ -188,9 +208,13 @@ export default function DashboardPage() {
   }
 
   // KPI aggregation
+  const kpiEvaluations = useMemo(
+    () => filterEvaluationsByPeriod(evaluations || [], globalPeriod),
+    [evaluations, globalPeriod]
+  );
   const kpi = useMemo(
-    () => computeKpiSummary(evaluations || [], previousEvaluations || []),
-    [evaluations, previousEvaluations]
+    () => computeKpiSummary(kpiEvaluations, previousEvaluations || []),
+    [kpiEvaluations, previousEvaluations]
   );
 
   // Per-chart period resolution
@@ -202,11 +226,12 @@ export default function DashboardPage() {
   function renderSafetyCharts() {
     if (!evaluations) return null;
     return SAFETY_METRICS.map((key, i) => {
+      const period = getChartPeriod(key);
+      const scopedEvaluations = filterEvaluationsByPeriod(evaluations, period);
       const threshold = METRIC_THRESHOLDS[key];
-      const points = extractMetricTimeSeries(evaluations, "safety", key);
+      const points = extractMetricTimeSeries(scopedEvaluations, "safety", key, activeRunId);
       const summary = computeChartSummary(points);
       const latest = points[points.length - 1];
-      const period = getChartPeriod(key);
 
       return (
         <ChartCard
@@ -225,21 +250,18 @@ export default function DashboardPage() {
             <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}%`} />
           }
           onViewDetails={
-            latest
-              ? () =>
-                  setDetailDialog({
-                    record: evaluations[evaluations.length - 1],
-                    metricGroup: "safety",
-                    metricKey: key as string,
-                  })
+            latest?.pointIdentity
+              ? () => setSelectedPoint(latest.pointIdentity || null)
               : undefined
           }
         >
           <MetricLineChart
             data={points}
+            period={period}
             warnThreshold={threshold.warnBelow}
             failThreshold={threshold.failBelow}
             valueFormatter={(v) => `${v}%`}
+            onPointClick={(point) => setSelectedPoint(point)}
           />
         </ChartCard>
       );
@@ -249,11 +271,17 @@ export default function DashboardPage() {
   function renderPerformanceCharts() {
     if (!evaluations) return null;
     return PERF_METRICS.map((key, i) => {
+      const period = getChartPeriod(key);
+      const scopedEvaluations = filterEvaluationsByPeriod(evaluations, period);
       const threshold = METRIC_THRESHOLDS[key];
-      const points = extractMetricTimeSeries(evaluations, "performance", key);
+      const points = extractMetricTimeSeries(
+        scopedEvaluations,
+        "performance",
+        key,
+        activeRunId
+      );
       const summary = computeChartSummary(points);
       const latest = points[points.length - 1];
-      const period = getChartPeriod(key);
 
       return (
         <ChartCard
@@ -271,21 +299,18 @@ export default function DashboardPage() {
             <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}%`} />
           }
           onViewDetails={
-            latest
-              ? () =>
-                  setDetailDialog({
-                    record: evaluations[evaluations.length - 1],
-                    metricGroup: "performance",
-                    metricKey: key as string,
-                  })
+            latest?.pointIdentity
+              ? () => setSelectedPoint(latest.pointIdentity || null)
               : undefined
           }
         >
           <MetricLineChart
             data={points}
+            period={period}
             warnThreshold={threshold.warnBelow}
             failThreshold={threshold.failBelow}
             valueFormatter={(v) => `${v}%`}
+            onPointClick={(point) => setSelectedPoint(point)}
           />
         </ChartCard>
       );
@@ -297,10 +322,11 @@ export default function DashboardPage() {
     return (
       <>
         {LATENCY_METRICS.map(({ key, label, fullWidth }) => {
-          const points = extractLatencyTimeSeries(evaluations, key);
+          const period = getChartPeriod(key);
+          const scopedEvaluations = filterEvaluationsByPeriod(evaluations, period);
+          const points = extractLatencyTimeSeries(scopedEvaluations, key, activeRunId);
           const summary = computeChartSummary(points);
           const latest = points[points.length - 1];
-          const period = getChartPeriod(key);
 
           return (
             <ChartCard
@@ -320,10 +346,12 @@ export default function DashboardPage() {
             >
               <MetricLineChart
                 data={points}
+                period={period}
                 warnThreshold={LATENCY_WARN_MS}
                 failThreshold={LATENCY_FAIL_MS}
                 yDomain={[0, "auto"]}
                 valueFormatter={(v) => `${v}ms`}
+                onPointClick={(point) => setSelectedPoint(point)}
               />
             </ChartCard>
           );
@@ -332,11 +360,20 @@ export default function DashboardPage() {
         {(() => {
           const key = "availability";
           const period = getChartPeriod(key);
-          const points = (evaluations || [])
+          const scopedEvaluations = filterEvaluationsByPeriod(evaluations || [], period);
+          const points = scopedEvaluations
             .map((e) => ({
               timestamp: e.timestamp,
               value: e.system_reliability.availability * 100,
               status: e.system_reliability.availability_status,
+              pointIdentity: {
+                runId: e.run_id || activeRunId,
+                conversationId: e.conversation_id,
+                turnId: String(e.turn_id),
+                timestamp: e.timestamp,
+                metricGroup: "reliability" as const,
+                metricKey: key,
+              },
             }))
             .sort(
               (a, b) =>
@@ -364,9 +401,11 @@ export default function DashboardPage() {
             >
               <MetricLineChart
                 data={points}
+                period={period}
                 warnThreshold={99}
                 failThreshold={95}
                 valueFormatter={(v) => `${v}%`}
+                onPointClick={(point) => setSelectedPoint(point)}
               />
             </ChartCard>
           );
@@ -474,8 +513,10 @@ export default function DashboardPage() {
 
         <div
           className={cn(
-            "mx-auto max-w-[1280px] px-6 py-6 transition-[padding] duration-300 ease-out",
-            isThreadPanelOpen ? "lg:pl-[390px]" : "lg:pl-6"
+            "px-6 py-6 transition-[margin,max-width] duration-300 ease-out",
+            hasLeftPanel || hasRightPanel ? "max-w-none" : "mx-auto max-w-[1280px]",
+            hasLeftPanel ? "lg:ml-[390px]" : "lg:ml-0",
+            hasRightPanel ? "lg:mr-[540px]" : "lg:mr-0"
           )}
         >
           {!isRunsLoading && runSummaries.length === 0 && (
@@ -542,9 +583,11 @@ export default function DashboardPage() {
 
                   <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
                     <div className="mb-2 font-medium text-foreground">Progress Notes</div>
-                    <pre className="whitespace-pre-wrap font-sans leading-5">
-                      {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
-                    </pre>
+                    <div className="max-h-[320px] overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -673,15 +716,13 @@ export default function DashboardPage() {
         </div>
       </main>
 
-      {/* Detail Dialog */}
-      <DetailDialog
-        open={!!detailDialog}
-        onOpenChange={(open) => {
-          if (!open) setDetailDialog(null);
-        }}
-        record={detailDialog?.record || null}
-        metricGroup={detailDialog?.metricGroup || null}
-        metricKey={detailDialog?.metricKey || null}
+      <TraceDrawer
+        open={Boolean(selectedPoint)}
+        point={selectedPoint}
+        trace={traceDetails}
+        isLoading={isTraceLoading}
+        errorMessage={traceError instanceof Error ? traceError.message : undefined}
+        onClose={() => setSelectedPoint(null)}
       />
     </div>
   );

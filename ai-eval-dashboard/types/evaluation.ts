@@ -120,6 +120,23 @@ export interface EvalRunParameters {
   thresholdVersion: string;
 }
 
+export interface MetricPointIdentity {
+  runId: string;
+  conversationId?: string;
+  turnId: string;
+  timestamp: string;
+  metricGroup: "safety" | "performance" | "reliability";
+  metricKey: string;
+}
+
+export interface TraceDetailsResponse {
+  point: MetricPointIdentity;
+  evaluationRecord: EvaluationRecord | null;
+  chatHistoryRecord: Record<string, unknown> | null;
+  turnRecord: Record<string, unknown> | null;
+  notFoundReason?: string;
+}
+
 export interface MonitoringStartRequest {
   runId: string;
   sampleSize?: number;

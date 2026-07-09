@@ -182,11 +182,18 @@ export function RunThreadList({
 
               return (
                 <div key={run.runId} className="space-y-2">
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onSelectRun(run.runId)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectRun(run.runId);
+                      }
+                    }}
                     className={cn(
-                      "group w-full rounded-md border px-3 py-2 text-left transition-colors",
+                      "group w-full rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                       isSelected
                         ? "border-primary bg-accent"
                         : "border-border bg-background hover:bg-muted/50"
@@ -248,7 +255,7 @@ export function RunThreadList({
                         </Button>
                       </div>
                     </div>
-                  </button>
+                  </div>
 
                   {isExpanded && (
                     <div className="rounded-md border border-border bg-background p-3">

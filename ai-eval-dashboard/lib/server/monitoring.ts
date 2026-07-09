@@ -5,10 +5,12 @@ import { spawn } from "node:child_process";
 import type {
   EvaluationRecord,
   EvaluationsResponse,
+  MetricPointIdentity,
   MonitoringRunStatus,
   MonitoringStartRequest,
   MonitoringStartResponse,
   RunSummary,
+  TraceDetailsResponse,
 } from "@/types/evaluation";
 
 const REPO_ROOT = path.resolve(process.cwd(), "..");
@@ -256,6 +258,69 @@ export async function getMonitoringEvaluations(
     total: filtered.length,
     from: from || "",
     to: to || "",
+  };
+}
+
+function sameTurnId(left: unknown, right: unknown): boolean {
+  return String(left ?? "") === String(right ?? "");
+}
+
+function sameConversationId(left: unknown, right: unknown): boolean {
+  return String(left ?? "") === String(right ?? "");
+}
+
+export async function getMonitoringTraceDetails(
+  point: MetricPointIdentity
+): Promise<TraceDetailsResponse | null> {
+  const runDir = runDirPath(point.runId);
+  if (!(await fileExists(runDir))) {
+    return null;
+  }
+
+  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
+  const chatHistoryPath = path.join(runDir, "chat_history.jsonl");
+  const turnsPath = path.join(runDir, "turns.jsonl");
+
+  const evaluationRows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(
+    scoresPath
+  );
+
+  const matchedEvaluation =
+    evaluationRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) ||
+    evaluationRows.find(
+      (row) => row.timestamp === point.timestamp && sameTurnId(row.turn_id, point.turnId)
+    ) ||
+    null;
+
+  const chatHistoryRows = await readJsonLines<Record<string, unknown>>(chatHistoryPath);
+  const matchedChatHistory =
+    chatHistoryRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) || null;
+
+  const turnRows = await readJsonLines<Record<string, unknown>>(turnsPath);
+  const matchedTurn =
+    turnRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) || null;
+
+  return {
+    point,
+    evaluationRecord: matchedEvaluation,
+    chatHistoryRecord: matchedChatHistory,
+    turnRecord: matchedTurn,
+    notFoundReason:
+      matchedEvaluation || matchedChatHistory || matchedTurn
+        ? undefined
+        : "No matching records were found for this chart point in monitoring/chat artifacts.",
   };
 }
 

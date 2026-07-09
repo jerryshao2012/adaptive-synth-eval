@@ -1,4 +1,4 @@
-import type { EvaluationRecord } from "@/types/evaluation";
+import type { EvaluationRecord, MetricPointIdentity } from "@/types/evaluation";
 
 export interface KpiSummary {
   totalEvaluations: number;
@@ -112,6 +112,7 @@ export interface MetricTimeSeriesPoint {
   status: "pass" | "warn" | "fail";
   detail: string;
   version?: string;
+  pointIdentity?: MetricPointIdentity;
 }
 
 export type ChartSummary = {
@@ -123,7 +124,8 @@ export type ChartSummary = {
 export function extractMetricTimeSeries(
   evaluations: EvaluationRecord[],
   metricGroup: "safety" | "performance",
-  metricKey: string
+  metricKey: string,
+  defaultRunId?: string
 ): MetricTimeSeriesPoint[] {
   const points: MetricTimeSeriesPoint[] = [];
   for (const e of evaluations) {
@@ -137,6 +139,14 @@ export function extractMetricTimeSeries(
         status: metric.status,
         detail: metric.detail,
         version: metric.version,
+        pointIdentity: {
+          runId: e.run_id || defaultRunId || "",
+          conversationId: e.conversation_id,
+          turnId: String(e.turn_id),
+          timestamp: e.timestamp,
+          metricGroup,
+          metricKey,
+        },
       });
     }
   }
@@ -148,8 +158,14 @@ export function extractMetricTimeSeries(
 
 export function extractLatencyTimeSeries(
   evaluations: EvaluationRecord[],
-  latencyKey: "llm_latency_ms" | "guardrail_latency_ms" | "total_latency_ms"
-): { timestamp: string; value: number; status: "pass" | "warn" | "fail" }[] {
+  latencyKey: "llm_latency_ms" | "guardrail_latency_ms" | "total_latency_ms",
+  defaultRunId?: string
+): {
+  timestamp: string;
+  value: number;
+  status: "pass" | "warn" | "fail";
+  pointIdentity?: MetricPointIdentity;
+}[] {
   return evaluations
     .map((e) => {
       const r = e.system_reliability;
@@ -158,6 +174,14 @@ export function extractLatencyTimeSeries(
         timestamp: e.timestamp,
         value: r[latencyKey] as number,
         status: r[statusKey] as "pass" | "warn" | "fail",
+        pointIdentity: {
+          runId: e.run_id || defaultRunId || "",
+          conversationId: e.conversation_id,
+          turnId: String(e.turn_id),
+          timestamp: e.timestamp,
+          metricGroup: "reliability" as const,
+          metricKey: latencyKey,
+        },
       };
     })
     .sort(
