@@ -225,6 +225,49 @@ uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --inco
 uv run ase summarize --run-id unified_evaluation_demo_run
 ```
 
+### 5. Run Continuous Monitoring Eval on Existing Chat History
+
+Evaluate an existing run folder using sampled windows and write results to
+`monitoring_scores.jsonl` in the same run directory.
+
+PowerShell (Windows):
+
+```powershell
+uv run ase monitor run `
+    --run-folder outputs/runs/unified_evaluation_demo_run `
+    --sample-size 1000 `
+    --interval-minutes 30 `
+    --metric-version v1 `
+    --threshold-version v1
+```
+
+Bash/zsh:
+
+```bash
+uv run ase monitor run \
+    --run-folder outputs/runs/unified_evaluation_demo_run \
+    --sample-size 1000 \
+    --interval-minutes 30 \
+    --metric-version v1 \
+    --threshold-version v1
+```
+
+Use explicit recovery behavior when a monitoring run is interrupted:
+
+```bash
+# Continue from monitoring_state.json
+uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --metric-version v1 --incomplete-run-action resume
+
+# Restart monitoring progress and re-evaluate
+uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --metric-version v1 --incomplete-run-action restart
+```
+
+Notes:
+- Input source is `chat_history.jsonl` under the selected run folder.
+- Same `metric_version` is idempotent: already-evaluated turns are skipped.
+- LLM runtime uses environment configuration by default (same provider discovery flow as existing runtime clients).
+- Use `--dry-run` for deterministic local scoring without live LLM calls.
+
 ---
 
 ## Detailed Documentation

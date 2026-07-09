@@ -6,7 +6,6 @@ import sys
 from typing import Any
 
 import yaml
-from adaptive_synth_eval.prompt_toolkit_status import PromptToolkitStatusBar
 from pathlib import Path
 
 from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
@@ -23,6 +22,8 @@ from adaptive_synth_eval.loop.scheduler import LoopScheduler, MultiLoopCoordinat
 from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle, \
     set_loop_paused
 from adaptive_synth_eval.loop.verifier import LoopVerifier
+from adaptive_synth_eval.monitoring import run_monitoring
+from adaptive_synth_eval.prompt_toolkit_status import PromptToolkitStatusBar
 
 logger = setup_logger(__name__)
 
@@ -425,6 +426,22 @@ def main(argv: list[str] | None = None) -> int:
             print(summary_path.read_text(encoding="utf-8"))
             return 0
 
+        if args.command == "monitor":
+            if args.monitor_command == "run":
+                run_dir = Path(args.run_folder)
+                summary = run_monitoring(
+                    run_dir=run_dir,
+                    sample_size=args.sample_size,
+                    interval_minutes=args.interval_minutes,
+                    metric_version=args.metric_version,
+                    threshold_version=args.threshold_version,
+                    incomplete_run_action=args.incomplete_run_action,
+                    dry_run=args.dry_run,
+                    max_windows=args.max_windows,
+                )
+                print(json.dumps(summary, indent=2, default=str))
+                return 0
+
         parser.print_help()
         return 1
     except (ContractError, LoopProfileError) as exc:
@@ -443,7 +460,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Generate synthetic multi-turn chat history data for chatbot evaluation. "
             "Use subcommands to validate a contract, run a simulation, summarize a prior run, "
-            "or manage loop assets."
+            "manage loop assets, or evaluate existing run artifacts for monitoring."
         ),
     )
     sub = parser.add_subparsers(
@@ -451,7 +468,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="commands",
         description="Available operations",
-        metavar="{validate-contract,run,summarize,loop}",
+        metavar="{validate-contract,run,summarize,loop,monitor}",
     )
     validate = sub.add_parser(
         "validate-contract",
@@ -527,6 +544,78 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default="outputs",
         help="Base output directory that contains runs/<run_id>/run_summary.json (default: outputs)",
+    )
+
+    monitor = sub.add_parser(
+        "monitor",
+        help="Evaluate existing chat history artifacts for continuous monitoring",
+        description=(
+            "Run monitoring evaluation over outputs/runs/<run_id>/chat_history.jsonl in sampling windows, "
+            "persisting resumable state and metric-versioned scores."
+        ),
+    )
+    monitor_sub = monitor.add_subparsers(
+        dest="monitor_command",
+        required=True,
+        title="monitor commands",
+        description="Monitoring operations",
+        metavar="{run}",
+    )
+
+    monitor_run = monitor_sub.add_parser(
+        "run",
+        help="Evaluate chat_history.jsonl in a run folder using sampling windows",
+        description=(
+            "Load run-folder chat history artifacts, evaluate in configurable windows, "
+            "and append dashboard-oriented records into monitoring_scores.jsonl."
+        ),
+    )
+    monitor_run.add_argument(
+        "--run-folder",
+        required=True,
+        help="Path to an existing outputs/runs/<run_id> folder that contains chat_history.jsonl",
+    )
+    monitor_run.add_argument(
+        "--sample-size",
+        type=int,
+        default=1000,
+        help="Number of chat rows to evaluate per sampling window (default: 1000)",
+    )
+    monitor_run.add_argument(
+        "--interval-minutes",
+        type=int,
+        default=30,
+        help="Sampling window interval metadata in minutes (default: 30)",
+    )
+    monitor_run.add_argument(
+        "--max-windows",
+        type=int,
+        default=None,
+        help="Optional cap on windows processed in a single invocation.",
+    )
+    monitor_run.add_argument(
+        "--metric-version",
+        required=True,
+        help="Metric version label used for de-duplication and lineage.",
+    )
+    monitor_run.add_argument(
+        "--threshold-version",
+        default="v1",
+        help="Threshold version label stored with each evaluation row (default: v1).",
+    )
+    monitor_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip live LLM calls and use deterministic local scoring for test runs.",
+    )
+    monitor_run.add_argument(
+        "--incomplete-run-action",
+        choices=("ask", "resume", "restart", "abort"),
+        default="ask",
+        help=(
+            "Action when monitoring_state.json is not completed. "
+            "'resume' continues progress, 'restart' starts over, 'abort' exits, 'ask' prompts interactively."
+        ),
     )
 
     loop = sub.add_parser(
