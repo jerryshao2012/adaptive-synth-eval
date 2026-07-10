@@ -161,6 +161,11 @@ export function useTraceDetails(point: MetricPointIdentity | null) {
       return (await res.json()) as TraceDetailsResponse;
     },
     enabled: Boolean(point),
+    staleTime: Infinity,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   });
 }
 

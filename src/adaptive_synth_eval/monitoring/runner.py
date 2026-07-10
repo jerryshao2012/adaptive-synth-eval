@@ -322,7 +322,13 @@ def _evaluate_with_llm(user_text: str, response_text: str, llm: LLMClient, *, dr
 
     merged = dict(heuristic)
     for key in merged:
-        merged[key] = _bounded_float(parsed.get(key), merged[key])
+        val = parsed.get(key)
+        if val is not None and key in ("toxicity", "bias_fairness"):
+            try:
+                val = 1.0 - float(val)
+            except (TypeError, ValueError):
+                pass
+        merged[key] = _bounded_float(val, merged[key])
     return merged
 
 

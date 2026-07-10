@@ -36,19 +36,36 @@ function JsonPrimitive({ value }: { value: string | number | boolean | null }) {
   return <span className="text-amber-600 dark:text-amber-300">{String(value)}</span>;
 }
 
-function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+function JsonValue({
+  value,
+  depth = 0,
+  suffix,
+}: {
+  value: unknown;
+  depth?: number;
+  suffix?: React.ReactNode;
+}) {
   if (
     value === null ||
     typeof value === "string" ||
     typeof value === "number" ||
     typeof value === "boolean"
   ) {
-    return <JsonPrimitive value={value} />;
+    return (
+      <>
+        <JsonPrimitive value={value} />
+        {suffix}
+      </>
+    );
   }
 
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      return <span>[]</span>;
+      return (
+        <span>
+          []{suffix}
+        </span>
+      );
     }
 
     return (
@@ -56,13 +73,15 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
         <span>[</span>
         <div className="ml-4 border-l border-border/50 pl-3">
           {value.map((item, index) => (
-            <div key={`${depth}-${index}`}>
-              <JsonValue value={item} depth={depth + 1} />
-              {index < value.length - 1 && <span>,</span>}
-            </div>
+            <JsonValue
+              key={`${depth}-${index}`}
+              value={item}
+              depth={depth + 1}
+              suffix={index < value.length - 1 ? "," : undefined}
+            />
           ))}
         </div>
-        <span>]</span>
+        <span>]{suffix}</span>
       </div>
     );
   }
@@ -71,7 +90,11 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
     const entries = Object.entries(value);
 
     if (entries.length === 0) {
-      return <span>{"{}"}</span>;
+      return (
+        <span>
+          {"{}"}{suffix}
+        </span>
+      );
     }
 
     return (
@@ -82,17 +105,25 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
             <div key={`${depth}-${key}`}>
               <span className="text-emerald-700 dark:text-emerald-300">{key}</span>
               <span>: </span>
-              <JsonValue value={entryValue} depth={depth + 1} />
-              {index < entries.length - 1 && <span>,</span>}
+              <JsonValue
+                value={entryValue}
+                depth={depth + 1}
+                suffix={index < entries.length - 1 ? "," : undefined}
+              />
             </div>
           ))}
         </div>
-        <span>{"}"}</span>
+        <span>{"}"}{suffix}</span>
       </div>
     );
   }
 
-  return <span className="text-muted-foreground">{String(value)}</span>;
+  return (
+    <span>
+      {String(value)}
+      {suffix}
+    </span>
+  );
 }
 
 function JsonBlock({ value }: { value: unknown }) {
