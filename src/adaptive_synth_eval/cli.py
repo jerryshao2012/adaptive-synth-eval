@@ -3,14 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 import yaml
-from pathlib import Path
-
 from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
+from adaptive_synth_eval.config.env import load_project_env
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 from adaptive_synth_eval.evaluation.modes import get_mode
 from adaptive_synth_eval.live_status import LiveStatusBar
@@ -272,6 +272,7 @@ def detect_mode_from_file(path_str: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_project_env(anchor=Path.cwd())
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

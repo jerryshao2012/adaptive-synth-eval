@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 import httpx
-from pydantic import SecretStr
-
 from adaptive_synth_eval.clients.retry_utils import wrap_model_with_rate_limiting
+from pydantic import SecretStr
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +120,14 @@ class LLMClient:
         elif os.getenv("OPENAI_API_KEY"):
             logger.debug("Detected OpenAI provider")
             return "openai"
-        elif os.getenv("OLLAMA_BASE_URL"):
+        elif os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_API_BASE"):
             logger.debug("Detected Ollama provider")
             return "ollama"
         elif os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
             logger.debug("Detected AWS Bedrock provider")
             return "bedrock"
         logger.warning(
-            "No LLM provider detected. Configure one of: AZURE_OPENAI_ENDPOINT/DEPLOYMENT, ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL")
+            "No LLM provider detected. Configure one of: AZURE_OPENAI_ENDPOINT/DEPLOYMENT, ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_BASE_URL/OLLAMA_API_BASE")
         return None
 
     def _get_model(self):
@@ -197,7 +196,8 @@ class LLMClient:
                 from langchain_ollama import ChatOllama
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
                 model_name = self._cfg("model", "MODEL_NAME", "qwen3.6:35b-a3b")
-                base_url = self._cfg("ollama_base_url", "OLLAMA_BASE_URL", "http://localhost:11434")
+                base_url = self._cfg("ollama_base_url", "OLLAMA_BASE_URL",
+                                     os.getenv("OLLAMA_API_BASE", "http://localhost:11434"))
 
                 self._model = ChatOllama(
                     model=model_name,

@@ -32,6 +32,14 @@ def load_project_env(*, override: bool = False, anchor: Path | None = None) -> N
                 load_dotenv(candidate, override=override)
                 return
 
+    # Fallback to scanning up from the package directory (handles src/.env or project root .env)
+    pkg_dir = Path(__file__).resolve().parent
+    for parent in [pkg_dir, *pkg_dir.parents]:
+        candidate = parent / ".env"
+        if candidate.exists():
+            load_dotenv(candidate, override=override)
+            return
+
 
 def resolve_env_placeholders(obj: Any) -> Any:
     """Resolve `${VAR}` and `${VAR:-default}` recursively in nested structures.
