@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -11,6 +12,8 @@ from pathlib import Path
 
 from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.contract import ContractError
+
+logger = logging.getLogger(__name__)
 
 _MONITORING_STATE_FILE = "monitoring_state.json"
 _MONITORING_SCORES_FILE = "monitoring_scores.jsonl"
@@ -127,7 +130,7 @@ def run_monitoring(
 
         rows_to_write: list[dict[str, Any]] = []
         window_id = base_windows + windows_processed_this_run + 1
-        for line_idx, chat_row in batch_rows:
+        for idx_in_batch, (line_idx, chat_row) in enumerate(batch_rows, 1):
             turn_key = _turn_key(chat_row)
             if turn_key in existing_keys:
                 skipped_rows_this_run += 1
@@ -152,6 +155,28 @@ def run_monitoring(
             rows_to_write.append(evaluation)
             evaluated_rows_this_run += 1
             existing_keys.add(turn_key)
+
+            if idx_in_batch % 10 == 0 or idx_in_batch == len(batch_rows):
+                logger.info(
+                    f"Evaluating window {window_id}: row {idx_in_batch}/{len(batch_rows)} "
+                    f"(overall line {line_idx + 1}/{total_lines})"
+                )
+                current_state = _build_state(
+                    run_dir=run_dir,
+                    status="in_progress",
+                    metric_version=metric_version,
+                    threshold_version=threshold_version,
+                    sample_size=sample_size,
+                    interval_minutes=interval_minutes,
+                    next_line_index=line_idx + 1,
+                    total_lines=total_lines,
+                    evaluated_rows=base_evaluated + evaluated_rows_this_run,
+                    skipped_rows=base_skipped + skipped_rows_this_run,
+                    windows_completed=base_windows + windows_processed_this_run,
+                    llm_provider=(llm.model_provider or "none") if not dry_run else "dry_run",
+                )
+                _write_monitoring_state(run_dir, current_state)
+                _write_progress_markdown(run_dir, current_state)
 
         if rows_to_write:
             _append_jsonl(run_dir / _MONITORING_SCORES_FILE, rows_to_write)
