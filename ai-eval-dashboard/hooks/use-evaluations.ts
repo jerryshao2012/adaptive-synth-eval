@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  ArtifactValidation,
   EvaluationRecord,
   EvaluationsResponse,
   MetricPointIdentity,
@@ -293,5 +294,25 @@ export function useCreateDataset() {
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       return res.json();
     },
+  });
+}
+
+/**
+ * Fetch artifact validation status for a run.
+ */
+export function useValidation(runId?: string) {
+  return useQuery({
+    queryKey: ["validation", runId],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/validation?runId=${encodeURIComponent(runId!)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || `API error: ${res.status}`);
+      }
+      return res.json() as Promise<ArtifactValidation>;
+    },
+    enabled: Boolean(runId),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }

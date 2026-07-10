@@ -21,7 +21,7 @@ function runDirPath(runId: string): string {
   return path.join(RUNS_DIR, runId);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+export async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
@@ -30,7 +30,7 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
+export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return JSON.parse(content) as T;
@@ -47,7 +47,7 @@ async function readTextFile(filePath: string): Promise<string | null> {
   }
 }
 
-async function readJsonLines<T>(filePath: string): Promise<T[]> {
+export async function readJsonLines<T>(filePath: string): Promise<T[]> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return content

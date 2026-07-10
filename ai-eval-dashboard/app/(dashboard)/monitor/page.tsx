@@ -1,25 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Shield,
   Gauge,
   Activity,
   BarChart3,
-  ChevronDown,
-  ChevronRight,
-  FileText,
-  PanelLeftClose,
-  PanelLeftOpen,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { EvalRunParameters, EvaluationRecord, TimePeriodPreset } from "@/types/evaluation";
+import type {
+  EvalRunParameters,
+  EvaluationRecord,
+  TimePeriodPreset,
+  MetricPointIdentity,
+  FailureGroup,
+  FailedMetricRanking,
+} from "@/types/evaluation";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS, LATENCY_DESCRIPTIONS, AVAILABILITY_DESCRIPTION } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 import { getTimePeriod } from "@/lib/time-periods";
@@ -30,6 +27,10 @@ import {
   computeChartSummary,
 } from "@/lib/aggregation";
 import {
+  computeInvestigationSummary,
+  rankFailedMetrics,
+} from "@/lib/verdict";
+import {
   useEvaluations,
   useMonitoringStatus,
   usePreviousPeriodEvaluations,
@@ -38,13 +39,18 @@ import {
   useTraceDetails,
 } from "@/hooks/use-evaluations";
 
+// New investigation workbench components
+import { RunSelectorHeader } from "@/components/dashboard/run-selector-header";
+import { InvestigationSummaryCard } from "@/components/dashboard/investigation-summary";
+import { FailureAnalysis } from "@/components/dashboard/failure-analysis";
+import { ConversationQueue } from "@/components/dashboard/conversation-queue";
+
+// Existing components (kept for charts)
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import ChartSummaryBar, { ChartCard } from "@/components/dashboard/chart-card";
 import { MetricLineChart } from "@/components/dashboard/metric-line-chart";
-import { RunThreadList } from "@/components/dashboard/run-thread-list";
 import { EmptyState, ErrorCard } from "@/components/shared/empty-state";
 import { TraceDrawer } from "@/components/dashboard/trace-drawer";
-import type { MetricPointIdentity } from "@/types/evaluation";
 
 // ---- Constants ----
 const SAFETY_METRICS = ["toxicity", "bias_fairness", "robustness", "compliance"] as const;
@@ -70,19 +76,6 @@ const DEFAULT_MONITORING_CONFIG: EvalRunParameters = {
   thresholdVersion: "v1",
 };
 
-function monitoringStatusLabel(status: "not_started" | "queued" | "in_progress" | "completed" | undefined): string {
-  switch (status) {
-    case "completed":
-      return "Completed";
-    case "in_progress":
-      return "In Progress";
-    case "queued":
-      return "Queued";
-    default:
-      return "Not Started";
-  }
-}
-
 function filterEvaluationsByPeriod(
   rows: EvaluationRecord[],
   preset: TimePeriodPreset
@@ -97,21 +90,20 @@ function filterEvaluationsByPeriod(
 }
 
 export default function DashboardPage() {
+  // ---- State ----
   const [globalPeriod] = useState<TimePeriodPreset>("this-week");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
-  const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(false);
-  const [globalEvalDefaults, setGlobalEvalDefaults] =
-    useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
-  const [threadParamOverrides, setThreadParamOverrides] =
-    useState<Record<string, Partial<EvalRunParameters>>>({});
-  const [expandedOverrideRunId, setExpandedOverrideRunId] = useState<string | null>(null);
-  const [pendingActionRunId, setPendingActionRunId] = useState<string | undefined>(undefined);
-  const [isProgressNotesOpen, setIsProgressNotesOpen] = useState(false);
-  const [chartPeriods, setChartPeriods] = useState<
-    Record<string, TimePeriodPreset>
-  >({});
+  const [chartPeriods, setChartPeriods] = useState<Record<string, TimePeriodPreset>>({});
   const [selectedPoint, setSelectedPoint] = useState<MetricPointIdentity | null>(null);
 
+  // Failure analysis group filter state
+  const [activeGroupFilter, setActiveGroupFilter] = useState<FailureGroup["groupType"] | null>(null);
+  const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+
+  // Eval config (kept for Start/Continue actions)
+  const [globalEvalDefaults] = useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
+
+  // ---- Data fetching ----
   const {
     data: runSummaries = [],
     isLoading: isRunsLoading,
@@ -119,10 +111,7 @@ export default function DashboardPage() {
   } = useRunList();
 
   const activeRunId = useMemo(() => {
-    if (
-      selectedRunId &&
-      runSummaries.some((run) => run.runId === selectedRunId)
-    ) {
+    if (selectedRunId && runSummaries.some((run) => run.runId === selectedRunId)) {
       return selectedRunId;
     }
     return runSummaries[0]?.runId || "";
@@ -132,18 +121,19 @@ export default function DashboardPage() {
     () => runSummaries.find((run) => run.runId === activeRunId) || null,
     [activeRunId, runSummaries]
   );
-  const hasLeftPanel = isThreadPanelOpen && runSummaries.length > 0;
 
   const {
     data: monitoringStatus,
     refetch: refetchMonitoringStatus,
   } = useMonitoringStatus(activeRunId || undefined);
+
   const {
     data: traceDetails,
     isLoading: isTraceLoading,
     isFetching: isTraceFetching,
     error: traceError,
   } = useTraceDetails(selectedPoint);
+
   const startMonitoring = useStartMonitoring();
   const canLoadEvaluations = Boolean(activeRunId);
 
@@ -157,74 +147,109 @@ export default function DashboardPage() {
   const { data: previousEvaluations } =
     usePreviousPeriodEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
 
-  async function handleMonitoringAction(
-    runId: string,
-    action: "start" | "continue"
-  ) {
-    if (!runId) {
-      return;
-    }
+  // ---- Actions ----
+  const handleStartRun = useCallback(
+    async (runId: string) => {
+      try {
+        await startMonitoring.mutateAsync({
+          runId,
+          action: "start",
+          sampleSize: globalEvalDefaults.sampleSize,
+          intervalMinutes: globalEvalDefaults.intervalMinutes,
+          metricVersion: monitoringStatus?.metricVersion ?? globalEvalDefaults.metricVersion,
+          thresholdVersion: monitoringStatus?.thresholdVersion ?? globalEvalDefaults.thresholdVersion,
+        });
+        await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
+      } catch {
+        // Error handled by mutation state
+      }
+    },
+    [startMonitoring, globalEvalDefaults, monitoringStatus, refetchRuns, refetchMonitoringStatus]
+  );
 
-    setPendingActionRunId(runId);
-    setSelectedRunId(runId);
-
-    const run = runSummaries.find((item) => item.runId === runId) || null;
-    const override = threadParamOverrides[runId] || {};
-    const metricVersion =
-      override.metricVersion ||
-      monitoringStatus?.metricVersion ||
-      run?.metricVersion ||
-      globalEvalDefaults.metricVersion;
-    const thresholdVersion =
-      override.thresholdVersion ||
-      monitoringStatus?.thresholdVersion ||
-      run?.thresholdVersion ||
-      globalEvalDefaults.thresholdVersion;
-
-    const sampleSize = Number(override.sampleSize ?? globalEvalDefaults.sampleSize);
-    const intervalMinutes = Number(
-      override.intervalMinutes ?? globalEvalDefaults.intervalMinutes
-    );
-
-    try {
-      await startMonitoring.mutateAsync({
-        runId,
-        action,
-        sampleSize,
-        intervalMinutes,
-        metricVersion,
-        thresholdVersion,
-      });
-      await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
-    } finally {
-      setPendingActionRunId(undefined);
-    }
-  }
+  const handleContinueRun = useCallback(
+    async (runId: string) => {
+      try {
+        await startMonitoring.mutateAsync({
+          runId,
+          action: "continue",
+          sampleSize: globalEvalDefaults.sampleSize,
+          intervalMinutes: globalEvalDefaults.intervalMinutes,
+          metricVersion: monitoringStatus?.metricVersion ?? globalEvalDefaults.metricVersion,
+          thresholdVersion: monitoringStatus?.thresholdVersion ?? globalEvalDefaults.thresholdVersion,
+        });
+        await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
+      } catch {
+        // Error handled by mutation state
+      }
+    },
+    [startMonitoring, globalEvalDefaults, monitoringStatus, refetchRuns, refetchMonitoringStatus]
+  );
 
   function refreshAll() {
     void refetchRuns();
-    if (activeRunId) {
-      void refetchMonitoringStatus();
-    }
+    if (activeRunId) void refetchMonitoringStatus();
     void refetch();
   }
 
-  // KPI aggregation
+  // ---- Computed data ----
   const kpiEvaluations = useMemo(
     () => filterEvaluationsByPeriod(evaluations || [], globalPeriod),
     [evaluations, globalPeriod]
   );
+
   const kpi = useMemo(
     () => computeKpiSummary(kpiEvaluations, previousEvaluations || []),
     [kpiEvaluations, previousEvaluations]
   );
+
+  // Investigation summary
+  const investigationSummary = useMemo(
+    () => {
+      if (!evaluations || evaluations.length === 0) return null;
+      return computeInvestigationSummary(evaluations, previousEvaluations);
+    },
+    [evaluations, previousEvaluations]
+  );
+
+  // Failed metric rankings
+  const failedMetrics = useMemo(
+    () => {
+      if (!evaluations || evaluations.length === 0) return [];
+      return rankFailedMetrics(evaluations);
+    },
+    [evaluations]
+  );
+
+  // Group filter handlers
+  const handleGroupSelect = useCallback(
+    (groupType: FailureGroup["groupType"], groupKey: string) => {
+      if (activeGroupFilter === groupType && activeGroupKey === groupKey) {
+        // Toggle off
+        setActiveGroupFilter(null);
+        setActiveGroupKey(null);
+      } else {
+        setActiveGroupFilter(groupType);
+        setActiveGroupKey(groupKey);
+      }
+    },
+    [activeGroupFilter, activeGroupKey]
+  );
+
+  const handleClearGroupFilter = useCallback(() => {
+    setActiveGroupFilter(null);
+    setActiveGroupKey(null);
+  }, []);
 
   // Per-chart period resolution
   function getChartPeriod(chartKey: string): TimePeriodPreset {
     return chartPeriods[chartKey] || globalPeriod;
   }
 
-  // ---- Render helpers ----
+  const hasData = Boolean(evaluations && evaluations.length > 0);
+  const runStatus = monitoringStatus?.monitoringStatus ?? selectedRun?.monitoringStatus;
+
+  // ---- Chart render helpers (kept from original) ----
   function renderSafetyCharts() {
     if (!evaluations) return null;
     return SAFETY_METRICS.map((key, i) => {
@@ -276,12 +301,7 @@ export default function DashboardPage() {
       const period = getChartPeriod(key);
       const scopedEvaluations = filterEvaluationsByPeriod(evaluations, period);
       const threshold = METRIC_THRESHOLDS[key];
-      const points = extractMetricTimeSeries(
-        scopedEvaluations,
-        "performance",
-        key,
-        activeRunId
-      );
+      const points = extractMetricTimeSeries(scopedEvaluations, "performance", key, activeRunId);
       const summary = computeChartSummary(points);
       const latest = points[points.length - 1];
 
@@ -419,86 +439,16 @@ export default function DashboardPage() {
   // ---- Main render ----
   return (
     <div className="monitor-layout flex flex-col min-h-full">
-      {/* Main content */}
-      <main className="flex-1 overflow-y-auto relative">
-        {isThreadPanelOpen && (
-          <button
-            type="button"
-            aria-label="Close thread list"
-            className="fixed inset-0 z-30 bg-black/35 lg:hidden"
-            onClick={() => setIsThreadPanelOpen(false)}
-          />
-        )}
-
-        {runSummaries.length > 0 && (
-          <aside
-            className={cn(
-              "fixed top-14 bottom-0 left-0 z-40 border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-all duration-300 ease-out lg:left-(--dashboard-sidebar-width) lg:w-(--thread-panel-width)",
-              isThreadPanelOpen
-                ? "translate-x-0 opacity-100 pointer-events-auto"
-                : "-translate-x-full opacity-0 pointer-events-none"
-            )}
-          >
-            <RunThreadList
-              runs={runSummaries}
-              selectedRunId={activeRunId}
-              onSelectRun={setSelectedRunId}
-              globalDefaults={globalEvalDefaults}
-              onGlobalChange={setGlobalEvalDefaults}
-              overrides={threadParamOverrides}
-              expandedOverrideRunId={expandedOverrideRunId}
-              onToggleOverrideEditor={(runId) =>
-                setExpandedOverrideRunId((prev) => (prev === runId ? null : runId))
-              }
-              onOverrideChange={(runId, patch) => {
-                setThreadParamOverrides((prev) => ({
-                  ...prev,
-                  [runId]: {
-                    ...prev[runId],
-                    ...patch,
-                  },
-                }));
-              }}
-              onClearOverride={(runId) => {
-                setThreadParamOverrides((prev) => {
-                  const next = { ...prev };
-                  delete next[runId];
-                  return next;
-                });
-              }}
-              pendingActionRunId={pendingActionRunId}
-              onStartRun={(runId) => void handleMonitoringAction(runId, "start")}
-              onResumeRun={(runId) => void handleMonitoringAction(runId, "continue")}
-            />
-          </aside>
-        )}
-
+      <main className="flex-1 overflow-y-auto">
         <div
           className={cn(
             "monitor-content min-w-0 px-6 py-6 transition-[margin] duration-300 ease-out",
-            hasLeftPanel && "monitor-content--left",
             selectedPoint && "monitor-content--right"
           )}
         >
-          {runSummaries.length > 0 && (
-            <div className="mb-4 flex items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsThreadPanelOpen((prev) => !prev)}
-                aria-label={isThreadPanelOpen ? "Hide thread list" : "Show thread list"}
-                className="gap-2"
-              >
-                {isThreadPanelOpen ? (
-                  <PanelLeftClose className="h-4 w-4" />
-                ) : (
-                  <PanelLeftOpen className="h-4 w-4" />
-                )}
-                <span>{isThreadPanelOpen ? "Hide Threads" : "Show Threads"}</span>
-              </Button>
-            </div>
-          )}
-
+          {/* ============================================
+              1. RUN SELECTOR HEADER
+              ============================================ */}
           {!isRunsLoading && runSummaries.length === 0 && (
             <EmptyState
               message="No run folders found under outputs/runs."
@@ -507,102 +457,16 @@ export default function DashboardPage() {
           )}
 
           {runSummaries.length > 0 && (
-            <div className="mb-6">
-              <Card className="border-border bg-card">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-semibold text-foreground">
-                    Monitoring Progress
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">
-                        {selectedRun ? monitoringStatusLabel(selectedRun.monitoringStatus) : "No run selected"}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {monitoringStatus?.updatedAt
-                          ? `Updated ${formatDistanceToNow(new Date(monitoringStatus.updatedAt), { addSuffix: true })}`
-                          : "No monitoring state yet"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {selectedRun?.canStart && (
-                        <Button
-                          size="sm"
-                          onClick={() => void handleMonitoringAction(selectedRun.runId, "start")}
-                          disabled={startMonitoring.isPending || !activeRunId || !!pendingActionRunId}
-                        >
-                          Start Eval
-                        </Button>
-                      )}
-                      {selectedRun?.canContinue && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleMonitoringAction(selectedRun.runId, "continue")}
-                          disabled={startMonitoring.isPending || !activeRunId || !!pendingActionRunId}
-                        >
-                          Continue Eval
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Completion</span>
-                      <span>{monitoringStatus?.progress.percent ?? selectedRun?.progress.percent ?? 0}%</span>
-                    </div>
-                    <progress
-                      className="h-2 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary"
-                      max={100}
-                      value={monitoringStatus?.progress.percent ?? selectedRun?.progress.percent ?? 0}
-                    />
-                  </div>
-
-                  <section className="rounded-xl border border-border bg-background/85">
-                    <button
-                      type="button"
-                      onClick={() => setIsProgressNotesOpen((prev) => !prev)}
-                      aria-label={isProgressNotesOpen ? "Collapse progress notes" : "Expand progress notes"}
-                      className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-primary/12 text-primary">
-                          <FileText className="h-4 w-4" />
-                        </span>
-                        <div>
-                          <div className="text-sm font-medium text-foreground">Progress Notes</div>
-                          <div className="text-xs text-muted-foreground">
-                            {isProgressNotesOpen
-                              ? "Click to collapse notes"
-                              : "Click to expand notes"}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-muted-foreground">
-                        {isProgressNotesOpen ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4" />
-                        )}
-                      </span>
-                    </button>
-
-                    {isProgressNotesOpen && (
-                      <div className="border-t border-border px-3 pb-3 pt-2">
-                        <div className="max-h-80 overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    )}
-                  </section>
-                </CardContent>
-              </Card>
-            </div>
+            <RunSelectorHeader
+              selectedRun={selectedRun}
+              monitoringStatus={monitoringStatus ?? null}
+              runs={runSummaries}
+              onSelectRun={setSelectedRunId}
+              onStartRun={handleStartRun}
+              onContinueRun={handleContinueRun}
+              isStarting={startMonitoring.isPending}
+              onRefresh={refreshAll}
+            />
           )}
 
           {/* Error state */}
@@ -613,8 +477,151 @@ export default function DashboardPage() {
             />
           )}
 
-          {/* Empty state */}
-          {!isLoading && !isError && evaluations?.length === 0 && (
+          {/* ============================================
+              2. INVESTIGATION SUMMARY
+              ============================================ */}
+          {runSummaries.length > 0 && !isError && (
+            <InvestigationSummaryCard
+              summary={investigationSummary}
+              isLoading={isLoading}
+              hasData={hasData}
+              runStatus={runStatus}
+            />
+          )}
+
+          {/* ============================================
+              3. FAILURE ANALYSIS (when failures exist)
+              ============================================ */}
+          {hasData && !isLoading && failedMetrics.length > 0 && (
+            <FailureAnalysis
+              evaluations={evaluations!}
+              failedMetrics={failedMetrics}
+              activeGroupFilter={activeGroupFilter}
+              activeGroupKey={activeGroupKey}
+              onGroupSelect={handleGroupSelect}
+              onClearGroupFilter={handleClearGroupFilter}
+            />
+          )}
+
+          {/* ============================================
+              4. FAILED CONVERSATION QUEUE
+              ============================================ */}
+          {hasData && !isLoading && (
+            <ConversationQueue
+              evaluations={evaluations!}
+              activeRunId={activeRunId}
+              onSelectConversation={(point) => setSelectedPoint(point)}
+              groupFilter={
+                activeGroupFilter && activeGroupKey
+                  ? { groupType: activeGroupFilter, groupKey: activeGroupKey }
+                  : null
+              }
+            />
+          )}
+
+          {/* Loading skeleton for sections 2-4 */}
+          {isLoading && runSummaries.length > 0 && !isError && (
+            <div className="space-y-4 mb-6">
+              <Skeleton className="h-32 w-full rounded-lg" />
+              <Skeleton className="h-48 w-full rounded-lg" />
+            </div>
+          )}
+
+          {/* ============================================
+              5. KPI CARDS (moved down)
+              ============================================ */}
+          {hasData && !isLoading && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <KpiCard
+                label="Total Evaluations"
+                value={kpi.totalEvaluations.toLocaleString()}
+                trend={kpi.trendTotal}
+                trendLabel="vs prev"
+                icon={<Activity className="h-4 w-4" />}
+              />
+              <KpiCard
+                label="Pass Rate"
+                value={`${kpi.passRate}%`}
+                trend={kpi.trendPassRate}
+                trendLabel="vs prev"
+                icon={<Shield className="h-4 w-4" />}
+              />
+              <KpiCard
+                label="Fail Rate"
+                value={`${kpi.failRate}%`}
+                trend={kpi.trendFailRate}
+                trendLabel="vs prev"
+                icon={<Gauge className="h-4 w-4" />}
+              />
+              <KpiCard
+                label="Avg Score"
+                value={`${kpi.avgScore}/100`}
+                trend={kpi.trendAvgScore}
+                trendLabel="vs prev"
+                icon={<BarChart3 className="h-4 w-4" />}
+              />
+            </div>
+          )}
+
+          {/* ============================================
+              6. METRIC CHARTS (moved to end)
+              ============================================ */}
+          {hasData && !isLoading && (
+            <Tabs defaultValue="safety" className="w-full">
+              <TabsList className="mb-4">
+                <TabsTrigger value="safety" className="text-sm">
+                  <Shield className="h-4 w-4 mr-1.5" />
+                  Safety Metrics
+                </TabsTrigger>
+                <TabsTrigger value="performance" className="text-sm">
+                  <Activity className="h-4 w-4 mr-1.5" />
+                  Performance Metrics
+                </TabsTrigger>
+                <TabsTrigger value="reliability" className="text-sm">
+                  <Gauge className="h-4 w-4 mr-1.5" />
+                  Reliability
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="safety">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {renderSafetyCharts()}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="performance">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {renderPerformanceCharts()}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="reliability">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {renderReliabilityCharts()}
+                </div>
+              </TabsContent>
+            </Tabs>
+          )}
+
+          {/* Loading skeleton for charts */}
+          {isLoading && runSummaries.length > 0 && !isError && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={i === 0 ? "col-span-2" : "col-span-1"}
+                >
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <Skeleton className="h-5 w-32 mb-4" />
+                    <Skeleton className="h-50 w-full" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Empty state for no evaluation data */}
+          {!isLoading && !isError && evaluations?.length === 0 && runSummaries.length > 0 && (
             <EmptyState
               message={
                 selectedRun?.monitoringStatus === "completed"
@@ -624,109 +631,16 @@ export default function DashboardPage() {
               suggestion={
                 selectedRun?.monitoringStatus === "completed"
                   ? "Try widening the time range or choose another run."
-                  : "Start or continue evaluation from the progress panel, then refresh when rows have been scored."
+                  : "Start or continue evaluation from the run header, then refresh when rows have been scored."
               }
               onAction={refreshAll}
               actionLabel="Refresh"
             />
           )}
-
-          {/* Dashboard content */}
-          {(!isError && (isLoading || (evaluations && evaluations.length > 0))) && (
-            <>
-              {/* KPI Row */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                <KpiCard
-                  label="Total Evaluations"
-                  value={kpi.totalEvaluations.toLocaleString()}
-                  trend={kpi.trendTotal}
-                  trendLabel="vs prev"
-                  icon={<Activity className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Pass Rate"
-                  value={`${kpi.passRate}%`}
-                  trend={kpi.trendPassRate}
-                  trendLabel="vs prev"
-                  icon={<Shield className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Fail Rate"
-                  value={`${kpi.failRate}%`}
-                  trend={kpi.trendFailRate}
-                  trendLabel="vs prev"
-                  icon={<Gauge className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Avg Score"
-                  value={`${kpi.avgScore}/100`}
-                  trend={kpi.trendAvgScore}
-                  trendLabel="vs prev"
-                  icon={<BarChart3 className="h-4 w-4" />}
-                />
-              </div>
-
-              {/* Skeleton loading */}
-              {isLoading && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={
-                        i === 0 ? "col-span-2" : "col-span-1"
-                      }
-                    >
-                      <div className="rounded-lg border border-border bg-card p-4">
-                        <Skeleton className="h-5 w-32 mb-4" />
-                        <Skeleton className="h-50 w-full" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Metric Tabs */}
-              {!isLoading && evaluations && evaluations.length > 0 && (
-                <Tabs defaultValue="safety" className="w-full">
-                  <TabsList className="mb-4">
-                    <TabsTrigger value="safety" className="text-sm">
-                      <Shield className="h-4 w-4 mr-1.5" />
-                      Safety Metrics
-                    </TabsTrigger>
-                    <TabsTrigger value="performance" className="text-sm">
-                      <Activity className="h-4 w-4 mr-1.5" />
-                      Performance Metrics
-                    </TabsTrigger>
-                    <TabsTrigger value="reliability" className="text-sm">
-                      <Gauge className="h-4 w-4 mr-1.5" />
-                      Reliability
-                    </TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="safety">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {renderSafetyCharts()}
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="performance">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {renderPerformanceCharts()}
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="reliability">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {renderReliabilityCharts()}
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              )}
-            </>
-          )}
         </div>
       </main>
 
+      {/* Trace Drawer (kept from original) */}
       <TraceDrawer
         open={Boolean(selectedPoint)}
         point={selectedPoint}

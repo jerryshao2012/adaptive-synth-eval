@@ -59,6 +59,10 @@ export interface EvaluationRecord {
   threshold_version?: string;
   sample_window_id?: number;
   source_line_index?: number;
+  // Optional metadata from the evaluation pipeline
+  scenario?: string;
+  persona?: string;
+  attack_category?: string;
 }
 
 export interface EvaluationsResponse {
@@ -273,4 +277,115 @@ export interface GoldenDataset {
   };
   createdAt: string;
   updatedAt: string;
+}
+
+// ---- Investigation Workbench Types ----
+
+export type VerdictLevel = "healthy" | "needs_review" | "failed";
+
+export interface InvestigationSummary {
+  verdict: VerdictLevel;
+  verdictLabel: string;
+  verdictDescription: string;
+  totalEvaluations: number;
+  failedTurnCount: number;
+  warnTurnCount: number;
+  passRate: number;
+  failRate: number;
+  worstPerformingMetric: {
+    metricKey: string;
+    label: string;
+    failCount: number;
+    avgScore: number;
+  } | null;
+  avgLatencyMs: number;
+  comparisonWithPrior: {
+    passRateChange: number;
+    failRateChange: number;
+    avgScoreChange: number;
+    hasPriorData: boolean;
+  } | null;
+}
+
+export interface FailureGroup {
+  groupKey: string;
+  groupLabel: string;
+  groupType: "scenario" | "persona" | "attack_category" | "response_status" | "metric";
+  count: number;
+  failCount: number;
+  severity: "critical" | "high" | "medium" | "low";
+  items: string[]; // item identifiers within the group
+  representativeMetric?: string;
+}
+
+export interface FailedMetricRanking {
+  metricKey: string;
+  label: string;
+  metricGroup: "safety" | "performance" | "reliability";
+  failCount: number;
+  warnCount: number;
+  totalCount: number;
+  failRate: number;
+  severity: "critical" | "high" | "medium" | "low";
+  avgScore: number;
+}
+
+export interface ConversationQueueItem {
+  runId: string;
+  conversationId: string;
+  turnId: string;
+  timestamp: string;
+  userText: string;
+  responseText: string;
+  safetyStatus: MetricScoreStatus;
+  performanceStatus: MetricScoreStatus;
+  overallSeverity: "critical" | "high" | "medium" | "low";
+  failedMetrics: string[];
+  safetyScores: Record<string, number>;
+  performanceScores: Record<string, number>;
+  latencyMs: number;
+  scenario?: string;
+  persona?: string;
+  attackCategory?: string;
+}
+
+export interface ConversationQueueFilters {
+  searchText?: string;
+  outcome?: "safety" | "performance" | "reliability" | "all";
+  severity?: "critical" | "high" | "medium" | "low" | "all";
+  groupFilter?: {
+    groupType: FailureGroup["groupType"];
+    groupKey: string;
+  };
+  sortBy?: "severity" | "recency" | "score";
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ConversationQueueResponse {
+  items: ConversationQueueItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  availableGroups: FailureGroup[];
+}
+
+// Artifact validation result from server boundary
+export interface ArtifactValidation {
+  runId: string;
+  isValid: boolean;
+  issues: ArtifactIssue[];
+  artifactFreshness: {
+    monitoringScores: { exists: boolean; lastModified?: string; recordCount: number };
+    monitoringState: { exists: boolean; lastModified?: string };
+    runState: { exists: boolean };
+    runSummary: { exists: boolean };
+  };
+}
+
+export interface ArtifactIssue {
+  artifact: string;
+  severity: "error" | "warning";
+  message: string;
+  details?: string;
 }
