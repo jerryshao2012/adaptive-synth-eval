@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { X, AlertTriangle, Loader2 } from "lucide-react";
 
@@ -20,8 +20,87 @@ interface TraceDrawerProps {
   onClose: () => void;
 }
 
-function pretty(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+function JsonPrimitive({ value }: { value: string | number | boolean | null }) {
+  if (value === null) {
+    return <span className="text-muted-foreground">null</span>;
+  }
+
+  if (typeof value === "string") {
+    return <span className="text-sky-600 dark:text-sky-300">{value}</span>;
+  }
+
+  if (typeof value === "number") {
+    return <span className="text-violet-600 dark:text-violet-300">{value}</span>;
+  }
+
+  return <span className="text-amber-600 dark:text-amber-300">{String(value)}</span>;
+}
+
+function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return <JsonPrimitive value={value} />;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span>[]</span>;
+    }
+
+    return (
+      <div>
+        <span>[</span>
+        <div className="ml-4 border-l border-border/50 pl-3">
+          {value.map((item, index) => (
+            <div key={`${depth}-${index}`}>
+              <JsonValue value={item} depth={depth + 1} />
+              {index < value.length - 1 && <span>,</span>}
+            </div>
+          ))}
+        </div>
+        <span>]</span>
+      </div>
+    );
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+
+    if (entries.length === 0) {
+      return <span>{"{}"}</span>;
+    }
+
+    return (
+      <div>
+        <span>{"{"}</span>
+        <div className="ml-4 border-l border-border/50 pl-3">
+          {entries.map(([key, entryValue], index) => (
+            <div key={`${depth}-${key}`}>
+              <span className="text-emerald-700 dark:text-emerald-300">{key}</span>
+              <span>: </span>
+              <JsonValue value={entryValue} depth={depth + 1} />
+              {index < entries.length - 1 && <span>,</span>}
+            </div>
+          ))}
+        </div>
+        <span>{"}"}</span>
+      </div>
+    );
+  }
+
+  return <span className="text-muted-foreground">{String(value)}</span>;
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-border/70 bg-muted/25 p-3 font-mono text-[11px] leading-5 text-foreground shadow-inner">
+      <JsonValue value={value} />
+    </div>
+  );
 }
 
 export function TraceDrawer({
@@ -33,7 +112,6 @@ export function TraceDrawer({
   onClose,
 }: TraceDrawerProps) {
   const [isPointSwitchAnimating, setIsPointSwitchAnimating] = useState(false);
-  const animationTimerRef = useRef<number | null>(null);
   const pointKey = useMemo(() => {
     if (!point) return "";
     return [
@@ -47,29 +125,29 @@ export function TraceDrawer({
   }, [point]);
 
   useEffect(() => {
-    if (!pointKey) {
-      setIsPointSwitchAnimating(false);
-      return;
+    // When a new point is selected, schedule the animation to start.
+    // This is deferred via setTimeout to avoid a synchronous setState call
+    // within the effect, which would trigger a cascading render.
+    if (pointKey) {
+      const timerId = setTimeout(() => setIsPointSwitchAnimating(true), 0);
+      return () => clearTimeout(timerId);
     }
-
-    setIsPointSwitchAnimating(true);
-    if (animationTimerRef.current) {
-      window.clearTimeout(animationTimerRef.current);
-    }
-
-    // Keep a short transition visible so rapid point changes feel intentional.
-    animationTimerRef.current = window.setTimeout(() => {
-      setIsPointSwitchAnimating(false);
-    }, 260);
-
-    return () => {
-      if (animationTimerRef.current) {
-        window.clearTimeout(animationTimerRef.current);
-      }
-    };
   }, [pointKey]);
 
-  const showLoadingState = isLoading || isPointSwitchAnimating;
+  useEffect(() => {
+    // When the animation is active, set a timer to turn it off after a short
+    // delay. This ensures the loading transition is visible even for fast loads.
+    if (isPointSwitchAnimating) {
+      const timerId = window.setTimeout(() => {
+        setIsPointSwitchAnimating(false);
+      }, 260);
+      return () => window.clearTimeout(timerId);
+    }
+  }, [isPointSwitchAnimating]);
+
+  // The loading state should show if the parent says it's loading, or if
+  // our animation is running for a newly selected point.
+  const showLoadingState = isLoading || (isPointSwitchAnimating && !!pointKey);
 
   const resolvedMetricStatus =
     trace && trace.evaluationRecord
@@ -169,9 +247,7 @@ export function TraceDrawer({
                   <p className="mb-2 text-xs text-muted-foreground">
                     {format(parseISO(trace.evaluationRecord.timestamp), "PPpp")}
                   </p>
-                  <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] leading-5 text-foreground">
-                    {pretty(trace.evaluationRecord)}
-                  </pre>
+                  <JsonBlock value={trace.evaluationRecord} />
                 </section>
               )}
 
@@ -180,9 +256,7 @@ export function TraceDrawer({
                   Chat History Row
                 </h3>
                 {trace.chatHistoryRecord ? (
-                  <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] leading-5 text-foreground">
-                    {pretty(trace.chatHistoryRecord)}
-                  </pre>
+                  <JsonBlock value={trace.chatHistoryRecord} />
                 ) : (
                   <p className="text-xs text-muted-foreground">No chat_history row matched this point.</p>
                 )}
@@ -193,9 +267,7 @@ export function TraceDrawer({
                   Turns Row
                 </h3>
                 {trace.turnRecord ? (
-                  <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] leading-5 text-foreground">
-                    {pretty(trace.turnRecord)}
-                  </pre>
+                  <JsonBlock value={trace.turnRecord} />
                 ) : (
                   <p className="text-xs text-muted-foreground">No turns row matched this point.</p>
                 )}

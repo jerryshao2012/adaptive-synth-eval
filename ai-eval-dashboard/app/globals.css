@@ -285,6 +285,14 @@
   background-image: radial-gradient(circle at top center, color-mix(in oklab, var(--primary) 12%, transparent), transparent 32%);
 }
 
+.markdown {
+  & .mermaid > svg {
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--color-border);
+    background-color: var(--color-surface);
+  }
+}
+
 @media (min-width: 1536px) {
   .monitor-layout {
     --trace-panel-width: 520px;
