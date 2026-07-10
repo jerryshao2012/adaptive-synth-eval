@@ -285,6 +285,12 @@ def make_mock_backend(failure_rate: float = 0.15, seed: int = 42) -> LLMCallFn:
     return call
 
 
+def _profile_prefixed_model_ids(model_id: str) -> list[str]:
+    if not model_id.startswith(("us.", "eu.", "global.")):
+        return [f"us.{model_id}", f"eu.{model_id}", f"global.{model_id}"]
+    return []
+
+
 def make_bedrock_backend(
         model: str = "anthropic.claude-haiku-4-5-20251001-v1:0",
         region: str = "us-east-1",
@@ -321,32 +327,85 @@ def make_bedrock_backend(
         # across all Bedrock model providers.
         provider = "converse"
 
-    def _converse_call(system: str, user: str) -> Dict[str, Any]:
-        response = client.converse(
-            modelId=model,
-            system=[{"text": system}],
-            messages=[{"role": "user", "content": [{"text": user}]}],
-            inferenceConfig={"maxTokens": max_tokens},
-        )
-        blocks = response["output"]["message"]["content"]
-        _log_reasoning(model, blocks)
-        text = "".join(b.get("text", "") for b in blocks)
-        usage = response.get("usage", {})
-        return {
-            "content": text,
-            "usage": {
-                "prompt_tokens": usage.get("inputTokens", 0),
-                "completion_tokens": usage.get("outputTokens", 0),
-            },
-        }
-
     def call(system: str, user: str) -> Dict[str, Any]:
         import json as _json
 
-        if provider == "converse":
-            return _converse_call(system, user)
+        def _converse(model_id: str) -> Dict[str, Any]:
+            response = client.converse(
+                modelId=model_id,
+                system=[{"text": system}],
+                messages=[{"role": "user", "content": [{"text": user}]}],
+                inferenceConfig={"maxTokens": max_tokens},
+            )
+            blocks = response["output"]["message"]["content"]
+            _log_reasoning(model_id, blocks)
+            text = "".join(b.get("text", "") for b in blocks)
+            usage = response.get("usage", {})
+            return {
+                "content": text,
+                "usage": {
+                    "prompt_tokens": usage.get("inputTokens", 0),
+                    "completion_tokens": usage.get("outputTokens", 0),
+                },
+            }
 
-        is_nova = "nova" in model
+        def _invoke_openai_style(model_id: str) -> Dict[str, Any]:
+            body = _json.dumps({
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": max_tokens,
+            })
+            response = client.invoke_model(
+                modelId=model_id,
+                body=body,
+                contentType="application/json",
+                accept="application/json",
+            )
+            result = _json.loads(response["body"].read())
+            choice = result["choices"][0]["message"]
+            usage = result.get("usage", {})
+            return {
+                "content": choice.get("content", ""),
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                },
+            }
+
+        is_nova = "nova" in model_lc
+
+        if provider == "converse":
+            try:
+                return _converse(model)
+            except Exception as exc:
+                message = str(exc).lower()
+                is_invalid_model_id = (
+                        "invalid model identifier" in message
+                        or ("model identifier" in message and "invalid" in message)
+                )
+                needs_inference_profile = (
+                        "on-demand throughput" in message
+                        and "inference profile" in message
+                )
+                if needs_inference_profile:
+                    last_error: Exception = exc
+                    for model_id in _profile_prefixed_model_ids(model):
+                        try:
+                            return _converse(model_id)
+                        except Exception as profile_exc:
+                            last_error = profile_exc
+                            # If it's a model that can run in openai-style (like moonshot or kimi)
+                            if "moonshot" in model_lc or "kimi" in model_lc or "deepseek" in model_lc:
+                                try:
+                                    return _invoke_openai_style(model_id)
+                                except Exception as invoke_exc:
+                                    last_error = invoke_exc
+                    raise last_error
+                if is_invalid_model_id and ("moonshot" in model_lc or "kimi" in model_lc or "deepseek" in model_lc):
+                    return _invoke_openai_style(model)
+                raise exc
 
         if provider == "anthropic":
             body = _json.dumps({
@@ -390,36 +449,26 @@ def make_bedrock_backend(
                     "completion_tokens": result["results"][0]["tokenCount"],
                 },
             }
-
-        # Use Bedrock Converse when supported by the model/profile.
-        try:
-            return _converse(model)
-        except Exception as exc:
-            message = str(exc).lower()
-            is_invalid_model_id = (
-                    "invalid model identifier" in message
-                    or ("model identifier" in message and "invalid" in message)
-            )
-            needs_inference_profile = (
-                    "on-demand throughput" in message
-                    and "inference profile" in message
-            )
-            if needs_inference_profile:
-                last_error: Exception = exc
-                for model_id in _profile_prefixed_model_ids(model):
-                    try:
-                        return _converse(model_id)
-                    except Exception as profile_exc:
-                        last_error = profile_exc
-                        if provider in {"openai", "moonshot"}:
-                            try:
-                                return _invoke_openai_style(model_id)
-                            except Exception as invoke_exc:
-                                last_error = invoke_exc
-                raise last_error
-            if is_invalid_model_id and provider in {"openai", "moonshot"}:
-                return _invoke_openai_style(model)
-            raise
+        elif provider == "amazon":
+            if is_nova:
+                output = result["output"]["message"]["content"]
+                text = "".join(b.get("text", "") for b in output)
+                usage = result.get("usage", {})
+                return {
+                    "content": text,
+                    "usage": {
+                        "prompt_tokens": usage.get("inputTokens", 0),
+                        "completion_tokens": usage.get("outputTokens", 0),
+                    },
+                }
+            else:
+                return {
+                    "content": result["results"][0]["outputText"],
+                    "usage": {
+                        "prompt_tokens": result["inputTextTokenCount"],
+                        "completion_tokens": result["results"][0]["tokenCount"],
+                    },
+                }
 
     return call
 

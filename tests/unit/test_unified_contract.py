@@ -28,7 +28,7 @@ def test_load_example_contract():
 def test_llm_for_inherits_top_level():
     contract = load_unified_contract(EXAMPLE)
     # in unified_evaluation_demo.yaml, no component overrides are configured, so all components inherit top-level
-    assert contract.llm_for("judge").provider == "bedrock"
+    assert contract.llm_for("judge").provider == contract.llm.provider
     assert contract.llm_for("planner").provider == contract.llm.provider
 
 

@@ -192,7 +192,7 @@ class ChatbotClient:
                 "Please set CHATBOT_ENDPOINT environment variable or provide endpoint in config."
             )
             return ChatbotResponse.from_payload(
-                {"response": mock_response},
+                {},
                 latency_ms=None,
                 status_code=0,
                 error=error
