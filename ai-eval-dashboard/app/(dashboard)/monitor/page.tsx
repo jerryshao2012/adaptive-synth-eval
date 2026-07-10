@@ -10,6 +10,9 @@ import {
   Gauge,
   Activity,
   BarChart3,
+  ChevronDown,
+  ChevronRight,
+  FileText,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -103,6 +106,7 @@ export default function DashboardPage() {
     useState<Record<string, Partial<EvalRunParameters>>>({});
   const [expandedOverrideRunId, setExpandedOverrideRunId] = useState<string | null>(null);
   const [pendingActionRunId, setPendingActionRunId] = useState<string | undefined>(undefined);
+  const [isProgressNotesOpen, setIsProgressNotesOpen] = useState(false);
   const [chartPeriods, setChartPeriods] = useState<
     Record<string, TimePeriodPreset>
   >({});
@@ -557,14 +561,45 @@ export default function DashboardPage() {
                     />
                   </div>
 
-                  <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
-                    <div className="mb-2 font-medium text-foreground">Progress Notes</div>
-                    <div className="max-h-[320px] overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
+                  <section className="rounded-xl border border-border bg-background/85">
+                    <button
+                      type="button"
+                      onClick={() => setIsProgressNotesOpen((prev) => !prev)}
+                      aria-label={isProgressNotesOpen ? "Collapse progress notes" : "Expand progress notes"}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-primary/12 text-primary">
+                          <FileText className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <div className="text-sm font-medium text-foreground">Progress Notes</div>
+                          <div className="text-xs text-muted-foreground">
+                            {isProgressNotesOpen
+                              ? "Click to collapse notes"
+                              : "Click to expand notes"}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-muted-foreground">
+                        {isProgressNotesOpen ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" />
+                        )}
+                      </span>
+                    </button>
+
+                    {isProgressNotesOpen && (
+                      <div className="border-t border-border px-3 pb-3 pt-2">
+                        <div className="max-h-[320px] overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
+                          </ReactMarkdown>
+                        </div>
+                      </div>
+                    )}
+                  </section>
                 </CardContent>
               </Card>
             </div>
