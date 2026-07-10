@@ -39,7 +39,7 @@ import {
 } from "@/hooks/use-evaluations";
 
 import { KpiCard } from "@/components/dashboard/kpi-card";
-import { ChartCard, ChartSummaryBar } from "@/components/dashboard/chart-card";
+import ChartSummaryBar, { ChartCard } from "@/components/dashboard/chart-card";
 import { MetricLineChart } from "@/components/dashboard/metric-line-chart";
 import { RunThreadList } from "@/components/dashboard/run-thread-list";
 import { EmptyState, ErrorCard } from "@/components/shared/empty-state";
@@ -433,7 +433,7 @@ export default function DashboardPage() {
         {runSummaries.length > 0 && (
           <aside
             className={cn(
-              "fixed top-14 bottom-0 left-0 z-40 border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-all duration-300 ease-out lg:left-[var(--dashboard-sidebar-width)] lg:w-[var(--thread-panel-width)]",
+              "fixed top-14 bottom-0 left-0 z-40 border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-all duration-300 ease-out lg:left-(--dashboard-sidebar-width) lg:w-(--thread-panel-width)",
               isThreadPanelOpen
                 ? "translate-x-0 opacity-100 pointer-events-auto"
                 : "-translate-x-full opacity-0 pointer-events-none"
@@ -592,7 +592,7 @@ export default function DashboardPage() {
 
                     {isProgressNotesOpen && (
                       <div className="border-t border-border px-3 pb-3 pt-2">
-                        <div className="max-h-[320px] overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
+                        <div className="max-h-80 overflow-y-auto whitespace-normal leading-5 text-xs text-muted-foreground [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-1 [&_code]:rounded [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {monitoringStatus?.progressMarkdown || "Progress markdown will appear here after monitoring starts."}
                           </ReactMarkdown>
@@ -678,7 +678,7 @@ export default function DashboardPage() {
                     >
                       <div className="rounded-lg border border-border bg-card p-4">
                         <Skeleton className="h-5 w-32 mb-4" />
-                        <Skeleton className="h-[200px] w-full" />
+                        <Skeleton className="h-50 w-full" />
                       </div>
                     </div>
                   ))}

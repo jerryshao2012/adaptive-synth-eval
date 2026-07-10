@@ -14,7 +14,6 @@ import {
 import { DatasetList } from "@/components/golden/dataset-list";
 import { CreateDatasetDialog } from "@/components/golden/create-dataset-dialog";
 import { DatasetDetailPanel } from "@/components/golden/dataset-detail-panel";
-import { EmptyState } from "@/components/shared/empty-state";
 
 export default function GoldenDatasetPage() {
   const queryClient = useQueryClient();

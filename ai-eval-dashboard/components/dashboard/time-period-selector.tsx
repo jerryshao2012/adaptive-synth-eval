@@ -26,7 +26,7 @@ export function TimePeriodSelector({
     <Select value={value} onValueChange={(v) => onChange(v as TimePeriodPreset)}>
       <SelectTrigger
         className={cn(
-          "h-7 w-[130px] border-border bg-background text-xs",
+          "h-7 w-32.5 border-border bg-background text-xs",
           className
         )}
       >

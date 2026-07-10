@@ -57,7 +57,7 @@ export function ChartCard({
           <Skeleton className="h-5 w-32" />
         </CardHeader>
         <CardContent>
-          <Skeleton className="h-[200px] w-full" />
+          <Skeleton className="h-50 w-full" />
         </CardContent>
       </Card>
     );
@@ -82,7 +82,7 @@ export function ChartCard({
                 <TooltipTrigger>
                   <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
                 </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-[280px] text-xs">
+                <TooltipContent side="top" className="max-w-70 text-xs">
                   {tooltip}
                 </TooltipContent>
               </Tooltip>
@@ -127,7 +127,7 @@ export function ChartCard({
   );
 }
 
-export function ChartSummaryBar({
+function ChartSummaryBar({
   avg,
   min,
   max,
@@ -161,3 +161,5 @@ export function ChartSummaryBar({
     </div>
   );
 }
+
+export default ChartSummaryBar

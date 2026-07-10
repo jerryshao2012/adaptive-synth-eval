@@ -172,7 +172,7 @@ export function RunThreadList({
           </div>
         </div>
 
-        <ScrollArea className="h-[380px] pr-2">
+        <ScrollArea className="h-95 pr-2">
           <div className="space-y-2">
             {orderedRuns.map((run) => {
               const isSelected = selectedRunId === run.runId;

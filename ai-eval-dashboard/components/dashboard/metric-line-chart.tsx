@@ -89,7 +89,7 @@ export function MetricLineChart({
     const key = makePointKey(point);
     if (!key) return;
 
-    const now = Date.now();
+    const now = new Date().getTime();
     const last = lastSelectedRef.current;
     if (last && last.key === key && now - last.at < 240) {
       return;
@@ -131,14 +131,14 @@ export function MetricLineChart({
 
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-[200px] text-sm text-muted-foreground">
+      <div className="flex items-center justify-center h-50 text-sm text-muted-foreground">
         No data for this period
       </div>
     );
   }
 
   return (
-    <div className={cn("h-[200px] w-full", className)}>
+    <div className={cn("h-50 w-full", className)}>
       <ResponsiveContainer width="100%" height="100%" key={chartRenderKey}>
         <ComposedChart
           data={formattedData}

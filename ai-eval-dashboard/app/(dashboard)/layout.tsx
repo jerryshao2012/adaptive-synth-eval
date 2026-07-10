@@ -40,8 +40,8 @@ export default function DashboardLayout({
       <div
         className={
           desktopCollapsed
-            ? "flex flex-1 flex-col min-w-0 lg:ml-[56px]"
-            : "flex flex-1 flex-col min-w-0 lg:ml-[220px]"
+            ? "flex flex-1 flex-col min-w-0 lg:ml-14"
+            : "flex flex-1 flex-col min-w-0 lg:ml-55"
         }
       >
         <Header
