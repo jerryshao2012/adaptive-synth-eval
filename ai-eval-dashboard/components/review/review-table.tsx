@@ -20,7 +20,7 @@ interface ReviewTableProps {
 }
 
 function rowKey(item: ReviewQueueItem): string {
-  return `${item.runId}:${item.turnId}`;
+  return `${item.runId}:${item.conversationId}:${item.turnId}:${item.timestamp}`;
 }
 
 export function ReviewTable({
@@ -148,17 +148,9 @@ export function ReviewTable({
             return (
               <tr
                 key={key}
-                role="button"
-                tabIndex={0}
                 onClick={() => onRowClick(item)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onRowClick(item);
-                  }
-                }}
                 className={cn(
-                  "transition-colors cursor-pointer focus-visible:outline-none focus-visible:bg-accent/50",
+                  "transition-colors cursor-pointer",
                   isActive
                     ? "bg-accent"
                     : isSelected

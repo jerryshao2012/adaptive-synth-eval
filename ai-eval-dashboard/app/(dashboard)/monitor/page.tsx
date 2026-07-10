@@ -96,7 +96,7 @@ function filterEvaluationsByPeriod(
 export default function DashboardPage() {
   const [globalPeriod] = useState<TimePeriodPreset>("this-week");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
-  const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(true);
+  const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(false);
   const [globalEvalDefaults, setGlobalEvalDefaults] =
     useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
   const [threadParamOverrides, setThreadParamOverrides] =
@@ -129,7 +129,6 @@ export default function DashboardPage() {
     [activeRunId, runSummaries]
   );
   const hasLeftPanel = isThreadPanelOpen && runSummaries.length > 0;
-  const hasRightPanel = Boolean(selectedPoint);
 
   const {
     data: monitoringStatus,
@@ -138,6 +137,7 @@ export default function DashboardPage() {
   const {
     data: traceDetails,
     isLoading: isTraceLoading,
+    isFetching: isTraceFetching,
     error: traceError,
   } = useTraceDetails(selectedPoint);
   const startMonitoring = useStartMonitoring();
@@ -414,25 +414,9 @@ export default function DashboardPage() {
 
   // ---- Main render ----
   return (
-    <div className="flex flex-col min-h-full">
+    <div className="monitor-layout flex flex-col min-h-full">
       {/* Main content */}
       <main className="flex-1 overflow-y-auto relative">
-        {/* Thread panel toggle — floating button */}
-        {runSummaries.length > 0 && (
-          <Button
-            variant="outline"
-            size="icon-sm"
-            className="absolute top-3 left-3 z-20 shadow-md"
-            onClick={() => setIsThreadPanelOpen((prev) => !prev)}
-            aria-label={isThreadPanelOpen ? "Close thread list" : "Open thread list"}
-          >
-            {isThreadPanelOpen ? (
-              <PanelLeftClose className="h-4 w-4" />
-            ) : (
-              <PanelLeftOpen className="h-4 w-4" />
-            )}
-          </Button>
-        )}
         {isThreadPanelOpen && (
           <button
             type="button"
@@ -445,8 +429,10 @@ export default function DashboardPage() {
         {runSummaries.length > 0 && (
           <aside
             className={cn(
-              "fixed top-14 bottom-0 left-0 z-40 w-[360px] border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-transform duration-300 ease-out",
-              isThreadPanelOpen ? "translate-x-0" : "-translate-x-full"
+              "fixed top-14 bottom-0 left-0 z-40 border-r border-border bg-background/95 px-4 py-4 backdrop-blur transition-all duration-300 ease-out lg:left-[var(--dashboard-sidebar-width)] lg:w-[var(--thread-panel-width)]",
+              isThreadPanelOpen
+                ? "translate-x-0 opacity-100 pointer-events-auto"
+                : "-translate-x-full opacity-0 pointer-events-none"
             )}
           >
             <RunThreadList
@@ -485,11 +471,30 @@ export default function DashboardPage() {
 
         <div
           className={cn(
-            "px-6 py-6 transition-[margin] duration-300 ease-out",
-            hasLeftPanel ? "lg:ml-[390px]" : "lg:ml-0",
-            hasRightPanel ? "lg:mr-[540px]" : "lg:mr-0"
+            "monitor-content min-w-0 px-6 py-6 transition-[margin] duration-300 ease-out",
+            hasLeftPanel && "monitor-content--left",
+            selectedPoint && "monitor-content--right"
           )}
         >
+          {runSummaries.length > 0 && (
+            <div className="mb-4 flex items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsThreadPanelOpen((prev) => !prev)}
+                aria-label={isThreadPanelOpen ? "Hide thread list" : "Show thread list"}
+                className="gap-2"
+              >
+                {isThreadPanelOpen ? (
+                  <PanelLeftClose className="h-4 w-4" />
+                ) : (
+                  <PanelLeftOpen className="h-4 w-4" />
+                )}
+                <span>{isThreadPanelOpen ? "Hide Threads" : "Show Threads"}</span>
+              </Button>
+            </div>
+          )}
+
           {!isRunsLoading && runSummaries.length === 0 && (
             <EmptyState
               message="No run folders found under outputs/runs."
@@ -691,7 +696,7 @@ export default function DashboardPage() {
         open={Boolean(selectedPoint)}
         point={selectedPoint}
         trace={traceDetails}
-        isLoading={isTraceLoading}
+        isLoading={isTraceLoading || isTraceFetching}
         errorMessage={traceError instanceof Error ? traceError.message : undefined}
         onClose={() => setSelectedPoint(null)}
       />

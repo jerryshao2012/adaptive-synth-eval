@@ -140,7 +140,7 @@ export function RunThreadList({
     <Card className="border-border bg-card">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-semibold text-foreground">
-          Run Threads
+          Threads
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">

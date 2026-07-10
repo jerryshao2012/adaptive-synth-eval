@@ -10,9 +10,14 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(true);
 
-  const toggleMobileSidebar = useCallback(() => {
+  const toggleSidebar = useCallback(() => {
     setMobileOpen((prev) => !prev);
+  }, []);
+
+  const toggleDesktopSidebar = useCallback(() => {
+    setDesktopCollapsed((prev) => !prev);
   }, []);
 
   const closeMobileSidebar = useCallback(() => {
@@ -20,10 +25,30 @@ export default function DashboardLayout({
   }, []);
 
   return (
-    <div className="flex h-full">
-      <Sidebar mobileOpen={mobileOpen} onMobileClose={closeMobileSidebar} />
-      <div className="flex flex-1 flex-col min-w-0 lg:ml-[220px]">
-        <Header onToggleSidebar={toggleMobileSidebar} />
+    <div
+      className={
+        desktopCollapsed
+          ? "dashboard-shell-collapsed flex h-full"
+          : "dashboard-shell-expanded flex h-full"
+      }
+    >
+      <Sidebar
+        mobileOpen={mobileOpen}
+        onMobileClose={closeMobileSidebar}
+        desktopCollapsed={desktopCollapsed}
+      />
+      <div
+        className={
+          desktopCollapsed
+            ? "flex flex-1 flex-col min-w-0 lg:ml-[56px]"
+            : "flex flex-1 flex-col min-w-0 lg:ml-[220px]"
+        }
+      >
+        <Header
+          onToggleSidebar={toggleSidebar}
+          desktopCollapsed={desktopCollapsed}
+          onToggleDesktopSidebar={toggleDesktopSidebar}
+        />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

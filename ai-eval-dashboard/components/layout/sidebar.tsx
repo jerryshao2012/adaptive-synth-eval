@@ -3,44 +3,18 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import {
-  Activity,
-  BarChart3,
-  ClipboardCheck,
-  Database,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { BarChart3 } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
-import { useState } from "react";
-
-const NAV_ITEMS = [
-  {
-    href: "/monitor",
-    label: "Monitor",
-    icon: Activity,
-  },
-  {
-    href: "/review",
-    label: "Review Queue",
-    icon: ClipboardCheck,
-  },
-  {
-    href: "/golden-dataset",
-    label: "Golden Dataset",
-    icon: Database,
-  },
-] as const;
+import { NAV_ITEMS } from "@/components/layout/navigation-items";
 
 interface SidebarProps {
   mobileOpen: boolean;
   onMobileClose: () => void;
+  desktopCollapsed: boolean;
 }
 
-export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
+export function Sidebar({ mobileOpen, onMobileClose, desktopCollapsed }: SidebarProps) {
   const pathname = usePathname();
-  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
 
   // On mobile: mobileOpen controls visibility. On desktop: always visible.
   const isVisible = mobileOpen; // mobile only
@@ -75,7 +49,9 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
             !isWide && "lg:justify-center lg:px-0"
           )}
         >
-          <BarChart3 className="h-5 w-5 shrink-0 text-primary" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-primary/14 text-primary">
+            <BarChart3 className="h-4.5 w-4.5 shrink-0" />
+          </div>
           {isWide && (
             <span className="text-sm font-semibold text-sidebar-foreground truncate hidden lg:inline">
               AI Eval Platform
@@ -96,10 +72,10 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
                 href={href}
                 onClick={onMobileClose}
                 className={cn(
-                  "flex items-center gap-3 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+                  "flex items-center gap-3 rounded-2xl px-2.5 py-2.5 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/16 hover:text-sidebar-foreground",
                   !isWide && "lg:justify-center lg:px-0"
                 )}
                 aria-current={isActive ? "page" : undefined}
@@ -114,23 +90,6 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         {/* Theme toggle */}
         <div className="border-t border-sidebar-border p-2">
           <ThemeToggle />
-        </div>
-
-        {/* Desktop collapse toggle */}
-        <div className="hidden lg:block border-t border-sidebar-border p-2">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="w-full text-sidebar-foreground/60 hover:text-sidebar-foreground"
-            onClick={() => setDesktopCollapsed((prev) => !prev)}
-            aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {desktopCollapsed ? (
-              <ChevronRight className="h-4 w-4" />
-            ) : (
-              <ChevronLeft className="h-4 w-4" />
-            )}
-          </Button>
         </div>
       </aside>
     </>

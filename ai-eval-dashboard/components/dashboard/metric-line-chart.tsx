@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  LineChart,
+  ComposedChart,
   Line,
   Area,
   XAxis,
@@ -10,7 +10,6 @@ import {
   CartesianGrid,
   Tooltip,
   ReferenceLine,
-  ReferenceArea,
   ResponsiveContainer,
 } from "recharts";
 import { format, parseISO } from "date-fns";
@@ -47,13 +46,59 @@ export function MetricLineChart({
   onPointClick,
 }: MetricLineChartProps) {
   const lineColor = "hsl(206 85% 42%)";
+  const [clickedPointKey, setClickedPointKey] = useState<string | null>(null);
+  const clickFeedbackTimerRef = useRef<number | null>(null);
+  const suppressChartFallbackUntilRef = useRef<number>(0);
+  const lastSelectedRef = useRef<{ key: string; at: number } | null>(null);
 
-  const emitPointIfPresent = (candidate: unknown) => {
-    if (!onPointClick || !candidate || typeof candidate !== "object") return;
-    const maybe = candidate as { pointIdentity?: MetricPointIdentity };
-    if (maybe.pointIdentity) {
-      onPointClick(maybe.pointIdentity);
+  const makePointKey = (point: MetricPointIdentity | undefined): string | null => {
+    if (!point) return null;
+    return [
+      point.runId,
+      point.conversationId || "",
+      point.turnId,
+      point.timestamp,
+      point.metricGroup,
+      point.metricKey,
+    ].join("|");
+  };
+
+  const triggerClickFeedback = (point: MetricPointIdentity | undefined) => {
+    const key = makePointKey(point);
+    if (!key) return;
+
+    setClickedPointKey(key);
+    if (clickFeedbackTimerRef.current) {
+      window.clearTimeout(clickFeedbackTimerRef.current);
     }
+    clickFeedbackTimerRef.current = window.setTimeout(() => {
+      setClickedPointKey(null);
+    }, 550);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (clickFeedbackTimerRef.current) {
+        window.clearTimeout(clickFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  const selectPoint = (point: MetricPointIdentity | undefined) => {
+    if (!point || !onPointClick) return;
+    const key = makePointKey(point);
+    if (!key) return;
+
+    const now = Date.now();
+    const last = lastSelectedRef.current;
+    if (last && last.key === key && now - last.at < 240) {
+      return;
+    }
+
+    lastSelectedRef.current = { key, at: now };
+    suppressChartFallbackUntilRef.current = now + 240;
+    triggerClickFeedback(point);
+    onPointClick(point);
   };
 
   const formatTick = (isoTime: string) => {
@@ -81,13 +126,8 @@ export function MetricLineChart({
       })),
     [data]
   );
-
-  const forecastStartIndex = useMemo(
-    () => Math.max(0, Math.floor(formattedData.length * 0.88)),
-    [formattedData]
-  );
-  const forecastStart = formattedData[forecastStartIndex]?.isoTime;
-  const forecastEnd = formattedData[formattedData.length - 1]?.isoTime;
+  const chartRenderKey =
+    `${period ?? "default"}-${formattedData[0]?.isoTime ?? ""}-${formattedData[formattedData.length - 1]?.isoTime ?? ""}-${formattedData.length}`;
 
   if (data.length === 0) {
     return (
@@ -99,16 +139,24 @@ export function MetricLineChart({
 
   return (
     <div className={cn("h-[200px] w-full", className)}>
-      <ResponsiveContainer width="100%" height="100%" key={`${period ?? "default"}-${data.length}`}>
-        <LineChart
+      <ResponsiveContainer width="100%" height="100%" key={chartRenderKey}>
+        <ComposedChart
           data={formattedData}
           margin={{ top: 8, right: 8, bottom: 14, left: 0 }}
           onClick={(state) => {
             if (!onPointClick || !state || typeof state !== "object") return;
+            if (Date.now() < suppressChartFallbackUntilRef.current) return;
+
             const maybeState = state as {
               activePayload?: Array<{ payload?: ChartDataPoint }>;
+              activeLabel?: string;
             };
-            emitPointIfPresent(maybeState.activePayload?.[0]?.payload);
+            const fromPayload = maybeState.activePayload?.[0]?.payload?.pointIdentity;
+            const fromActiveLabel = maybeState.activeLabel
+              ? formattedData.find((d) => d.isoTime === maybeState.activeLabel)?.pointIdentity
+              : undefined;
+            const fallbackPoint = fromPayload || fromActiveLabel;
+            selectPoint(fallbackPoint);
           }}
         >
           <CartesianGrid
@@ -129,6 +177,7 @@ export function MetricLineChart({
           />
           <YAxis
             domain={yDomain}
+            padding={{ top: 4, bottom: 10 }}
             tick={{ fontSize: 11, fill: "hsl(210 12% 35%)" }}
             tickLine={false}
             axisLine={{ stroke: "hsl(210 18% 72%)" }}
@@ -151,10 +200,6 @@ export function MetricLineChart({
               <stop offset="72%" stopColor={lineColor} stopOpacity={0.05} />
               <stop offset="72%" stopColor={lineColor} stopOpacity={0.025} />
               <stop offset="100%" stopColor={lineColor} stopOpacity={0.025} />
-            </linearGradient>
-            <linearGradient id="metricForecastBand" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="hsl(148 45% 46%)" stopOpacity={0.28} />
-              <stop offset="100%" stopColor="hsl(148 45% 46%)" stopOpacity={0.06} />
             </linearGradient>
           </defs>
           <Tooltip
@@ -210,18 +255,6 @@ export function MetricLineChart({
               }}
             />
           )}
-          {forecastStart && forecastEnd && forecastStart !== forecastEnd && (
-            <ReferenceArea
-              x1={forecastStart}
-              x2={forecastEnd}
-              y1={yDomain[0]}
-              y2={typeof yDomain[1] === "number" ? yDomain[1] : undefined}
-              fill="url(#metricForecastBand)"
-              fillOpacity={1}
-              ifOverflow="visible"
-              strokeOpacity={0}
-            />
-          )}
           <Area
             type="monotone"
             dataKey="value"
@@ -241,6 +274,7 @@ export function MetricLineChart({
             dataKey="value"
             stroke={lineColor}
             strokeWidth={3}
+            isAnimationActive={false}
             dot={(dotProps: unknown) => {
               const p = dotProps as {
                 cx?: number;
@@ -252,34 +286,55 @@ export function MetricLineChart({
               }
 
               const payload = p.payload;
+              const handlePointPress = (event: { stopPropagation: () => void }) => {
+                event.stopPropagation();
+                if (payload?.pointIdentity && onPointClick) {
+                  selectPoint(payload.pointIdentity);
+                }
+              };
+
+              const pointKey = makePointKey(payload?.pointIdentity);
+              const isClicked = Boolean(pointKey && pointKey === clickedPointKey);
+
               return (
                 <g
                   className={onPointClick ? "cursor-pointer" : undefined}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (payload?.pointIdentity && onPointClick) {
-                      onPointClick(payload.pointIdentity);
-                    }
-                  }}
+                  onPointerDown={handlePointPress}
+                  onMouseDown={handlePointPress}
+                  onClick={handlePointPress}
                 >
-                  <circle cx={p.cx} cy={p.cy} r={12} fill="transparent" />
+                  <circle cx={p.cx} cy={p.cy} r={15} fill="transparent" pointerEvents="all" />
+                  {isClicked && (
+                    <circle
+                      cx={p.cx}
+                      cy={p.cy}
+                      r={10}
+                      fill="none"
+                      stroke={lineColor}
+                      strokeOpacity={0.35}
+                      strokeWidth={2}
+                      className="animate-ping"
+                    />
+                  )}
+                  {isClicked && (
+                    <circle
+                      cx={p.cx}
+                      cy={p.cy}
+                      r={8}
+                      fill="none"
+                      stroke={lineColor}
+                      strokeOpacity={0.65}
+                      strokeWidth={2}
+                    />
+                  )}
                   <circle cx={p.cx} cy={p.cy} r={5} fill={lineColor} stroke="white" strokeWidth={1.3} />
                 </g>
               );
             }}
             activeDot={{ r: 7, fill: lineColor, stroke: "white", strokeWidth: 1.6 }}
-            onClick={(...args: unknown[]) => {
-              if (!onPointClick) return;
-              for (const arg of args) {
-                if (arg && typeof arg === "object" && "payload" in arg) {
-                  emitPointIfPresent((arg as { payload?: ChartDataPoint }).payload);
-                }
-                emitPointIfPresent(arg);
-              }
-            }}
             className={onPointClick ? "cursor-pointer" : undefined}
           />
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

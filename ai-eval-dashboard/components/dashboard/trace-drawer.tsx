@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { X, AlertTriangle, Loader2 } from "lucide-react";
 
@@ -31,6 +32,45 @@ export function TraceDrawer({
   errorMessage,
   onClose,
 }: TraceDrawerProps) {
+  const [isPointSwitchAnimating, setIsPointSwitchAnimating] = useState(false);
+  const animationTimerRef = useRef<number | null>(null);
+  const pointKey = useMemo(() => {
+    if (!point) return "";
+    return [
+      point.runId,
+      point.conversationId || "",
+      point.turnId,
+      point.timestamp,
+      point.metricGroup,
+      point.metricKey,
+    ].join("|");
+  }, [point]);
+
+  useEffect(() => {
+    if (!pointKey) {
+      setIsPointSwitchAnimating(false);
+      return;
+    }
+
+    setIsPointSwitchAnimating(true);
+    if (animationTimerRef.current) {
+      window.clearTimeout(animationTimerRef.current);
+    }
+
+    // Keep a short transition visible so rapid point changes feel intentional.
+    animationTimerRef.current = window.setTimeout(() => {
+      setIsPointSwitchAnimating(false);
+    }, 260);
+
+    return () => {
+      if (animationTimerRef.current) {
+        window.clearTimeout(animationTimerRef.current);
+      }
+    };
+  }, [pointKey]);
+
+  const showLoadingState = isLoading || isPointSwitchAnimating;
+
   const resolvedMetricStatus =
     trace && trace.evaluationRecord
       ? trace.point.metricGroup === "safety"
@@ -59,7 +99,7 @@ export function TraceDrawer({
 
       <aside
         className={cn(
-          "fixed top-16 right-0 bottom-0 z-50 w-full max-w-[520px] border-l border-border bg-card shadow-2xl transition-transform duration-300 ease-out",
+          "fixed top-16 right-0 bottom-0 z-50 w-full border-l border-border bg-card shadow-2xl transition-transform duration-300 ease-out lg:w-[var(--trace-panel-width)]",
           open ? "translate-x-0" : "translate-x-full"
         )}
       >
@@ -94,21 +134,29 @@ export function TraceDrawer({
             </div>
           )}
 
-          {isLoading && (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-background p-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Resolving source records for this point...
+          {showLoadingState && (
+            <div className="space-y-3 rounded-md border border-border bg-background p-3 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Resolving source records for this point...
+              </div>
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 w-2/5 rounded bg-muted/60" />
+                <div className="h-3 w-full rounded bg-muted/50" />
+                <div className="h-3 w-[92%] rounded bg-muted/50" />
+                <div className="h-3 w-[78%] rounded bg-muted/50" />
+              </div>
             </div>
           )}
 
-          {!isLoading && errorMessage && (
+          {!showLoadingState && errorMessage && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>{errorMessage}</div>
             </div>
           )}
 
-          {!isLoading && !errorMessage && trace && (
+          {!showLoadingState && !errorMessage && trace && (
             <div className="space-y-4">
               {trace.evaluationRecord && (
                 <section className="rounded-md border border-border bg-background p-3">
@@ -161,7 +209,7 @@ export function TraceDrawer({
             </div>
           )}
 
-          {!isLoading && !errorMessage && !trace && !point && (
+          {!showLoadingState && !errorMessage && !trace && !point && (
             <div className="rounded-md border border-border bg-background p-3 text-sm text-muted-foreground">
               Click a point in any line chart to load the exact monitoring row and related source records.
             </div>

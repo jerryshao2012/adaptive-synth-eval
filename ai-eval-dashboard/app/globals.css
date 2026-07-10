@@ -63,24 +63,24 @@
 }
 
 :root {
-  /* BMO Dark theme (default) — matches bmo-deepagent-ui :root */
-  --background: hsl(203 100% 2%);        /* #030a12 */
-  --foreground: hsl(217 64% 93%);        /* #eaf1ff */
-  --card: hsl(214 22% 11%);              /* #141a22 */
-  --card-foreground: hsl(217 64% 93%);   /* #eaf1ff */
-  --popover: hsl(214 22% 11%);           /* #141a22 */
-  --popover-foreground: hsl(217 64% 93%);
+  /* BMO.AI dark shell */
+  --background: hsl(220 27% 4%);         /* #07090d */
+  --foreground: hsl(214 60% 95%);        /* #edf3ff */
+  --card: hsl(220 22% 8%);               /* #10151d */
+  --card-foreground: hsl(214 60% 95%);
+  --popover: hsl(220 22% 8%);
+  --popover-foreground: hsl(214 60% 95%);
   --primary: hsl(220 85% 43%);           /* #1155cc */
   --primary-foreground: hsl(0 0% 100%);  /* #ffffff */
-  --secondary: hsl(216 29% 14%);         /* #19222d */
-  --secondary-foreground: hsl(217 64% 93%);
-  --muted: hsl(216 29% 14%);
-  --muted-foreground: hsl(214 26% 77%);  /* #b7c4d6 */
-  --accent: hsl(212 29% 18%);            /* #1f2a37 */
-  --accent-foreground: hsl(217 64% 93%);
+  --secondary: hsl(212 26% 13%);         /* #18212c */
+  --secondary-foreground: hsl(214 60% 95%);
+  --muted: hsl(212 26% 13%);
+  --muted-foreground: hsl(215 23% 72%);  /* #a7b6ca */
+  --accent: hsl(208 43% 20%);            /* #1d3f53 */
+  --accent-foreground: hsl(214 60% 95%);
   --destructive: hsl(0 100% 47%);        /* #ee0000 */
-  --border: hsl(214 26% 24%);            /* #2c394c */
-  --input: hsl(214 26% 24%);
+  --border: hsl(211 25% 24%);            /* #2d394b */
+  --input: hsl(211 25% 24%);
   --ring: hsl(220 85% 43%);              /* #1155cc */
   --radius: 0.5rem;
 
@@ -92,22 +92,22 @@
   --chart-5: hsl(27 87% 67%);            /* orange */
 
   /* BMO sidebar */
-  --sidebar: hsl(202 60% 16%);           /* #102e40 */
-  --sidebar-foreground: hsl(217 64% 93%);
+  --sidebar: hsl(204 53% 19%);           /* #173b4a */
+  --sidebar-foreground: hsl(214 60% 95%);
   --sidebar-primary: hsl(220 85% 43%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(212 29% 18%);
-  --sidebar-accent-foreground: hsl(217 64% 93%);
-  --sidebar-border: hsl(214 26% 24%);
+  --sidebar-accent: hsl(214 64% 53%);
+  --sidebar-accent-foreground: hsl(0 0% 100%);
+  --sidebar-border: hsl(208 24% 31%);
   --sidebar-ring: hsl(220 85% 43%);
 
   /* BMO semantic tokens */
   --success: #2fbf71;
   --warning: #ffb73c;
   --error: #ee0000;
-  --surface: #141a22;
-  --header-bg: #102e40;
-  --border-light: #1e2a3a;
+  --surface: #10151d;
+  --header-bg: #07090d;
+  --border-light: #202a37;
 
   /* HITL review tokens */
   --human-review: #10B981;   /* emerald — human scores */
@@ -116,10 +116,10 @@
   --delta-negative: #EF4444; /* red — human scored lower */
 }
 
-/* BMO Light mode — matches bmo-deepagent-ui @media (prefers-color-scheme: light) */
+/* BMO.AI light shell */
 @media (prefers-color-scheme: light) {
   :root {
-    --background: hsl(220 50% 97%);         /* #f5f7fb */
+    --background: hsl(220 25% 95%);         /* #f0f2f6 */
     --foreground: hsl(213 53% 13%);         /* #0f1f33 */
     --card: hsl(0 0% 100%);                 /* #ffffff */
     --card-foreground: hsl(213 53% 13%);
@@ -127,30 +127,30 @@
     --popover-foreground: hsl(213 53% 13%);
     --primary: hsl(220 85% 43%);            /* #1155cc — same as dark */
     --primary-foreground: hsl(0 0% 100%);
-    --secondary: hsl(216 29% 94%);
+    --secondary: hsl(220 22% 97%);
     --secondary-foreground: hsl(213 53% 13%);
-    --muted: hsl(216 29% 94%);
-    --muted-foreground: hsl(214 26% 40%);   /* #6c839f */
-    --accent: hsl(216 29% 94%);
+    --muted: hsl(220 22% 97%);
+    --muted-foreground: hsl(214 21% 47%);   /* #66768f */
+    --accent: hsl(216 100% 97%);
     --accent-foreground: hsl(213 53% 13%);
     --destructive: hsl(0 100% 47%);
-    --border: hsl(214 20% 86%);             /* #d5dee9 */
-    --input: hsl(214 20% 86%);
+    --border: hsl(213 17% 84%);             /* #d0d7e0 */
+    --input: hsl(213 17% 84%);
     --ring: hsl(220 85% 43%);
 
-    --sidebar: hsl(220 50% 97%);
+    --sidebar: hsl(220 22% 97%);
     --sidebar-foreground: hsl(213 53% 13%);
     --sidebar-primary: hsl(220 85% 43%);
     --sidebar-primary-foreground: hsl(0 0% 100%);
-    --sidebar-accent: hsl(216 29% 94%);
-    --sidebar-accent-foreground: hsl(213 53% 13%);
-    --sidebar-border: hsl(214 20% 86%);
+    --sidebar-accent: hsl(220 85% 43%);
+    --sidebar-accent-foreground: hsl(0 0% 100%);
+    --sidebar-border: hsl(213 17% 84%);
     --sidebar-ring: hsl(220 85% 43%);
 
     /* Light mode overrides for BMO tokens */
     --surface: #ffffff;
     --header-bg: #ffffff;
-    --border-light: #e3eaf3;
+    --border-light: #e6eaf0;
 
     /* HITL review tokens — same values, suitable for light backgrounds */
     --human-review: #059669;
@@ -162,7 +162,7 @@
 
 /* Manual theme toggle override — matches light mode variables above */
 [data-theme="light"] {
-  --background: hsl(220 50% 97%);
+  --background: hsl(220 25% 95%);
   --foreground: hsl(213 53% 13%);
   --card: hsl(0 0% 100%);
   --card-foreground: hsl(213 53% 13%);
@@ -170,31 +170,68 @@
   --popover-foreground: hsl(213 53% 13%);
   --primary: hsl(220 85% 43%);
   --primary-foreground: hsl(0 0% 100%);
-  --secondary: hsl(216 29% 94%);
+  --secondary: hsl(220 22% 97%);
   --secondary-foreground: hsl(213 53% 13%);
-  --muted: hsl(216 29% 94%);
-  --muted-foreground: hsl(214 26% 40%);
-  --accent: hsl(216 29% 94%);
+  --muted: hsl(220 22% 97%);
+  --muted-foreground: hsl(214 21% 47%);
+  --accent: hsl(216 100% 97%);
   --accent-foreground: hsl(213 53% 13%);
   --destructive: hsl(0 100% 47%);
-  --border: hsl(214 20% 86%);
-  --input: hsl(214 20% 86%);
+  --border: hsl(213 17% 84%);
+  --input: hsl(213 17% 84%);
   --ring: hsl(220 85% 43%);
-  --sidebar: hsl(220 50% 97%);
+  --sidebar: hsl(220 22% 97%);
   --sidebar-foreground: hsl(213 53% 13%);
   --sidebar-primary: hsl(220 85% 43%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(216 29% 94%);
-  --sidebar-accent-foreground: hsl(213 53% 13%);
-  --sidebar-border: hsl(214 20% 86%);
+  --sidebar-accent: hsl(220 85% 43%);
+  --sidebar-accent-foreground: hsl(0 0% 100%);
+  --sidebar-border: hsl(213 17% 84%);
   --sidebar-ring: hsl(220 85% 43%);
   --surface: #ffffff;
   --header-bg: #ffffff;
-  --border-light: #e3eaf3;
+  --border-light: #e6eaf0;
   --human-review: #059669;
   --ai-review: #4F46E5;
   --delta-positive: #16A34A;
   --delta-negative: #DC2626;
+}
+
+:root.dark,
+[data-theme="dark"] {
+  --background: hsl(220 27% 4%);
+  --foreground: hsl(214 60% 95%);
+  --card: hsl(220 22% 8%);
+  --card-foreground: hsl(214 60% 95%);
+  --popover: hsl(220 22% 8%);
+  --popover-foreground: hsl(214 60% 95%);
+  --primary: hsl(220 85% 43%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(212 26% 13%);
+  --secondary-foreground: hsl(214 60% 95%);
+  --muted: hsl(212 26% 13%);
+  --muted-foreground: hsl(215 23% 72%);
+  --accent: hsl(208 43% 20%);
+  --accent-foreground: hsl(214 60% 95%);
+  --destructive: hsl(0 100% 47%);
+  --border: hsl(211 25% 24%);
+  --input: hsl(211 25% 24%);
+  --ring: hsl(220 85% 43%);
+  --sidebar: hsl(204 53% 19%);
+  --sidebar-foreground: hsl(214 60% 95%);
+  --sidebar-primary: hsl(220 85% 43%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(214 64% 53%);
+  --sidebar-accent-foreground: hsl(0 0% 100%);
+  --sidebar-border: hsl(208 24% 31%);
+  --sidebar-ring: hsl(220 85% 43%);
+  --surface: #10151d;
+  --header-bg: #07090d;
+  --border-light: #202a37;
+  --human-review: #10B981;
+  --ai-review: #6366F1;
+  --delta-positive: #22C55E;
+  --delta-negative: #EF4444;
 }
 
 @layer base {
@@ -204,6 +241,9 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
+    transition:
+      background-color 180ms ease,
+      color 180ms ease;
   }
   html {
     @apply font-sans;
@@ -221,5 +261,42 @@
     * {
       scrollbar-color: hsl(214 20% 86%) transparent;
     }
+  }
+
+  html.dark * {
+    scrollbar-color: hsl(214 26% 24%) transparent;
+  }
+}
+
+.dashboard-shell-expanded {
+  --dashboard-sidebar-width: 220px;
+}
+
+.dashboard-shell-collapsed {
+  --dashboard-sidebar-width: 56px;
+}
+
+.monitor-layout {
+  --thread-panel-width: min(360px, 34vw);
+  --trace-panel-width: min(440px, 36vw);
+}
+
+.bmo-ai-shell {
+  background-image: radial-gradient(circle at top center, color-mix(in oklab, var(--primary) 12%, transparent), transparent 32%);
+}
+
+@media (min-width: 1536px) {
+  .monitor-layout {
+    --trace-panel-width: 520px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .monitor-content--left {
+    margin-left: calc(var(--thread-panel-width) + 24px);
+  }
+
+  .monitor-content--right {
+    margin-right: calc(var(--trace-panel-width) + 24px);
   }
 }
