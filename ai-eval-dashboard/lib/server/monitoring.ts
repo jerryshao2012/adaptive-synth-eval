@@ -231,10 +231,18 @@ export async function getMonitoringEvaluations(
     };
   }
 
+  const monitoringState = await readJsonFile<Record<string, unknown>>(
+    path.join(runDir, "monitoring_state.json")
+  );
+  const activeVersion = monitoringState?.metric_version ? String(monitoringState.metric_version) : undefined;
+
   const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
   const filtered = rows
     .filter((row) => {
       if (!row.timestamp) {
+        return false;
+      }
+      if (activeVersion && row.metric_version && String(row.metric_version) !== activeVersion) {
         return false;
       }
       if (from && row.timestamp < from) {
