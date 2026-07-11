@@ -9,6 +9,7 @@ Ensure dependencies and the local package are installed in editable mode first:
 ```bash
 uv sync
 uv pip install -e .
+uv tool install --editable .
 ```
 
 Then prefix commands with `uv run ase`:
