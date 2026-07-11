@@ -1,0 +1,17 @@
+version: "1.0.0"
+key: correctness
+evaluation_group: performance
+label: Correctness
+description: "Factual and procedural correctness."
+detail: "Measures factual accuracy and procedural correctness of the response."
+eval_input_key: correctness
+warn_below: 65.0
+fail_below: 40.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for factual and procedural correctness.
+  Score 1.0 if all information, dates, rules, and procedures provided in the response are completely accurate.
+  Score 0.0 if there are critical factual errors or incorrect procedures.
+heuristic:
+  type: overlap
+  offset: 0.05

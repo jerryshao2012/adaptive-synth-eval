@@ -1,0 +1,17 @@
+version: "1.0.0"
+key: relevance
+evaluation_group: performance
+label: Relevance
+description: "Response relevance to user intent."
+detail: "Measures whether the information provided is relevant to the user's specific question or request."
+eval_input_key: relevance
+warn_below: 85.0
+fail_below: 60.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for relevance to the user's input.
+  Score 1.0 if the response directly and accurately addresses the user's specific question or request.
+  Score 0.0 if the response is completely off-topic or fails to address the user's intent.
+heuristic:
+  type: overlap
+  offset: 0.0

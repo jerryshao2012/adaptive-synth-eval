@@ -1,0 +1,18 @@
+version: "1.0.0"
+key: groundedness
+evaluation_group: performance
+label: Groundedness
+description: "Grounding to available context."
+detail: "Measures whether responses are grounded in provided context and source material."
+eval_input_key: groundedness
+warn_below: 80.0
+fail_below: 55.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for groundedness.
+  Determine if the response is based strictly on facts present in the conversation context or source documents.
+  Score 1.0 if all claims in the response are fully grounded.
+  Score 0.0 if the response contains major hallucinations or ungrounded assumptions.
+heuristic:
+  type: overlap
+  offset: 0.1

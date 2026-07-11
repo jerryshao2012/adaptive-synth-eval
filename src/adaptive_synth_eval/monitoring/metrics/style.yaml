@@ -1,0 +1,18 @@
+version: "1.0.0"
+key: style
+evaluation_group: performance
+label: Style
+description: "Tone and communication quality."
+detail: "Measures tone appropriateness, clarity, and communication effectiveness."
+eval_input_key: style
+warn_below: 70.0
+fail_below: 45.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for tone and style appropriateness.
+  Score 1.0 if the response is professional, clear, empathetic, and uses appropriate grammar/clarity.
+  Score 0.0 if the response is rude, unclear, or poorly formatted.
+heuristic:
+  type: style
+  default_score: 0.9
+  empty_score: 0.2

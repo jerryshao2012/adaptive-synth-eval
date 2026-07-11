@@ -1,0 +1,19 @@
+version: "1.0.0"
+key: precision
+evaluation_group: performance
+label: Precision
+description: "Specificity and low ambiguity."
+detail: "Measures specificity, precision, and avoidance of vague or ambiguous language."
+eval_input_key: precision
+warn_below: 75.0
+fail_below: 50.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for precision and clarity.
+  Determine if the response is specific, clear, and avoids vague or ambiguous terminology.
+  Score 1.0 if the response is precise and uses specific numbers or facts.
+  Score 0.0 if the response is overly vague, ambiguous, or lacks specificity.
+heuristic:
+  type: length_ratio
+  base: 0.5
+  divisor: 120.0

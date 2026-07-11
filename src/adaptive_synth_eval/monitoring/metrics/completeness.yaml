@@ -1,0 +1,19 @@
+version: "1.0.0"
+key: completeness
+evaluation_group: performance
+label: Completeness
+description: "Coverage of required details."
+detail: "Measures whether the response covers all required details and sub-questions."
+eval_input_key: completeness
+warn_below: 65.0
+fail_below: 40.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate the chatbot response for completeness.
+  Determine if the response covers all aspects, follow-ups, and sub-questions raised in the user's message.
+  Score 1.0 if the response is thorough and fully answers all parts of the user prompt.
+  Score 0.0 if the response misses critical details or only partially answers the user.
+heuristic:
+  type: length_ratio
+  base: 0.5
+  divisor: 80.0
