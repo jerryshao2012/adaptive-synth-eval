@@ -1,17 +1,30 @@
 // Metric evaluation record matching the backend API response schema.
 // Mirrors the eval_engine.py run_monitoring() output + AI Eval Framework MetricValueVersioned.
 
+export interface ValueVersions {
+  evaluation_fingerprint: string;
+  evaluation_group: string;
+  generated_at: string;
+  resolved_model: {
+    provider: string;
+    deployment: string;
+  };
+  prompt_hash: string;
+  metrics: Record<string, { policy_fingerprint: string }>;
+}
+
 export interface MetricValue {
   score: number; // 0.0–1.0
   percent: number; // 0–100
   status: "pass" | "warn" | "fail";
   detail: string;
   reason?: string;
-  version?: string; // from MetricValueVersioned
+  version?: string;
   metadata?: {
     policy_version?: string;
     value_object_version?: string;
     value_object_type?: string;
+    [key: string]: any;
   };
 }
 
@@ -55,8 +68,7 @@ export interface EvaluationRecord {
   system_reliability: SystemReliability;
   run_id?: string;
   conversation_id?: string;
-  metric_version?: string;
-  threshold_version?: string;
+  value_versions?: ValueVersions;
   sample_window_id?: number;
   source_line_index?: number;
   // Optional metadata from the evaluation pipeline
@@ -93,8 +105,7 @@ export interface RunSummary {
     total: number;
     percent: number;
   };
-  metricVersion?: string;
-  thresholdVersion?: string;
+  evaluationFingerprint?: string;
   hasMonitoringState: boolean;
   hasMonitoringScores: boolean;
   canStart: boolean;
@@ -109,8 +120,7 @@ export interface MonitoringRunStatus {
     total: number;
     percent: number;
   };
-  metricVersion?: string;
-  thresholdVersion?: string;
+  evaluationFingerprint?: string;
   progressMarkdown: string | null;
   state: Record<string, unknown> | null;
   hasMonitoringScores: boolean;
@@ -120,8 +130,6 @@ export interface MonitoringRunStatus {
 export interface EvalRunParameters {
   sampleSize: number;
   intervalMinutes: number;
-  metricVersion: string;
-  thresholdVersion: string;
 }
 
 export interface MetricPointIdentity {
@@ -145,8 +153,6 @@ export interface MonitoringStartRequest {
   runId: string;
   sampleSize?: number;
   intervalMinutes?: number;
-  metricVersion: string;
-  thresholdVersion?: string;
   action: "start" | "continue";
 }
 

@@ -18,3 +18,5 @@ graphify-out/
 .superpowers/
 next-env.d.ts
 yarn.lock
+unified_evaluation_demo_local.yaml
+update.sh

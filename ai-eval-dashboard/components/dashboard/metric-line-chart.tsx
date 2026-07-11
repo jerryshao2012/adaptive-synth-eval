@@ -275,62 +275,66 @@ export function MetricLineChart({
             stroke={lineColor}
             strokeWidth={3}
             isAnimationActive={false}
-            dot={(dotProps: unknown) => {
-              const p = dotProps as {
-                cx?: number;
-                cy?: number;
-                payload?: ChartDataPoint;
-              };
-              if (typeof p.cx !== "number" || typeof p.cy !== "number") {
-                return null;
-              }
+            dot={
+              data.length <= 50
+                ? (dotProps: unknown) => {
+                    const p = dotProps as {
+                      cx?: number;
+                      cy?: number;
+                      payload?: ChartDataPoint;
+                    };
+                    if (typeof p.cx !== "number" || typeof p.cy !== "number") {
+                      return null;
+                    }
 
-              const payload = p.payload;
-              const handlePointPress = (event: { stopPropagation: () => void }) => {
-                event.stopPropagation();
-                if (payload?.pointIdentity && onPointClick) {
-                  selectPoint(payload.pointIdentity);
-                }
-              };
+                    const payload = p.payload;
+                    const handlePointPress = (event: { stopPropagation: () => void }) => {
+                      event.stopPropagation();
+                      if (payload?.pointIdentity && onPointClick) {
+                        selectPoint(payload.pointIdentity);
+                      }
+                    };
 
-              const pointKey = makePointKey(payload?.pointIdentity);
-              const isClicked = Boolean(pointKey && pointKey === clickedPointKey);
+                    const pointKey = makePointKey(payload?.pointIdentity);
+                    const isClicked = Boolean(pointKey && pointKey === clickedPointKey);
 
-              return (
-                <g
-                  className={onPointClick ? "cursor-pointer" : undefined}
-                  onPointerDown={handlePointPress}
-                  onMouseDown={handlePointPress}
-                  onClick={handlePointPress}
-                >
-                  <circle cx={p.cx} cy={p.cy} r={15} fill="transparent" pointerEvents="all" />
-                  {isClicked && (
-                    <circle
-                      cx={p.cx}
-                      cy={p.cy}
-                      r={10}
-                      fill="none"
-                      stroke={lineColor}
-                      strokeOpacity={0.35}
-                      strokeWidth={2}
-                      className="animate-ping"
-                    />
-                  )}
-                  {isClicked && (
-                    <circle
-                      cx={p.cx}
-                      cy={p.cy}
-                      r={8}
-                      fill="none"
-                      stroke={lineColor}
-                      strokeOpacity={0.65}
-                      strokeWidth={2}
-                    />
-                  )}
-                  <circle cx={p.cx} cy={p.cy} r={5} fill={lineColor} stroke="white" strokeWidth={1.3} />
-                </g>
-              );
-            }}
+                    return (
+                      <g
+                        className={onPointClick ? "cursor-pointer" : undefined}
+                        onPointerDown={handlePointPress}
+                        onMouseDown={handlePointPress}
+                        onClick={handlePointPress}
+                      >
+                        <circle cx={p.cx} cy={p.cy} r={15} fill="transparent" pointerEvents="all" />
+                        {isClicked && (
+                          <circle
+                            cx={p.cx}
+                            cy={p.cy}
+                            r={10}
+                            fill="none"
+                            stroke={lineColor}
+                            strokeOpacity={0.35}
+                            strokeWidth={2}
+                            className="animate-ping"
+                          />
+                        )}
+                        {isClicked && (
+                          <circle
+                            cx={p.cx}
+                            cy={p.cy}
+                            r={8}
+                            fill="none"
+                            stroke={lineColor}
+                            strokeOpacity={0.65}
+                            strokeWidth={2}
+                          />
+                        )}
+                        <circle cx={p.cx} cy={p.cy} r={5} fill={lineColor} stroke="white" strokeWidth={1.3} />
+                      </g>
+                    );
+                  }
+                : false
+            }
             activeDot={{ r: 7, fill: lineColor, stroke: "white", strokeWidth: 1.6 }}
             className={onPointClick ? "cursor-pointer" : undefined}
           />

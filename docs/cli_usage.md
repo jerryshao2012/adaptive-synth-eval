@@ -105,6 +105,170 @@ uv run ase summarize --run-id one_week_chat_history
 
 ---
 
+## Monitoring Evaluation (Post-Hoc AI Eval)
+
+The `monitor run` command evaluates existing chat history artifacts and writes scored records for the AI Eval Dashboard. It reads `chat_history.jsonl` in time-based sampling windows, scores each turn via LLM evaluation across 10 metrics (4 safety + 6 performance), and atomically writes `monitoring_scores.jsonl`.
+
+### Quick Start
+
+```bash
+# Dry-run: deterministic local scoring, no LLM calls — fast and free
+uv run ase monitor run --run-folder outputs/runs/<run_id> --dry-run
+
+# Live evaluation with LLM
+uv run ase monitor run --run-folder outputs/runs/<run_id> --sample-size 500
+```
+
+### How Sampling Works
+
+`--sample-size` controls rows evaluated **per time window**, not total rows. The runner processes the entire `chat_history.jsonl` in sequential windows defined by `--interval-minutes` (default: 60). Within each window, it samples up to `--sample-size` rows based on the `--sampling-strategy`.
+
+| Flag | Default | What it controls |
+|------|---------|-----------------|
+| `--sample-size` | 1000 | Max rows evaluated per time window |
+| `--interval-minutes` | 60 | Width of each sampling window in minutes |
+| `--sampling-strategy` | `all` | `all` = evaluate everything; `random` = random subset; `systematic` = evenly spaced |
+| `--max-windows` | none | Cap on windows processed per invocation |
+
+**Important**: With the default `--sampling-strategy all`, `--sample-size` is effectively ignored — every row in every window is evaluated. To limit evaluation, use `--sampling-strategy random` or `systematic`.
+
+```bash
+# Evaluate exactly 100 randomly-sampled rows from the first window only
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sampling-strategy random \
+    --sample-size 100 \
+    --max-windows 1
+```
+
+### Continuous Monitoring (24/7 Chat Applications)
+
+For chat applications running 24/7, run the monitor on a schedule to keep evaluation in sync with live traffic. The runner uses `monitoring_state.json` to track progress — each invocation only evaluates new rows appended since the last run. When no new rows exist, it exits instantly with zero LLM cost.
+
+**The recurring command** (same every invocation — idempotent and safe):
+
+```bash
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sample-size 1000 \
+    --interval-minutes 30 \
+    --incomplete-run-action resume
+```
+
+**How resume-based continuous eval works**:
+
+```
+Run 1 (9:00):  chat_history has 500 rows  → evaluates 500,  next_line=500,  status=in_progress
+Run 2 (9:10):  chat_history has 520 rows  → evaluates 20,   next_line=520,  status=in_progress
+Run 3 (9:20):  chat_history has 520 rows  → exits instantly (0 new rows, zero cost)
+Run 4 (9:30):  chat_history has 680 rows  → evaluates 160,  next_line=680,  status=in_progress
+```
+
+**Cron example** (every 10 minutes during business hours, every 60 minutes overnight):
+
+```cron
+# Business hours: evaluate frequently (heavy traffic)
+*/10 8-18 * * 1-5 cd /path/to/project && uv run ase monitor run \
+    --run-folder outputs/runs/tfsa_one_week_traffic_run \
+    --sample-size 1000 --interval-minutes 30 \
+    --incomplete-run-action resume >> logs/monitor.log 2>&1
+
+# Overnight: evaluate less frequently (light traffic)
+0 * 19-23,0-7 * * 1-5 cd /path/to/project && uv run ase monitor run \
+    --run-folder outputs/runs/tfsa_one_week_traffic_run \
+    --sample-size 1000 --interval-minutes 60 \
+    --incomplete-run-action resume >> logs/monitor.log 2>&1
+```
+
+**systemd timer example** (`/etc/systemd/system/ase-monitor.service` + `.timer`):
+
+```ini
+# ase-monitor.service
+[Unit]
+Description=ASE continuous monitoring evaluation
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/project
+ExecStart=/path/to/uv run ase monitor run \
+    --run-folder outputs/runs/tfsa_one_week_traffic_run \
+    --sample-size 1000 --interval-minutes 30 \
+    --incomplete-run-action resume
+```
+
+```ini
+# ase-monitor.timer
+[Unit]
+Description=ASE monitoring evaluation timer
+
+[Timer]
+OnCalendar=*-*-* *:00,10,20,30,40,50:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+**Recommended cadence by traffic pattern**:
+
+| Traffic pattern | Evaluation interval | Reasoning |
+|----------------|---------------------|-----------|
+| Business-hours heavy | Every 10 min (8am–6pm), every 60 min overnight | Match evaluation pace to traffic density |
+| Steady 24/7 | Every 15–30 min | Balance freshness vs. LLM cost |
+| Bursty | Every 5–10 min | Catch spikes quickly |
+
+### Versioning (Automatic)
+
+No manual `--metric-version` flag is needed. SHA-256 fingerprints are computed automatically from:
+- **Evaluation fingerprint**: prompt template + model identity + metric keys/descriptions. Any change triggers full LLM re-evaluation.
+- **Policy fingerprint** (per metric): thresholds (warn_below, fail_below). Threshold changes only recalculate statuses — zero LLM cost.
+
+Same fingerprint → rows are skipped (idempotent). Changed fingerprint → affected rows are re-evaluated.
+
+### Incomplete Run Recovery
+
+When a monitoring run is interrupted, use `--incomplete-run-action` to control behavior:
+
+```bash
+# Continue from monitoring_state.json (preserves progress)
+uv run ase monitor run --run-folder outputs/runs/<run_id> --incomplete-run-action resume
+
+# Start over and re-evaluate all rows
+uv run ase monitor run --run-folder outputs/runs/<run_id> --incomplete-run-action restart
+
+# Exit immediately if incomplete state is detected
+uv run ase monitor run --run-folder outputs/runs/<run_id> --incomplete-run-action abort
+```
+
+### Timestamps
+
+Score rows use the **chat history row's original timestamp** (from `chat_history.jsonl`) as their primary `timestamp` field. This means:
+- Charts in the dashboard reflect the actual conversation timeline, not when evaluation ran.
+- Date range filters ("Last 7 days", "Last 30 days") filter by when chats occurred.
+- The evaluation timestamp is preserved separately in `value_versions.generated_at` for provenance.
+
+### Full Flag Reference
+
+```
+usage: ase monitor run [-h] --run-folder RUN_FOLDER [--sample-size SAMPLE_SIZE]
+                       [--interval-minutes INTERVAL_MINUTES]
+                       [--sampling-strategy {all,random,systematic}]
+                       [--max-windows MAX_WINDOWS] [--metrics-config METRICS_CONFIG]
+                       [--dry-run] [--incomplete-run-action {ask,resume,restart,abort}]
+
+Options:
+  --run-folder           Path to outputs/runs/<run_id> containing chat_history.jsonl
+  --sample-size          Rows to evaluate per sampling window (default: 1000)
+  --interval-minutes     Sampling window width in minutes (default: 60)
+  --sampling-strategy    all | random | systematic (default: all)
+  --max-windows          Stop after N windows (default: unlimited)
+  --metrics-config       Custom metrics.yaml path (default: shipped config)
+  --dry-run              Use deterministic local scoring, no LLM calls
+  --incomplete-run-action ask | resume | restart | abort (default: ask)
+```
+
+---
+
 ## Loop Engineering (Continuous Evaluation)
 
 Run adaptive evaluation loops that continuously discover targets, apply constrained recoveries, and run unattended with safety guardrails. See [docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md](loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) for architecture and [docs/loop_operations_runbook.md](./loop_operations_runbook.md) for operations.

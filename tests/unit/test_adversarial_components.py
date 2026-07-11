@@ -12,6 +12,7 @@ from adaptive_synth_eval.adversarial_response_engine.core.models import (
     TurnRecord,
 )
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
+from adaptive_synth_eval.adversarial_response_engine.engine import taxonomy as tax
 from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import AttackAgent
 from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     RuleBasedSessionPolicyController,
@@ -21,7 +22,6 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
 )
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
 from adaptive_synth_eval.adversarial_response_engine.engine.selector import select_angle
-from adaptive_synth_eval.adversarial_response_engine.engine import taxonomy as tax
 from adaptive_synth_eval.unified_eval.personas.bridge import (
     HIJACK_TARGET_DEFAULTS,
     resolve_hijack_target,
@@ -229,6 +229,7 @@ def test_safety_judge_retries_once_on_invalid_json():
     class _FlakyLLM:
         def __init__(self):
             self.calls = 0
+
         def complete_json(self, system, user):
             self.calls += 1
             if self.calls == 1:
@@ -440,7 +441,8 @@ def test_to_context_str_three_bands_and_sub_tactic_recording():
                    strategy_before_turn={"attack_angle": "decomposition_attack", "sub_tactic": "component_extraction"},
                    judge_result={"failure_score": 4, "near_miss": False}),
         TurnRecord(session_id="s1", turn_id=2, user_input="u", chatbot_response="b",
-                   strategy_before_turn={"attack_angle": "memory_exploitation", "sub_tactic": "prior_compliance_reference"},
+                   strategy_before_turn={"attack_angle": "memory_exploitation",
+                                         "sub_tactic": "prior_compliance_reference"},
                    judge_result={"failure_score": 2, "near_miss": True}),
         TurnRecord(session_id="s1", turn_id=3, user_input="u", chatbot_response="b",
                    strategy_before_turn={"attack_angle": "angle_shift", "sub_tactic": "academic_frame"},
@@ -520,6 +522,7 @@ def test_trace_summarizer_calls_llm_and_returns_parsed_json():
         def __init__(self):
             self.system = None
             self.user = None
+
         def complete_json(self, system, user):
             self.system, self.user = system, user
             return {"binding_actions": ["execute_tfsa_contribution"],
@@ -562,6 +565,7 @@ def test_safety_judge_response_only_prompt_is_unchanged_without_trace():
         def __init__(self):
             self.system = None
             self.user = None
+
         def complete_json(self, system, user):
             self.system, self.user = system, user
             return {"failure_score": 0, "refusal_quality": 2}
@@ -583,6 +587,7 @@ def test_safety_judge_trajectory_prompt_includes_trace_and_axes():
         def __init__(self):
             self.system = None
             self.user = None
+
         def complete_json(self, system, user):
             self.system, self.user = system, user
             return {"failure_score": 0, "refusal_quality": 2,
@@ -642,6 +647,7 @@ def test_evaluator_trajectory_enabled_judges_and_records_trace():
         # Mirrors ChatbotClientAdapter: send() returns text, raw stashed on last_raw.
         def __init__(self):
             self.last_raw = {}
+
         def send(self, session_id, user_input):
             self.last_raw[session_id] = {"response": "bot reply", "trace": _SAMPLE_TRACE}
             return "bot reply"
@@ -653,6 +659,7 @@ def test_evaluator_trajectory_enabled_judges_and_records_trace():
     class _Judge:
         def __init__(self):
             self.seen_trace_summary = "unset"
+
         def judge(self, user_input, chatbot_response, scenario="", history="", trace_summary=None):
             self.seen_trace_summary = trace_summary
             return JudgeVerdict.from_dict({

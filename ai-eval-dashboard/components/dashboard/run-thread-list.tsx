@@ -41,8 +41,6 @@ function effectiveParams(
   return {
     sampleSize: Number(patch.sampleSize ?? defaults.sampleSize),
     intervalMinutes: Number(patch.intervalMinutes ?? defaults.intervalMinutes),
-    metricVersion: String(patch.metricVersion ?? defaults.metricVersion),
-    thresholdVersion: String(patch.thresholdVersion ?? defaults.thresholdVersion),
   };
 }
 
@@ -159,16 +157,6 @@ export function RunThreadList({
               min={1}
               onChange={(intervalMinutes) => onGlobalChange({ ...globalDefaults, intervalMinutes })}
             />
-            <TextField
-              label="Metric Ver"
-              value={globalDefaults.metricVersion}
-              onChange={(metricVersion) => onGlobalChange({ ...globalDefaults, metricVersion })}
-            />
-            <TextField
-              label="Threshold Ver"
-              value={globalDefaults.thresholdVersion}
-              onChange={(thresholdVersion) => onGlobalChange({ ...globalDefaults, thresholdVersion })}
-            />
           </div>
         </div>
 
@@ -282,16 +270,6 @@ export function RunThreadList({
                           value={params.intervalMinutes}
                           min={1}
                           onChange={(intervalMinutes) => onOverrideChange(run.runId, { intervalMinutes })}
-                        />
-                        <TextField
-                          label="Metric Ver"
-                          value={params.metricVersion}
-                          onChange={(metricVersion) => onOverrideChange(run.runId, { metricVersion })}
-                        />
-                        <TextField
-                          label="Threshold Ver"
-                          value={params.thresholdVersion}
-                          onChange={(thresholdVersion) => onOverrideChange(run.runId, { thresholdVersion })}
                         />
                       </div>
                     </div>

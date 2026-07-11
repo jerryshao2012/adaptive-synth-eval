@@ -148,11 +148,8 @@ export async function listRunSummaries(): Promise<RunSummary[]> {
             total: progressTotal,
             percent: clampPercent(progressCompleted, progressTotal),
           },
-          metricVersion: monitoringState?.metric_version
-            ? String(monitoringState.metric_version)
-            : undefined,
-          thresholdVersion: monitoringState?.threshold_version
-            ? String(monitoringState.threshold_version)
+          evaluationFingerprint: monitoringState?.evaluation_fingerprint
+            ? String(monitoringState.evaluation_fingerprint)
             : undefined,
           hasMonitoringState: Boolean(monitoringState),
           hasMonitoringScores: hasScores,
@@ -198,11 +195,8 @@ export async function getMonitoringStatus(runId: string): Promise<MonitoringRunS
       total,
       percent: clampPercent(completed, total),
     },
-    metricVersion: monitoringState?.metric_version
-      ? String(monitoringState.metric_version)
-      : undefined,
-    thresholdVersion: monitoringState?.threshold_version
-      ? String(monitoringState.threshold_version)
+    evaluationFingerprint: monitoringState?.evaluation_fingerprint
+      ? String(monitoringState.evaluation_fingerprint)
       : undefined,
     progressMarkdown,
     state: monitoringState,
@@ -231,18 +225,10 @@ export async function getMonitoringEvaluations(
     };
   }
 
-  const monitoringState = await readJsonFile<Record<string, unknown>>(
-    path.join(runDir, "monitoring_state.json")
-  );
-  const activeVersion = monitoringState?.metric_version ? String(monitoringState.metric_version) : undefined;
-
   const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
   const filtered = rows
     .filter((row) => {
       if (!row.timestamp) {
-        return false;
-      }
-      if (activeVersion && row.metric_version && String(row.metric_version) !== activeVersion) {
         return false;
       }
       if (from && row.timestamp < from) {
@@ -300,7 +286,9 @@ export async function getMonitoringTraceDetails(
         sameTurnId(row.turn_id, point.turnId)
     ) ||
     evaluationRows.find(
-      (row) => row.timestamp === point.timestamp && sameTurnId(row.turn_id, point.turnId)
+      (row) =>
+        row.timestamp === point.timestamp &&
+        sameTurnId(row.turn_id, point.turnId)
     ) ||
     null;
 
@@ -346,24 +334,16 @@ export async function startMonitoringRun(
   const runFolder = runDirPath(runId);
   const sampleSize = Number(request.sampleSize ?? 1000);
   const intervalMinutes = Number(request.intervalMinutes ?? 30);
-  const metricVersion = request.metricVersion.trim();
-  const thresholdVersion = (request.thresholdVersion || "v1").trim();
   const incompleteAction = request.action === "continue" ? "resume" : "restart";
 
   if (!(await fileExists(runFolder))) {
     throw new Error(`Run folder not found: ${runFolder}`);
-  }
-  if (!metricVersion) {
-    throw new Error("metricVersion is required");
   }
   if (!Number.isFinite(sampleSize) || sampleSize <= 0) {
     throw new Error("sampleSize must be a positive number.");
   }
   if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0) {
     throw new Error("intervalMinutes must be a positive number.");
-  }
-  if (!thresholdVersion) {
-    throw new Error("thresholdVersion is required.");
   }
 
   const command = [
@@ -378,10 +358,6 @@ export async function startMonitoringRun(
     String(sampleSize),
     "--interval-minutes",
     String(intervalMinutes),
-    "--metric-version",
-    quoteArg(metricVersion),
-    "--threshold-version",
-    quoteArg(thresholdVersion),
     "--incomplete-run-action",
     incompleteAction,
   ].join(" ");

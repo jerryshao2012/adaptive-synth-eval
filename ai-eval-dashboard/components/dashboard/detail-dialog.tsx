@@ -48,9 +48,9 @@ export function DetailDialog({
             <DialogTitle className="text-base font-semibold">
               {threshold?.label || metricKey}
             </DialogTitle>
-            {metric.version && (
+            {record.value_versions && (
               <Badge variant="outline" className="text-[10px] font-mono">
-                v{metric.version}
+                {record.value_versions.evaluation_fingerprint.substring(0, 8)}
               </Badge>
             )}
           </div>
@@ -119,18 +119,25 @@ export function DetailDialog({
                 </div>
               </div>
             )}
-            {metric.metadata && (
+            {record.value_versions && (
               <div className="flex items-start gap-2">
                 <Hash className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div>
                   <p className="text-xs font-medium text-foreground">
-                    Version Metadata
+                    Evaluation Version
                   </p>
                   <p className="text-xs text-muted-foreground font-mono">
-                    policy: {metric.metadata.policy_version || "—"} · value:{" "}
-                    {metric.metadata.value_object_version || "—"} · type:{" "}
-                    {metric.metadata.value_object_type || "—"}
+                    fingerprint: {record.value_versions.evaluation_fingerprint}
                   </p>
+                  <p className="text-xs text-muted-foreground font-mono">
+                    model: {record.value_versions.resolved_model.provider}/
+                    {record.value_versions.resolved_model.deployment}
+                  </p>
+                  {record.value_versions.metrics[metricKey] && (
+                    <p className="text-xs text-muted-foreground font-mono">
+                      policy: {record.value_versions.metrics[metricKey].policy_fingerprint}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

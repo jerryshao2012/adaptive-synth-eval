@@ -32,6 +32,28 @@ uv run ase loop pause --profile <profile_id>
 uv run ase loop resume --profile <profile_id>
 uv run ase loop audit --profile <profile_id>
 
+# Monitoring (evaluate chat history artifacts)
+uv run ase monitor run --run-folder outputs/runs/<run_id> --dry-run
+uv run ase monitor run --run-folder outputs/runs/<run_id> --sample-size 500
+# --metric-version and --threshold-version have been removed.
+# Versioning is now automatic via SHA-256 fingerprints of the evaluation config.
+
+# Continuous monitoring (run on a schedule — cron, systemd timer, etc.)
+# Safe to repeat: only new chat rows since last run are evaluated.
+# When no new rows exist, exits instantly with zero LLM cost.
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sample-size 1000 \
+    --interval-minutes 30 \
+    --incomplete-run-action resume
+
+# Spot-check: evaluate only N randomly-sampled rows from the first window
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sampling-strategy random \
+    --sample-size 100 \
+    --max-windows 1
+
 # Tests
 uv run pytest                          # All tests
 uv run pytest tests/unit/              # Unit tests only
@@ -80,6 +102,16 @@ Continuous evaluation at L0-L3 readiness levels:
 - **L3**: Fully unattended (24/7, budget-capped, kill-switch guarded).
 
 The loop subsystem (`loop/`) uses AI-driven discovery to find evaluation targets, a scheduler for recurring runs, a policy engine enforcing safety guardrails, a verifier checking outputs, and a persistent state store (`outputs/loops/`).
+
+### Monitoring (`monitoring/`)
+
+Post-hoc evaluation of chat history artifacts. The runner (`monitoring/runner.py`) reads `chat_history.jsonl` in sampling windows, scores each turn via LLM evaluation (10 metrics: 4 safety + 6 performance), and writes `monitoring_scores.jsonl`.
+
+- **Automatic versioning**: No manual `--metric-version` flag. Fingerprints are computed from the evaluation config (`monitoring/metrics.yaml`), prompt template, and resolved model identity. Same fingerprint → skip evaluation. Changed fingerprint → re-evaluate.
+- **Two-tier fingerprints**: `evaluation_fingerprint` (prompt + model + metrics) triggers LLM re-evaluation. `policy_fingerprint` (thresholds per metric) triggers status recalculation only — no LLM calls.
+- **Atomic writes**: `monitoring_scores.jsonl` is atomically replaced after each window (temp file + fsync + os.replace). Exactly one row per (conversation_id, turn_id).
+- **Config-driven**: Metric definitions, thresholds, descriptions, and the LLM prompt template live in `monitoring/metrics.yaml` (checked-in source of truth).
+- **Continuous monitoring**: The runner is designed for cron/scheduler-based recurring execution. Each invocation uses `--incomplete-run-action resume` to pick up only new rows appended to `chat_history.jsonl` since the last run. When no new rows exist, it exits immediately (zero LLM cost). The dashboard refreshes automatically. This is the pattern for 24/7 chat applications where evaluation keeps pace with live traffic.
 
 ### Contract Formats
 

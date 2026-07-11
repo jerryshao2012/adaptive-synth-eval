@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,15 +9,13 @@ import {
   AlertTriangle,
   XCircle,
   Clock,
-  Activity,
-  Gauge,
-  BarChart3,
+  Hash,
   RefreshCw,
   Play,
   RotateCcw,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import type { RunSummary, MonitoringRunStatus, EvalRunParameters, ArtifactValidation } from "@/types/evaluation";
+import type { RunSummary, MonitoringRunStatus, ArtifactValidation } from "@/types/evaluation";
 import { cn } from "@/lib/utils";
 
 // ---- Verdict color and icon maps ----
@@ -45,6 +44,23 @@ const VERDICT_CONFIG: Record<
   },
 };
 
+function formatElapsed(ms: number): string {
+  const hours = Math.floor(ms / 3600000);
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  const milliseconds = Math.floor(ms % 1000);
+
+  const padMs = String(milliseconds).padStart(3, "0");
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}.${padMs}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}.${padMs}s`;
+  }
+  return `${seconds}.${padMs}s`;
+}
+
 interface RunSelectorHeaderProps {
   selectedRun: RunSummary | null;
   monitoringStatus: MonitoringRunStatus | null;
@@ -68,6 +84,33 @@ export function RunSelectorHeader({
   validation,
   onRefresh,
 }: RunSelectorHeaderProps) {
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
+  const status = monitoringStatus?.monitoringStatus ?? selectedRun?.monitoringStatus;
+  const startedAt = (monitoringStatus?.state?.started_at as string) || selectedRun?.startedAt;
+
+  const isRunning = status === "in_progress";
+
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const startTimestamp = startedAt ? new Date(startedAt).getTime() : Date.now();
+    let animationFrameId: number;
+
+    const updateTimer = () => {
+      const elapsed = Date.now() - startTimestamp;
+      setElapsedMs(elapsed > 0 ? elapsed : 0);
+      animationFrameId = requestAnimationFrame(updateTimer);
+    };
+
+    animationFrameId = requestAnimationFrame(updateTimer);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isRunning, startedAt]);
+
+  const displayElapsedMs = isRunning ? elapsedMs : 0;
+
   if (!selectedRun) {
     return (
       <Card className="border-border bg-card mb-6">
@@ -92,7 +135,6 @@ export function RunSelectorHeader({
     );
   }
 
-  const status = monitoringStatus?.monitoringStatus ?? selectedRun.monitoringStatus;
   const updatedAt = monitoringStatus?.updatedAt ?? selectedRun.updatedAt;
   const hasIssues = validation?.issues && validation.issues.length > 0;
 
@@ -158,11 +200,11 @@ export function RunSelectorHeader({
                   Completed {formatDistanceToNow(new Date(selectedRun.completedAt), { addSuffix: true })}
                 </span>
               )}
-              {monitoringStatus?.metricVersion && (
-                <span>Metrics: {monitoringStatus.metricVersion}</span>
-              )}
-              {monitoringStatus?.thresholdVersion && (
-                <span>Thresholds: {monitoringStatus.thresholdVersion}</span>
+              {monitoringStatus?.evaluationFingerprint && (
+                <span className="inline-flex items-center gap-1">
+                  <Hash className="h-3 w-3" />
+                  Eval: {monitoringStatus.evaluationFingerprint.substring(0, 8)}
+                </span>
               )}
               {validation && (
                 <span
@@ -244,7 +286,12 @@ export function RunSelectorHeader({
         {status === "in_progress" && (
           <div className="mt-4">
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-              <span>Evaluation Progress</span>
+              <div className="flex items-center gap-2">
+                <span>Evaluation Progress</span>
+                <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider animate-pulse">
+                  {formatElapsed(displayElapsedMs)}
+                </span>
+              </div>
               <span>{monitoringStatus?.progress.percent ?? selectedRun.progress.percent}%</span>
             </div>
             <progress

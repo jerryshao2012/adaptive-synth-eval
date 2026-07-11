@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
+    "prebuild": "cp ../src/adaptive_synth_eval/monitoring/metrics.yaml public/metrics.yaml",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

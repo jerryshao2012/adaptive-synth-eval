@@ -71,9 +71,7 @@ const LATENCY_METRICS = [
 
 const DEFAULT_MONITORING_CONFIG: EvalRunParameters = {
   sampleSize: 1000,
-  intervalMinutes: 30,
-  metricVersion: "v1",
-  thresholdVersion: "v1",
+  intervalMinutes: 60,
 };
 
 function filterEvaluationsByPeriod(
@@ -91,7 +89,7 @@ function filterEvaluationsByPeriod(
 
 export default function DashboardPage() {
   // ---- State ----
-  const [globalPeriod] = useState<TimePeriodPreset>("this-week");
+  const [globalPeriod] = useState<TimePeriodPreset>("last-90-days");
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [chartPeriods, setChartPeriods] = useState<Record<string, TimePeriodPreset>>({});
   const [selectedPoint, setSelectedPoint] = useState<MetricPointIdentity | null>(null);
@@ -143,9 +141,17 @@ export default function DashboardPage() {
     isError,
     error,
     refetch,
-  } = useEvaluations("last-90-days", activeRunId || undefined, canLoadEvaluations);
+  } = useEvaluations(
+    "last-90-days",
+    activeRunId || undefined,
+    canLoadEvaluations
+  );
   const { data: previousEvaluations } =
-    usePreviousPeriodEvaluations(globalPeriod, activeRunId || undefined, canLoadEvaluations);
+    usePreviousPeriodEvaluations(
+      globalPeriod,
+      activeRunId || undefined,
+      canLoadEvaluations
+    );
 
   // ---- Actions ----
   const handleStartRun = useCallback(
@@ -156,15 +162,13 @@ export default function DashboardPage() {
           action: "start",
           sampleSize: globalEvalDefaults.sampleSize,
           intervalMinutes: globalEvalDefaults.intervalMinutes,
-          metricVersion: monitoringStatus?.metricVersion ?? globalEvalDefaults.metricVersion,
-          thresholdVersion: monitoringStatus?.thresholdVersion ?? globalEvalDefaults.thresholdVersion,
         });
         await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
       } catch {
         // Error handled by mutation state
       }
     },
-    [startMonitoring, globalEvalDefaults, monitoringStatus, refetchRuns, refetchMonitoringStatus]
+    [startMonitoring, globalEvalDefaults, refetchRuns, refetchMonitoringStatus]
   );
 
   const handleContinueRun = useCallback(
@@ -175,15 +179,13 @@ export default function DashboardPage() {
           action: "continue",
           sampleSize: globalEvalDefaults.sampleSize,
           intervalMinutes: globalEvalDefaults.intervalMinutes,
-          metricVersion: monitoringStatus?.metricVersion ?? globalEvalDefaults.metricVersion,
-          thresholdVersion: monitoringStatus?.thresholdVersion ?? globalEvalDefaults.thresholdVersion,
         });
         await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
       } catch {
         // Error handled by mutation state
       }
     },
-    [startMonitoring, globalEvalDefaults, monitoringStatus, refetchRuns, refetchMonitoringStatus]
+    [startMonitoring, globalEvalDefaults, refetchRuns, refetchMonitoringStatus]
   );
 
   function refreshAll() {
@@ -274,7 +276,14 @@ export default function DashboardPage() {
           isLoading={isLoading}
           colSpan={i === 0 ? "full" : "half"}
           summary={
-            <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}%`} />
+            <ChartSummaryBar
+              avg={summary.avg}
+              min={summary.min}
+              max={summary.max}
+              warnThreshold={threshold.warnBelow}
+              failThreshold={threshold.failBelow}
+              valueFormatter={(v) => `${v}%`}
+            />
           }
           onViewDetails={
             latest?.pointIdentity
@@ -318,7 +327,14 @@ export default function DashboardPage() {
           }
           colSpan={i === 0 ? "full" : "half"}
           summary={
-            <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}%`} />
+            <ChartSummaryBar
+              avg={summary.avg}
+              min={summary.min}
+              max={summary.max}
+              warnThreshold={threshold.warnBelow}
+              failThreshold={threshold.failBelow}
+              valueFormatter={(v) => `${v}%`}
+            />
           }
           onViewDetails={
             latest?.pointIdentity
@@ -363,7 +379,14 @@ export default function DashboardPage() {
               }
               colSpan={fullWidth ? "full" : "half"}
               summary={
-                <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}ms`} />
+                <ChartSummaryBar
+                  avg={summary.avg}
+                  min={summary.min}
+                  max={summary.max}
+                  warnThreshold={LATENCY_WARN_MS}
+                  failThreshold={LATENCY_FAIL_MS}
+                  valueFormatter={(v) => `${v}ms`}
+                />
               }
             >
               <MetricLineChart
@@ -418,7 +441,14 @@ export default function DashboardPage() {
               }
               colSpan="half"
               summary={
-                <ChartSummaryBar avg={summary.avg} min={summary.min} max={summary.max} valueFormatter={(v) => `${v}%`} />
+                <ChartSummaryBar
+                  avg={summary.avg}
+                  min={summary.min}
+                  max={summary.max}
+                  warnThreshold={99}
+                  failThreshold={95}
+                  valueFormatter={(v) => `${v}%`}
+                />
               }
             >
               <MetricLineChart

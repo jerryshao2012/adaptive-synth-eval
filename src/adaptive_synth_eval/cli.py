@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
 from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
@@ -430,15 +431,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "monitor":
             if args.monitor_command == "run":
                 run_dir = Path(args.run_folder)
+                metrics_config_path = (
+                    Path(args.metrics_config) if args.metrics_config else None
+                )
                 summary = run_monitoring(
                     run_dir=run_dir,
                     sample_size=args.sample_size,
                     interval_minutes=args.interval_minutes,
-                    metric_version=args.metric_version,
-                    threshold_version=args.threshold_version,
+                    sampling_strategy=args.sampling_strategy,
                     incomplete_run_action=args.incomplete_run_action,
                     dry_run=args.dry_run,
                     max_windows=args.max_windows,
+                    metrics_config_path=metrics_config_path,
                 )
                 print(json.dumps(summary, indent=2, default=str))
                 return 0
@@ -552,7 +556,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Evaluate existing chat history artifacts for continuous monitoring",
         description=(
             "Run monitoring evaluation over outputs/runs/<run_id>/chat_history.jsonl in sampling windows, "
-            "persisting resumable state and metric-versioned scores."
+            "persisting resumable state and auto-versioned scores via evaluation fingerprints."
         ),
     )
     monitor_sub = monitor.add_subparsers(
@@ -585,8 +589,14 @@ def _build_parser() -> argparse.ArgumentParser:
     monitor_run.add_argument(
         "--interval-minutes",
         type=int,
-        default=30,
-        help="Sampling window interval metadata in minutes (default: 30)",
+        default=60,
+        help="Sampling window interval metadata in minutes (default: 60)",
+    )
+    monitor_run.add_argument(
+        "--sampling-strategy",
+        choices=("all", "random", "systematic"),
+        default="all",
+        help="Sampling strategy to select subset of chats per window (default: all)",
     )
     monitor_run.add_argument(
         "--max-windows",
@@ -595,14 +605,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional cap on windows processed in a single invocation.",
     )
     monitor_run.add_argument(
-        "--metric-version",
-        required=True,
-        help="Metric version label used for de-duplication and lineage.",
-    )
-    monitor_run.add_argument(
-        "--threshold-version",
-        default="v1",
-        help="Threshold version label stored with each evaluation row (default: v1).",
+        "--metrics-config",
+        default=None,
+        help="Optional path to a custom metrics.yaml (for testing).",
     )
     monitor_run.add_argument(
         "--dry-run",

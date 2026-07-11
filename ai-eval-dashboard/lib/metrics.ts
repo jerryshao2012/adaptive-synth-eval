@@ -1,7 +1,7 @@
 import type { MetricThreshold } from "@/types/evaluation";
 
-// Thresholds match eval_engine.py _metric_thresholds exactly.
-// (fail_below, warn_below) — score < failBelow => fail, score < warnBelow => warn, else pass.
+// Threshold values (warnBelow, failBelow) source of truth:
+//   src/adaptive_synth_eval/monitoring/metrics.yaml
 //
 // Labels and descriptions align with the AI Evaluation Taxonomy:
 //   Safety, Performance, System Reliability pillars.

@@ -1,7 +1,6 @@
 import logging
-from types import SimpleNamespace
-
 from pathlib import Path
+from types import SimpleNamespace
 
 from adaptive_synth_eval.cli import main
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract

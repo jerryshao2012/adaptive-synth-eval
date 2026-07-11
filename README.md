@@ -248,9 +248,7 @@ PowerShell (Windows):
 uv run ase monitor run `
     --run-folder outputs/runs/unified_evaluation_demo_run `
     --sample-size 1000 `
-    --interval-minutes 30 `
-    --metric-version v1 `
-    --threshold-version v1
+    --interval-minutes 30
 ```
 
 Bash/zsh:
@@ -259,24 +257,23 @@ Bash/zsh:
 uv run ase monitor run \
     --run-folder outputs/runs/unified_evaluation_demo_run \
     --sample-size 1000 \
-    --interval-minutes 30 \
-    --metric-version v1 \
-    --threshold-version v1
+    --interval-minutes 30
 ```
 
 Use explicit recovery behavior when a monitoring run is interrupted:
 
 ```bash
 # Continue from monitoring_state.json
-uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --metric-version v1 --incomplete-run-action resume
+uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --incomplete-run-action resume
 
 # Restart monitoring progress and re-evaluate
-uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --metric-version v1 --incomplete-run-action restart
+uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --incomplete-run-action restart
 ```
 
 Notes:
 - Input source is `chat_history.jsonl` under the selected run folder.
-- Same `metric_version` is idempotent: already-evaluated turns are skipped.
+- Versioning is automatic via SHA-256 fingerprints of the evaluation config — no manual `--metric-version` flag needed.
+- Same evaluation fingerprint is idempotent: already-evaluated turns are skipped.
 - LLM runtime uses environment configuration by default (same provider discovery flow as existing runtime clients).
 - Use `--dry-run` for deterministic local scoring without live LLM calls.
 

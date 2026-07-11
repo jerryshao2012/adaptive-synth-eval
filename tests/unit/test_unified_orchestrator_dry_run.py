@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract

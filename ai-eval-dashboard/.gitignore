@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# generated from source of truth (src/adaptive_synth_eval/monitoring/metrics.yaml)
+public/metrics.yaml

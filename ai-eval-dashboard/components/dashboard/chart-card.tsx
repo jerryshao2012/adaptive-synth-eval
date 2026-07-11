@@ -131,33 +131,62 @@ function ChartSummaryBar({
   avg,
   min,
   max,
+  warnThreshold,
+  failThreshold,
   valueFormatter = (v) => `${v}`,
 }: {
   avg: number;
   min: number;
   max: number;
+  warnThreshold?: number;
+  failThreshold?: number;
   valueFormatter?: (v: number) => string;
 }) {
   return (
-    <div className="flex items-center gap-4 text-xs text-muted-foreground w-full">
-      <span>
-        Avg:{" "}
-        <span className="font-medium text-foreground">
-          {valueFormatter(avg)}
+    <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground w-full flex-wrap">
+      {/* Left side: stats */}
+      <div className="flex items-center gap-4">
+        <span>
+          Avg:{" "}
+          <span className="font-medium text-foreground">
+            {valueFormatter(avg)}
+          </span>
         </span>
-      </span>
-      <span>
-        Min:{" "}
-        <span className="font-medium text-foreground">
-          {valueFormatter(min)}
+        <span>
+          Min:{" "}
+          <span className="font-medium text-foreground">
+            {valueFormatter(min)}
+          </span>
         </span>
-      </span>
-      <span>
-        Max:{" "}
-        <span className="font-medium text-foreground">
-          {valueFormatter(max)}
+        <span>
+          Max:{" "}
+          <span className="font-medium text-foreground">
+            {valueFormatter(max)}
+          </span>
         </span>
-      </span>
+      </div>
+
+      {/* Right side: thresholds */}
+      {(warnThreshold !== undefined || failThreshold !== undefined) && (
+        <div className="flex items-center gap-4">
+          {warnThreshold !== undefined && (
+            <span>
+              Warn:{" "}
+              <span className="font-medium text-amber-500">
+                {valueFormatter(warnThreshold)}
+              </span>
+            </span>
+          )}
+          {failThreshold !== undefined && (
+            <span>
+              Fail:{" "}
+              <span className="font-medium text-red-500">
+                {valueFormatter(failThreshold)}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

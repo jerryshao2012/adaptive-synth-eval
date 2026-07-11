@@ -111,7 +111,6 @@ export interface MetricTimeSeriesPoint {
   value: number;
   status: "pass" | "warn" | "fail";
   detail: string;
-  version?: string;
   pointIdentity?: MetricPointIdentity;
 }
 
@@ -131,14 +130,13 @@ export function extractMetricTimeSeries(
   for (const e of evaluations) {
     // Use type-safe access without converting to Record<string,...>
     const metrics = metricGroup === "safety" ? e.safety_metrics : e.performance_metrics;
-    const metric = (metrics as unknown as Record<string, { percent: number; status: "pass" | "warn" | "fail"; detail: string; version?: string }>)[metricKey];
+    const metric = (metrics as unknown as Record<string, { percent: number; status: "pass" | "warn" | "fail"; detail: string }>)[metricKey];
     if (metric) {
       points.push({
         timestamp: e.timestamp,
         value: metric.percent,
         status: metric.status,
         detail: metric.detail,
-        version: metric.version,
         pointIdentity: {
           runId: e.run_id || defaultRunId || "",
           conversationId: e.conversation_id,

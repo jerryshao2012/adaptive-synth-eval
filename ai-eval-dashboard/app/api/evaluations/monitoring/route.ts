@@ -41,9 +41,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!payload?.runId || !payload?.metricVersion || !payload?.action) {
+  if (!payload?.runId || !payload?.action) {
     return NextResponse.json(
-      { error: "runId, metricVersion, and action are required." },
+      { error: "runId and action are required." },
       { status: 400 }
     );
   }
