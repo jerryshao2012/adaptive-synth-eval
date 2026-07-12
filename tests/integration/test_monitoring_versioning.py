@@ -6,6 +6,7 @@ from pathlib import Path
 from adaptive_synth_eval.cli import main
 from adaptive_synth_eval.monitoring.fingerprint import (
     compute_evaluation_fingerprint,
+    compute_metric_content_fingerprint,
     compute_policy_fingerprint,
 )
 from adaptive_synth_eval.monitoring.metric_definitions import load_metrics_config
@@ -79,6 +80,9 @@ def test_full_run_produces_value_versions(tmp_path):
                     "relevance", "groundedness", "correctness", "completeness",
                     "style", "precision"):
             assert key in vv["metrics"], f"{key} missing from value_versions.metrics"
+            assert "content_fingerprint" in vv["metrics"][key], (
+                f"{key} missing content_fingerprint"
+            )
             assert "policy_fingerprint" in vv["metrics"][key]
 
     # Verify no legacy fields.
@@ -173,18 +177,21 @@ def test_atomic_write_does_not_corrupt_file(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_real_config_fingerprint_matches():
-    """Verify that the fingerprint from runner matches what we compute manually."""
+    """Verify that composite and per-metric fingerprints are valid."""
     config = load_metrics_config()
 
     # Dry-run llm has no provider — fingerprint should use "dry_run".
     fp = compute_evaluation_fingerprint(
-        prompt_template=config.prompt_template,
+        metric_content_fingerprints=config.metric_content_fingerprints,
         model_provider="dry_run",
         model_identifier="dry_run",
-        metric_keys=sorted(config.metrics.keys()),
-        metric_details=[m.detail for m in config.metrics.values()],
     )
     assert len(fp) == 16
+
+    # Every metric has a valid content fingerprint.
+    for key, mdef in config.metrics.items():
+        assert mdef.content_fingerprint is not None
+        assert len(mdef.content_fingerprint) == 16
 
     # Every metric has a valid policy fingerprint.
     for key, mdef in config.metrics.items():
@@ -194,3 +201,46 @@ def test_real_config_fingerprint_matches():
             fail_below=mdef.fail_below,
         )
         assert len(pfp) == 16
+
+
+def test_content_fingerprint_changes_with_prompt():
+    """Changing a single metric's prompt changes its content fingerprint
+    and therefore the composite evaluation fingerprint."""
+    config = load_metrics_config()
+
+    # Get the baseline composite fingerprint.
+    baseline = compute_evaluation_fingerprint(
+        metric_content_fingerprints=config.metric_content_fingerprints,
+        model_provider="dry_run",
+        model_identifier="dry_run",
+    )
+
+    # Simulate changing toxicity's prompt by computing a different content FP.
+    tox = config.metrics["toxicity"]
+    modified_tox_fp = compute_metric_content_fingerprint(
+        metric_key="toxicity",
+        prompt_template="A totally different evaluation prompt.",
+        eval_input_key=tox.eval_input_key,
+        invert_llm_score=tox.invert_llm_score,
+        warn_below=tox.warn_below,
+        fail_below=tox.fail_below,
+        heuristic=tox.heuristic,
+    )
+
+    # The modified fingerprint must differ from the original.
+    original_tox_fp = config.metric_content_fingerprints["toxicity"]
+    assert modified_tox_fp != original_tox_fp, (
+        "Changed prompt must produce different content fingerprint"
+    )
+
+    # The composite fingerprint must also change.
+    modified_fps = dict(config.metric_content_fingerprints)
+    modified_fps["toxicity"] = modified_tox_fp
+    modified_composite = compute_evaluation_fingerprint(
+        metric_content_fingerprints=modified_fps,
+        model_provider="dry_run",
+        model_identifier="dry_run",
+    )
+    assert modified_composite != baseline, (
+        "Changing a metric's content fingerprint must change the composite fingerprint"
+    )

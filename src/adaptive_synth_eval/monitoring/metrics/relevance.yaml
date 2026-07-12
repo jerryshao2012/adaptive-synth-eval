@@ -1,4 +1,3 @@
-version: "1.0.0"
 key: relevance
 evaluation_group: performance
 label: Relevance

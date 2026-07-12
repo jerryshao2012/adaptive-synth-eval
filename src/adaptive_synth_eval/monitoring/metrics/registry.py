@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from adaptive_synth_eval.monitoring.fingerprint import compute_metric_content_fingerprint
 from ._base import MetricSpec
 
 
@@ -20,29 +21,54 @@ class MetricRegistry:
             with yaml_file.open("r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
 
-            # Process optional heuristics config
+            key = data["key"]
+            evaluation_group = data["evaluation_group"]
+            label = data["label"]
+            description = data["description"]
+            detail = data["detail"]
+            eval_input_key = data["eval_input_key"]
+            warn_below = float(data["warn_below"])
+            fail_below = float(data["fail_below"])
+            invert_llm_score = bool(data.get("invert_llm_score", False))
+            prompt_template = data["prompt_template"]
+
+            # Validate threshold ordering.
+            if fail_below >= warn_below:
+                raise ValueError(
+                    f"Metric '{key}' in {yaml_file.name}: fail_below ({fail_below}) "
+                    f"must be less than warn_below ({warn_below})."
+                )
+
+            # Process optional heuristics config (stored as raw dict).
             h_data = data.get("heuristic")
-            h_rule = None
+            h_rule: dict | None = None
             if isinstance(h_data, dict):
-                # Safety-style safety rules or custom ones
-                default_val = h_data.get("default_score", 1.0)
-                penalties = h_data.get("keyword_penalties")
-                # We store the raw dict or standard rules
                 h_rule = h_data
 
-            spec = MetricSpec(
-                key=data["key"],
-                evaluation_group=data["evaluation_group"],
-                label=data["label"],
-                description=data["description"],
-                detail=data["detail"],
-                eval_input_key=data["eval_input_key"],
-                warn_below=float(data["warn_below"]),
-                fail_below=float(data["fail_below"]),
-                invert_llm_score=bool(data.get("invert_llm_score", False)),
-                version=str(data["version"]),
-                prompt_template=data["prompt_template"],
+            # Compute the per-metric content fingerprint.
+            content_fp = compute_metric_content_fingerprint(
+                metric_key=key,
+                prompt_template=prompt_template,
+                eval_input_key=eval_input_key,
+                invert_llm_score=invert_llm_score,
+                warn_below=warn_below,
+                fail_below=fail_below,
                 heuristic=h_rule,
+            )
+
+            spec = MetricSpec(
+                key=key,
+                evaluation_group=evaluation_group,
+                label=label,
+                description=description,
+                detail=detail,
+                eval_input_key=eval_input_key,
+                warn_below=warn_below,
+                fail_below=fail_below,
+                invert_llm_score=invert_llm_score,
+                prompt_template=prompt_template,
+                heuristic=h_rule,
+                content_fingerprint=content_fp,
             )
             self._specs[spec.key] = spec
 

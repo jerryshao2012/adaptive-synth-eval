@@ -1,7 +1,8 @@
 """Metric definitions loaded from metrics/*.yaml.
 
 Provides the single source of truth for all monitoring metric configuration:
-metric keys, evaluation groups, thresholds, descriptions, and the LLM prompt template.
+metric keys, evaluation groups, thresholds, descriptions, per-metric content
+fingerprints, and policy fingerprints.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from adaptive_synth_eval.monitoring.fingerprint import compute_metric_content_fingerprint
 from .metrics._base import MetricSpec as MetricDefinition
 from .metrics.registry import MetricRegistry
 
@@ -21,7 +23,7 @@ class MetricsConfig:
     """Complete monitoring metrics configuration loaded from YAML."""
 
     metrics: dict[str, MetricDefinition]
-    prompt_template: str
+    metric_content_fingerprints: dict[str, str]
     evaluation_groups: frozenset[str]
     metric_keys_by_group: dict[str, list[str]]
 
@@ -44,7 +46,8 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
     if path is None and _CACHED_CONFIG is not None:
         return _CACHED_CONFIG
 
-    # Support loading from a custom path if explicitly provided (for backward compatibility / tests)
+    # Support loading from a custom path if explicitly provided
+    # (for backward compatibility / tests).
     if path is not None:
         resolved = Path(path)
         if not resolved.exists():
@@ -89,13 +92,22 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
             warn_below = _require_float(thresholds, key, "warn_below")
             fail_below = _require_float(thresholds, key, "fail_below")
 
-            if fail_below >= warn_below:
-                raise ValueError(
-                    f"Metric '{key}': fail_below ({fail_below}) must be less than "
-                    f"warn_below ({warn_below})."
-                )
+            _validate_thresholds(key, warn_below, fail_below)
 
             invert = bool(defn.get("invert_llm_score", False))
+
+            h_data = defn.get("heuristic")
+            h_rule: dict | None = h_data if isinstance(h_data, dict) else None
+
+            content_fp = compute_metric_content_fingerprint(
+                metric_key=key,
+                prompt_template=prompt_template,
+                eval_input_key=eval_input_key,
+                invert_llm_score=invert,
+                warn_below=warn_below,
+                fail_below=fail_below,
+                heuristic=h_rule,
+            )
 
             metric = MetricDefinition(
                 key=key,
@@ -107,22 +119,24 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
                 warn_below=warn_below,
                 fail_below=fail_below,
                 invert_llm_score=invert,
-                version="1.0.0",
                 prompt_template=prompt_template,
-                heuristic=None,
+                heuristic=h_rule,
+                content_fingerprint=content_fp,
             )
             metrics[key] = metric
             groups.add(evaluation_group)
             keys_by_group.setdefault(evaluation_group, []).append(key)
 
+        content_fingerprints = {k: m.content_fingerprint for k, m in metrics.items() if m.content_fingerprint}
+
         return MetricsConfig(
             metrics=metrics,
-            prompt_template=prompt_template.strip(),
+            metric_content_fingerprints=content_fingerprints,
             evaluation_groups=frozenset(groups),
             metric_keys_by_group=keys_by_group,
         )
 
-    # Discover and load from the default registry
+    # Discover and load from the default registry.
     registry = MetricRegistry()
     specs = registry.all_specs()
 
@@ -133,24 +147,29 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
     for spec in specs.values():
         keys_by_group.setdefault(spec.evaluation_group, []).append(spec.key)
 
-    # Dynamic fallback prompt template for legacy callers
-    keys_str = ",".join(specs.keys())
-    fallback_prompt = (
-        f"You are an AI evaluator for chatbot responses. "
-        f"Return ONLY JSON with numeric fields between 0 and 1: {keys_str}.\n"
-        f"User message:\n{{user_text}}\n"
-        f"Chatbot response:\n{{response_text}}\n"
-    )
+    content_fingerprints = {
+        k: v.content_fingerprint
+        for k, v in specs.items()
+        if v.content_fingerprint is not None
+    }
 
     config = MetricsConfig(
         metrics=metrics,
-        prompt_template=fallback_prompt,
+        metric_content_fingerprints=content_fingerprints,
         evaluation_groups=groups,
         metric_keys_by_group=keys_by_group,
     )
 
     _CACHED_CONFIG = config
     return config
+
+
+def _validate_thresholds(key: str, warn_below: float, fail_below: float) -> None:
+    if fail_below >= warn_below:
+        raise ValueError(
+            f"Metric '{key}': fail_below ({fail_below}) must be less than "
+            f"warn_below ({warn_below})."
+        )
 
 
 def _require_str(mapping: dict[str, Any], metric_key: str, field: str) -> str:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from ._base import HeuristicRule, MetricSpec
+from ._base import MetricContentFingerprint, MetricSpec
 from .registry import MetricRegistry
 
 __all__ = [
-    "HeuristicRule",
+    "MetricContentFingerprint",
     "MetricSpec",
     "MetricRegistry",
 ]

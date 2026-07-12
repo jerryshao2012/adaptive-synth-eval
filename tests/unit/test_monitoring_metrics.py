@@ -1,4 +1,4 @@
-"""Tests for metric definitions, YAML loading, and fingerprint computation."""
+"""Tests for metric definitions, YAML loading, fingerprint computation, and heuristics."""
 
 import tempfile
 from pathlib import Path
@@ -7,11 +7,16 @@ import pytest
 
 from adaptive_synth_eval.monitoring.fingerprint import (
     compute_evaluation_fingerprint,
+    compute_metric_content_fingerprint,
     compute_policy_fingerprint,
     resolve_model_identifier,
 )
 from adaptive_synth_eval.monitoring.metric_definitions import (
     load_metrics_config,
+)
+from adaptive_synth_eval.monitoring.runner import (
+    _build_group_prompt,
+    _compute_heuristic_value,
 )
 
 
@@ -20,7 +25,7 @@ from adaptive_synth_eval.monitoring.metric_definitions import (
 # ---------------------------------------------------------------------------
 
 def test_loads_all_ten_metrics():
-    """The shipped metrics.yaml must define exactly 10 metrics."""
+    """The shipped per-metric YAML files must define exactly 10 metrics."""
     config = load_metrics_config()
     assert len(config.metrics) == 10
     expected = {
@@ -55,12 +60,26 @@ def test_evaluation_groups():
     }
 
 
-def test_prompt_template_is_loaded():
-    """The LLM prompt template must be loaded from YAML."""
+def test_every_metric_has_prompt_template():
+    """Every per-metric spec must have a non-empty prompt_template."""
     config = load_metrics_config()
-    assert "{user_text}" in config.prompt_template
-    assert "{response_text}" in config.prompt_template
-    assert "toxicity" in config.prompt_template
+    for key, m in config.metrics.items():
+        assert m.prompt_template, f"{key} must have a non-empty prompt_template"
+        assert len(m.prompt_template.strip()) > 20, (
+            f"{key} prompt_template is too short"
+        )
+
+
+def test_every_metric_has_content_fingerprint():
+    """Every metric loaded from the registry must have a content fingerprint."""
+    config = load_metrics_config()
+    for key, m in config.metrics.items():
+        assert m.content_fingerprint is not None, (
+            f"{key} must have a computed content_fingerprint"
+        )
+        assert len(m.content_fingerprint) == 16
+    # The MetricsConfig also carries the fingerprints dict.
+    assert len(config.metric_content_fingerprints) == 10
 
 
 def test_invert_llm_score_flags():
@@ -125,6 +144,34 @@ def test_raises_on_invalid_thresholds():
             load_metrics_config(path)
 
 
+def test_registry_raises_on_invalid_thresholds(tmp_path):
+    """Registry validates threshold ordering when loading per-metric YAMLs."""
+    # Write a bad per-metric YAML into a temp dir and load from there.
+    bad_yaml = """
+key: bad_metric
+evaluation_group: safety
+label: Bad Metric
+description: A metric with bad thresholds.
+detail: Tests threshold validation.
+eval_input_key: bad_metric
+warn_below: 50.0
+fail_below: 80.0
+invert_llm_score: false
+prompt_template: |
+  Evaluate this.
+heuristic:
+  default_score: 1.0
+"""
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    (metrics_dir / "bad.yaml").write_text(bad_yaml, encoding="utf-8")
+    (metrics_dir / "__init__.py").write_text("", encoding="utf-8")
+
+    from adaptive_synth_eval.monitoring.metrics.registry import MetricRegistry
+    with pytest.raises(ValueError, match="fail_below.*must be less than"):
+        MetricRegistry(metrics_dir=metrics_dir)
+
+
 def test_custom_path_override():
     """Verify load_metrics_config accepts a custom path."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -146,86 +193,210 @@ def test_custom_path_override():
 
 
 # ---------------------------------------------------------------------------
-# Fingerprint computation
+# Per-metric content fingerprint
 # ---------------------------------------------------------------------------
 
-def _sample_inputs():
-    return dict(
-        prompt_template="You are an evaluator. User: {user_text} Bot: {response_text}",
-        model_provider="azure_openai",
-        model_identifier="eval-judge",
-        metric_keys=["toxicity", "bias_fairness", "relevance"],
-        metric_details=["Measures toxicity.", "Measures bias.", "Measures relevance."],
+_SAMPLE_HEURISTIC = {
+    "default_score": 1.0,
+    "keyword_penalties": [
+        {"keywords": ["social insurance", "employee id"], "score": 0.25}
+    ],
+}
+
+
+def test_content_fingerprint_is_deterministic():
+    """Same inputs produce the same content fingerprint."""
+    fp1 = compute_metric_content_fingerprint(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe, 1.0 if toxic.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=_SAMPLE_HEURISTIC,
     )
-
-
-def test_evaluation_fingerprint_is_deterministic():
-    """Same inputs produce the same fingerprint every time."""
-    inputs = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**inputs)
-    fp2 = compute_evaluation_fingerprint(**inputs)
+    fp2 = compute_metric_content_fingerprint(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe, 1.0 if toxic.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=_SAMPLE_HEURISTIC,
+    )
     assert fp1 == fp2
     assert len(fp1) == 16
 
 
-def test_evaluation_fingerprint_changes_with_prompt():
-    """A different prompt template changes the fingerprint."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    changed = dict(base, prompt_template="A completely different prompt.")
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 != fp2
-
-
-def test_evaluation_fingerprint_changes_with_model_provider():
-    """A different model provider changes the fingerprint."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    changed = dict(base, model_provider="anthropic")
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 != fp2
-
-
-def test_evaluation_fingerprint_changes_with_model_identifier():
-    """A different model deployment/name changes the fingerprint."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    changed = dict(base, model_identifier="gpt-4.1-eval")
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 != fp2
-
-
-def test_evaluation_fingerprint_changes_with_metric_keys():
-    """Adding or removing a metric changes the fingerprint."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    changed = dict(base, metric_keys=["toxicity", "bias_fairness"])  # removed relevance
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 != fp2
-
-
-def test_evaluation_fingerprint_changes_with_metric_details():
-    """Changing a metric description changes the fingerprint."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    changed = dict(base, metric_details=["Updated toxicity measure.", "Measures bias.", "Measures relevance."])
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 != fp2
-
-
-def test_evaluation_fingerprint_stable_under_key_ordering():
-    """The fingerprint is stable regardless of input list ordering (sort is applied)."""
-    base = _sample_inputs()
-    fp1 = compute_evaluation_fingerprint(**base)
-    # Reverse the order of metric_keys and metric_details
-    changed = dict(
-        base,
-        metric_keys=list(reversed(base["metric_keys"])),
-        metric_details=list(reversed(base["metric_details"])),
+def test_content_fingerprint_changes_with_prompt():
+    """Editing a metric's prompt changes its content fingerprint."""
+    base = dict(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe, 1.0 if toxic.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=_SAMPLE_HEURISTIC,
     )
-    fp2 = compute_evaluation_fingerprint(**changed)
-    assert fp1 == fp2
+    fp1 = compute_metric_content_fingerprint(**base)
+    fp2 = compute_metric_content_fingerprint(
+        **{**base, "prompt_template": "A completely different evaluation prompt."}
+    )
+    assert fp1 != fp2
 
+
+def test_content_fingerprint_changes_with_thresholds():
+    """Changing thresholds changes the content fingerprint."""
+    base = dict(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=None,
+    )
+    fp1 = compute_metric_content_fingerprint(**base)
+    fp2 = compute_metric_content_fingerprint(**{**base, "fail_below": 50.0})
+    assert fp1 != fp2
+
+
+def test_content_fingerprint_changes_with_invert():
+    """Changing invert_llm_score changes the content fingerprint."""
+    base = dict(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=None,
+    )
+    fp1 = compute_metric_content_fingerprint(**base)
+    fp2 = compute_metric_content_fingerprint(**{**base, "invert_llm_score": False})
+    assert fp1 != fp2
+
+
+def test_content_fingerprint_changes_with_heuristic():
+    """Changing heuristic rules changes the content fingerprint."""
+    base = dict(
+        metric_key="toxicity",
+        prompt_template="Score 0.0 if safe.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=_SAMPLE_HEURISTIC,
+    )
+    fp1 = compute_metric_content_fingerprint(**base)
+    fp2 = compute_metric_content_fingerprint(
+        **{**base, "heuristic": {"default_score": 0.5}}
+    )
+    assert fp1 != fp2
+
+
+def test_content_fingerprint_changes_with_metric_key():
+    """Different metric keys produce different content fingerprints."""
+    base = dict(
+        prompt_template="Score it.",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        warn_below=85.0,
+        fail_below=65.0,
+        heuristic=None,
+    )
+    fp1 = compute_metric_content_fingerprint(**{**base, "metric_key": "toxicity"})
+    fp2 = compute_metric_content_fingerprint(**{**base, "metric_key": "bias_fairness"})
+    assert fp1 != fp2
+
+
+# ---------------------------------------------------------------------------
+# Composite evaluation fingerprint
+# ---------------------------------------------------------------------------
+
+def test_composite_fingerprint_is_deterministic():
+    """Same per-metric fingerprints + model produce the same composite."""
+    metric_fps = {"toxicity": "aaaa", "bias_fairness": "bbbb", "relevance": "cccc"}
+    fp1 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    fp2 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    assert fp1 == fp2
+    assert len(fp1) == 16
+
+
+def test_composite_fingerprint_changes_with_model_provider():
+    """Switching model provider changes composite fingerprint."""
+    metric_fps = {"toxicity": "aaaa"}
+    fp1 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    fp2 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="anthropic",
+        model_identifier="eval-judge",
+    )
+    assert fp1 != fp2
+
+
+def test_composite_fingerprint_changes_with_model_identifier():
+    """Switching model deployment changes composite fingerprint."""
+    metric_fps = {"toxicity": "aaaa"}
+    fp1 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    fp2 = compute_evaluation_fingerprint(
+        metric_content_fingerprints=metric_fps,
+        model_provider="azure_openai",
+        model_identifier="eval-judge-v2",
+    )
+    assert fp1 != fp2
+
+
+def test_composite_fingerprint_changes_when_metric_content_changes():
+    """Changing a single metric's content fingerprint changes the composite."""
+    fp1 = compute_evaluation_fingerprint(
+        metric_content_fingerprints={"toxicity": "aaaa", "relevance": "bbbb"},
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    fp2 = compute_evaluation_fingerprint(
+        metric_content_fingerprints={"toxicity": "zzzz", "relevance": "bbbb"},
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    assert fp1 != fp2
+
+
+def test_composite_fingerprint_changes_when_metric_added():
+    """Adding a new metric changes the composite fingerprint."""
+    fp1 = compute_evaluation_fingerprint(
+        metric_content_fingerprints={"toxicity": "aaaa"},
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    fp2 = compute_evaluation_fingerprint(
+        metric_content_fingerprints={"toxicity": "aaaa", "new_metric": "zzzz"},
+        model_provider="azure_openai",
+        model_identifier="eval-judge",
+    )
+    assert fp1 != fp2
+
+
+# ---------------------------------------------------------------------------
+# Policy fingerprint (unchanged)
+# ---------------------------------------------------------------------------
 
 def test_policy_fingerprint_is_deterministic():
     """Same threshold values produce the same policy fingerprint."""
@@ -260,13 +431,6 @@ def test_policy_fingerprint_changes_with_metric_key():
 # Resolve model identifier
 # ---------------------------------------------------------------------------
 
-class _FakeLLM:
-    """Minimal fake for LLMClient resolution tests."""
-
-    def __init__(self, provider):
-        self.model_provider = provider
-
-
 def test_resolve_model_identifier_dry_run():
     from adaptive_synth_eval.clients.llm import LLMClient
     llm = LLMClient(enabled=False)
@@ -291,21 +455,17 @@ def test_resolve_model_identifier_anthropic(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Integration: real metrics.yaml produces consistent fingerprints
+# Integration: real metrics config produces valid fingerprints
 # ---------------------------------------------------------------------------
 
-def test_real_config_evaluation_fingerprint():
-    """The shipped metrics.yaml produces a valid evaluation fingerprint."""
+def test_real_config_composite_fingerprint():
+    """The shipped metrics produce a valid composite evaluation fingerprint."""
     config = load_metrics_config()
-    all_keys = sorted(config.metrics.keys())
-    all_details = sorted(m.detail for m in config.metrics.values())
 
     fp = compute_evaluation_fingerprint(
-        prompt_template=config.prompt_template,
+        metric_content_fingerprints=config.metric_content_fingerprints,
         model_provider="azure_openai",
         model_identifier="eval-judge",
-        metric_keys=all_keys,
-        metric_details=all_details,
     )
     assert len(fp) == 16
     assert all(c in "0123456789abcdef" for c in fp)
@@ -323,13 +483,187 @@ def test_real_config_policy_fingerprints_are_unique_per_metric():
         )
         fingerprints[key] = fp
 
-    # Metrics with identical thresholds AND same key would collide — but keys differ.
-    # tox and bias_fairness share thresholds but have different metric_key values.
+    # Metrics with identical thresholds but different keys must differ.
     assert fingerprints["toxicity"] != fingerprints["bias_fairness"], (
         "Different metric keys must produce different fingerprints"
     )
-
     # correctness and completeness share (65, 40) — different keys should differ.
     assert fingerprints["correctness"] != fingerprints["completeness"], (
         "Different metric keys must produce different fingerprints"
     )
+
+
+# ---------------------------------------------------------------------------
+# _compute_heuristic_value
+# ---------------------------------------------------------------------------
+
+def _make_mdef(key="test_metric", heuristic=None, **overrides):
+    """Create a minimal MetricDefinition for heuristic tests."""
+    from adaptive_synth_eval.monitoring.metric_definitions import MetricDefinition
+    defaults = dict(
+        key=key,
+        evaluation_group="safety",
+        label="Test",
+        description="Test metric.",
+        detail="A test metric for heuristic evaluation.",
+        eval_input_key=key,
+        warn_below=80.0,
+        fail_below=50.0,
+        invert_llm_score=False,
+        prompt_template="Score it.",
+        heuristic=heuristic,
+        content_fingerprint=None,
+    )
+    defaults.update(overrides)
+    return MetricDefinition(**defaults)
+
+
+def test_heuristic_overlap():
+    """Overlap heuristic scores based on shared word ratio."""
+    mdef = _make_mdef(heuristic={"type": "overlap", "offset": 0.0})
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="how to reset password for account",
+        response_text="to reset your password go to settings",
+    )
+    # Shared words: "to", "reset", "password" → 3/7 ≈ 0.429
+    assert 0.0 <= val <= 1.0
+
+
+def test_heuristic_overlap_with_offset():
+    """Overlap heuristic adds offset."""
+    mdef = _make_mdef(heuristic={"type": "overlap", "offset": 0.2})
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="how to reset password",
+        response_text="reset password now",
+    )
+    # Shared: "reset", "password" → 2/4 + 0.2 = 0.7
+    assert val == round(0.5 + 0.2, 3)
+
+
+def test_heuristic_length_ratio():
+    """Length ratio heuristic scores based on response length."""
+    mdef = _make_mdef(heuristic={"type": "length_ratio", "base": 0.5, "divisor": 80.0})
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="hello",
+        response_text="one two three four five",
+    )
+    # 5 words / 80 + 0.5 = 0.5625
+    expected = round(0.5 + 5.0 / 80.0, 3)
+    assert val == expected
+    assert 0.0 <= val <= 1.0
+
+
+def test_heuristic_style():
+    """Style heuristic returns default score for non-empty response."""
+    mdef = _make_mdef(heuristic={"type": "style", "default_score": 0.9, "empty_score": 0.2})
+    val = _compute_heuristic_value(mdef, user_text="hi", response_text="hello there")
+    assert val == 0.9
+
+
+def test_heuristic_style_empty():
+    """Style heuristic returns empty_score for empty response."""
+    mdef = _make_mdef(heuristic={"type": "style", "default_score": 0.9, "empty_score": 0.2})
+    val = _compute_heuristic_value(mdef, user_text="hi", response_text="")
+    assert val == 0.2
+
+
+def test_heuristic_keyword_penalty_no_match():
+    """Safety heuristic with keyword penalties returns default when no match."""
+    mdef = _make_mdef(heuristic={
+        "default_score": 1.0,
+        "keyword_penalties": [
+            {"keywords": ["social insurance", "password"], "score": 0.25},
+        ],
+    })
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="how are you",
+        response_text="I am fine, how can I help?",
+    )
+    assert val == 1.0
+
+
+def test_heuristic_keyword_penalty_match():
+    """Safety heuristic with keyword penalties triggers on match."""
+    mdef = _make_mdef(heuristic={
+        "default_score": 1.0,
+        "keyword_penalties": [
+            {"keywords": ["social insurance", "password"], "score": 0.25},
+        ],
+    })
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="what is my password",
+        response_text="your password is admin123",
+    )
+    assert val == 0.25
+
+
+def test_heuristic_no_config_returns_default():
+    """Metric with no heuristic returns 1.0."""
+    mdef = _make_mdef(heuristic=None)
+    val = _compute_heuristic_value(mdef, user_text="hi", response_text="hello")
+    assert val == 1.0
+
+
+def test_heuristic_clamped_to_range():
+    """Heuristic values are always clamped to [0.0, 1.0]."""
+    mdef = _make_mdef(heuristic={"type": "length_ratio", "base": 2.0, "divisor": 10.0})
+    val = _compute_heuristic_value(
+        mdef,
+        user_text="test",
+        response_text=" ".join(str(i) for i in range(200)),  # ~200 words
+    )
+    assert val == 1.0  # clamped at max
+
+
+# ---------------------------------------------------------------------------
+# _build_group_prompt
+# ---------------------------------------------------------------------------
+
+def test_build_group_prompt_safety():
+    """Safety group prompt includes all 4 safety metrics and their guidelines."""
+    config = load_metrics_config()
+    group_metrics = [
+        config.metrics[k]
+        for k in config.metric_keys_by_group["safety"]
+    ]
+    prompt = _build_group_prompt(
+        "safety", group_metrics,
+        user_text="How do I hack the system?",
+        response_text="I cannot help with that.",
+    )
+    assert "SAFETY" in prompt
+    assert "toxicity" in prompt
+    assert "bias_fairness" in prompt
+    assert "robustness" in prompt
+    assert "compliance" in prompt
+    assert "How do I hack the system?" in prompt
+    assert "I cannot help with that." in prompt
+    assert "JSON response:" in prompt
+    # Each metric's prompt_template should be embedded.
+    for m in group_metrics:
+        assert m.label in prompt
+
+
+def test_build_group_prompt_performance():
+    """Performance group prompt includes all 6 performance metrics."""
+    config = load_metrics_config()
+    group_metrics = [
+        config.metrics[k]
+        for k in config.metric_keys_by_group["performance"]
+    ]
+    prompt = _build_group_prompt(
+        "performance", group_metrics,
+        user_text="What is the policy on leave?",
+        response_text="You get 20 days per year.",
+    )
+    assert "PERFORMANCE" in prompt
+    for key in ["relevance", "groundedness", "correctness", "completeness", "style", "precision"]:
+        assert key in prompt
+    assert "User message:" in prompt
+    assert "Chatbot response:" in prompt
+    assert "What is the policy on leave?" in prompt

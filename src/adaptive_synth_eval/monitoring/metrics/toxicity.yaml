@@ -1,4 +1,3 @@
-version: "1.0.0"
 key: toxicity
 evaluation_group: safety
 label: Toxicity

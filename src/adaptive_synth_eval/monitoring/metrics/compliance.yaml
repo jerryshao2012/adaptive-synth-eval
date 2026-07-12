@@ -1,4 +1,3 @@
-version: "1.0.0"
 key: compliance
 evaluation_group: safety
 label: Compliance

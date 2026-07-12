@@ -158,15 +158,14 @@ def run_monitoring(
         )
 
     model_ident = resolve_model_identifier(llm)
-    all_keys = sorted(metrics_config.metrics.keys())
-    all_details = [metrics_config.metrics[k].detail for k in all_keys]
 
+    # Build composite evaluation fingerprint from per-metric content fingerprints.
+    # Changing any metric's prompt/thresholds/heuristic OR switching models
+    # produces a new fingerprint → triggers LLM re-evaluation.
     evaluation_fingerprint = compute_evaluation_fingerprint(
-        prompt_template=metrics_config.prompt_template,
+        metric_content_fingerprints=metrics_config.metric_content_fingerprints,
         model_provider=llm.model_provider or "dry_run",
         model_identifier=model_ident,
-        metric_keys=all_keys,
-        metric_details=all_details,
     )
 
     policy_fingerprints: dict[str, str] = {}
@@ -447,14 +446,15 @@ def _evaluate_chat_row(
                 "deployment": resolve_model_identifier(llm),
             },
             "prompt_hash": compute_evaluation_fingerprint(
-                prompt_template=metrics_config.prompt_template,
+                metric_content_fingerprints=metrics_config.metric_content_fingerprints,
                 model_provider=llm.model_provider or "dry_run",
                 model_identifier=resolve_model_identifier(llm),
-                metric_keys=sorted(metrics_config.metrics.keys()),
-                metric_details=[m.detail for m in metrics_config.metrics.values()],
             ),
             "metrics": {
-                key: {"policy_fingerprint": fp}
+                key: {
+                    "content_fingerprint": metrics_config.metric_content_fingerprints.get(key, ""),
+                    "policy_fingerprint": fp,
+                }
                 for key, fp in policy_fingerprints.items()
             },
         },
@@ -508,7 +508,13 @@ def _compute_heuristic_value(mdef: MetricDefinition, user_text: str, response_te
     elif h_type == "style":
         val = float(h.get("default_score", 0.9)) if response_text.strip() else float(h.get("empty_score", 0.2))
     else:
-        # Default safety style with keyword penalties
+        # Default safety-style with keyword penalties.
+        if h_type is not None:
+            logger.warning(
+                "Unrecognized heuristic type '%s' for metric '%s'; "
+                "falling back to keyword-penalty evaluation.",
+                h_type, mdef.key,
+            )
         val = float(h.get("default_score", 1.0))
         penalties = h.get("keyword_penalties")
         if isinstance(penalties, list):
@@ -552,12 +558,22 @@ def _evaluate_with_llm(
         prompt = _build_group_prompt(group_name, group_metrics, user_text, response_text)
         result = llm.complete(prompt)
         if result.error:
-            # Fall back to heuristic for this group
+            # Fall back to heuristic for this group.
+            logger.warning(
+                "LLM evaluation failed for %s group (error=%s); "
+                "falling back to heuristic scores.",
+                group_name, result.error,
+            )
             continue
 
         parsed = _extract_json_object(result.content)
         if not isinstance(parsed, dict):
-            # Fall back to heuristic for this group
+            # Fall back to heuristic for this group.
+            logger.warning(
+                "LLM evaluation returned unparseable JSON for %s group; "
+                "falling back to heuristic scores.",
+                group_name,
+            )
             continue
 
         for mdef in group_metrics:
