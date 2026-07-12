@@ -61,6 +61,13 @@ graph TB
         ReflectionEngine["Reflection Engine"]
     end
 
+    subgraph Monitoring["Monitoring (monitoring/)"]
+        MonitorRunner["Monitor Runner"]
+        MetricRegistry["Metric Registry"]
+        FingerprintEngine["Fingerprint Engine"]
+        HeuristicFallback["Heuristic Fallback"]
+    end
+
     subgraph LLMClients["LLM Clients & Backends (clients/)"]
         AzureOpenAI["Azure OpenAI"]
         AWSBedrock["AWS Bedrock"]
@@ -122,9 +129,16 @@ graph TB
     GenEngine -.LLM Messages.-> LLMClients
     UnifiedPersonas -.LLM Messages.-> LLMClients
     UnifiedScoring -.LLM Evaluation.-> LLMClients
+    MonitorRunner -.LLM Evaluation.-> LLMClients
 
     SimEngine --> Targets
     RedTeamEngine --> Targets
+
+    CLI --> MonitorRunner
+    MonitorRunner --> FingerprintEngine
+    FingerprintEngine --> MetricRegistry
+    MonitorRunner --> HeuristicFallback
+    MonitorRunner --> Persistence
     
     style CLI fill:#e1f5ff,stroke:#333,stroke-width:1px,color:#000
     style ContractLayer fill:#f3e5f5,stroke:#333,stroke-width:1px,color:#000
@@ -132,6 +146,7 @@ graph TB
     style StaticExec fill:#e8f5e9,stroke:#333,stroke-width:1px,color:#000
     style LoopExec fill:#fff3e0,stroke:#333,stroke-width:1px,color:#000
     style AdversarialExec fill:#fce4ec,stroke:#333,stroke-width:1px,color:#000
+    style Monitoring fill:#e0f2f1,stroke:#333,stroke-width:1px,color:#000
     style LLMClients fill:#f1f8e9,stroke:#333,stroke-width:1px,color:#000
     style Persistence fill:#eceff1,stroke:#333,stroke-width:1px,color:#000
     style Targets fill:#ede7f6,stroke:#333,stroke-width:1px,color:#000
@@ -321,11 +336,13 @@ adaptive-synth-eval/
 │       ├── evaluation/
 │       ├── generation/
 │       ├── loop/
+│       ├── monitoring/
+│       │   ├── metrics/           # Per-metric YAML configs (auto-discovered, content-fingerprinted)
 │       ├── scoring/
 │       └── unified_eval/
-└── tests/
-    ├── integration/               # End-to-end and CLI workflow tests
-    └── unit/                      # Component and utility tests
+│   └── tests/
+│       ├── integration/           # End-to-end and CLI workflow tests
+│       └── unit/                  # Component and utility tests
 ```
 
 ---
