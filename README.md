@@ -272,7 +272,10 @@ uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --s
 
 Notes:
 - Input source is `chat_history.jsonl` under the selected run folder.
-- Versioning is automatic via SHA-256 fingerprints of the evaluation config — no manual `--metric-version` flag needed.
+- Versioning is automatic via three-tier SHA-256 fingerprints:
+  - **Metric content fingerprint** (per metric): hashes prompt template, thresholds, heuristic, and scoring logic. Changing any of these in a metric's YAML file produces a new fingerprint.
+  - **Composite evaluation fingerprint**: combines all per-metric content fingerprints + model identity. Any change triggers LLM re-evaluation for affected groups.
+  - **Policy fingerprint** (per metric): thresholds only. Threshold changes recalculate pass/warn/fail statuses — zero LLM cost.
 - Same evaluation fingerprint is idempotent: already-evaluated turns are skipped.
 - LLM runtime uses environment configuration by default (same provider discovery flow as existing runtime clients).
 - Use `--dry-run` for deterministic local scoring without live LLM calls.

@@ -107,10 +107,10 @@ The loop subsystem (`loop/`) uses AI-driven discovery to find evaluation targets
 
 Post-hoc evaluation of chat history artifacts. The runner (`monitoring/runner.py`) reads `chat_history.jsonl` in sampling windows, scores each turn via LLM evaluation (10 metrics: 4 safety + 6 performance), and writes `monitoring_scores.jsonl`.
 
-- **Automatic versioning**: No manual `--metric-version` flag. Fingerprints are computed from the evaluation config (`monitoring/metrics.yaml`), prompt template, and resolved model identity. Same fingerprint → skip evaluation. Changed fingerprint → re-evaluate.
-- **Two-tier fingerprints**: `evaluation_fingerprint` (prompt + model + metrics) triggers LLM re-evaluation. `policy_fingerprint` (thresholds per metric) triggers status recalculation only — no LLM calls.
+- **Automatic versioning**: No manual version fields. Each per-metric YAML file is hashed into a **metric content fingerprint** (prompt template, thresholds, heuristic, scoring logic). The **composite evaluation fingerprint** combines all per-metric content fingerprints + model identity. Changing any metric's content or switching models produces a new composite fingerprint → triggers LLM re-evaluation.
+- **Three-tier fingerprints**: `metric_content_fingerprint` (per-metric: prompt + thresholds + heuristic) detects what changed. `evaluation_fingerprint` (composite of all metric content FPs + model identity) triggers LLM re-evaluation. `policy_fingerprint` (per-metric: thresholds only) triggers status recalculation — no LLM calls.
 - **Atomic writes**: `monitoring_scores.jsonl` is atomically replaced after each window (temp file + fsync + os.replace). Exactly one row per (conversation_id, turn_id).
-- **Config-driven**: Metric definitions, thresholds, descriptions, and the LLM prompt template live in `monitoring/metrics.yaml` (checked-in source of truth).
+- **Config-driven**: Each of the 10 metrics has its own YAML file under `monitoring/metrics/` (checked-in source of truth). The `MetricRegistry` auto-discovers and validates them. A legacy monolithic `metrics.yaml` path is still supported via `--metrics-config`.
 - **Continuous monitoring**: The runner is designed for cron/scheduler-based recurring execution. Each invocation uses `--incomplete-run-action resume` to pick up only new rows appended to `chat_history.jsonl` since the last run. When no new rows exist, it exits immediately (zero LLM cost). The dashboard refreshes automatically. This is the pattern for 24/7 chat applications where evaluation keeps pace with live traffic.
 
 ### Contract Formats

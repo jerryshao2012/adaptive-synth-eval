@@ -220,11 +220,13 @@ WantedBy=timers.target
 
 ### Versioning (Automatic)
 
-No manual `--metric-version` flag is needed. SHA-256 fingerprints are computed automatically from:
-- **Evaluation fingerprint**: prompt template + model identity + metric keys/descriptions. Any change triggers full LLM re-evaluation.
-- **Policy fingerprint** (per metric): thresholds (warn_below, fail_below). Threshold changes only recalculate statuses — zero LLM cost.
+No manual `--metric-version` flag is needed. A three-tier SHA-256 fingerprint system tracks changes automatically:
 
-Same fingerprint → rows are skipped (idempotent). Changed fingerprint → affected rows are re-evaluated.
+- **Metric content fingerprint** (per metric): Computed from the metric's prompt template, thresholds, heuristic rules, invert flag, and eval_input_key. Lives in each per-metric YAML file under `monitoring/metrics/`. Changing any of these fields changes the fingerprint for that metric.
+- **Composite evaluation fingerprint**: Combines all per-metric content fingerprints + model identity (provider + deployment name). Any change triggers LLM re-evaluation for the affected evaluation group(s).
+- **Policy fingerprint** (per metric): Thresholds only (`warn_below`, `fail_below`). Threshold changes recalculate pass/warn/fail statuses from existing scores — zero LLM cost.
+
+Same fingerprint → rows are skipped (idempotent). Changed evaluation fingerprint → affected rows are re-evaluated. Changed policy fingerprint only → statuses are recomputed in-place.
 
 ### Incomplete Run Recovery
 
@@ -263,7 +265,7 @@ Options:
   --interval-minutes     Sampling window width in minutes (default: 60)
   --sampling-strategy    all | random | systematic (default: all)
   --max-windows          Stop after N windows (default: unlimited)
-  --metrics-config       Custom metrics.yaml path (default: shipped config)
+  --metrics-config       Path to a custom monolithic metrics.yaml (default: per-metric YAMLs in monitoring/metrics/)
   --dry-run              Use deterministic local scoring, no LLM calls
   --incomplete-run-action ask | resume | restart | abort (default: ask)
 ```
