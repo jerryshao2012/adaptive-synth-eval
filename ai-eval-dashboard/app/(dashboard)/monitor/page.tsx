@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -15,7 +15,6 @@ import type {
   TimePeriodPreset,
   MetricPointIdentity,
   FailureGroup,
-  FailedMetricRanking,
 } from "@/types/evaluation";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS, LATENCY_DESCRIPTIONS, AVAILABILITY_DESCRIPTION } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
@@ -100,6 +99,8 @@ export default function DashboardPage() {
 
   // Eval config (kept for Start/Continue actions)
   const [globalEvalDefaults] = useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
+  const pendingLaunchRef = useRef<string | null>(null);
+  const [pendingLaunchKey, setPendingLaunchKey] = useState<string | null>(null);
 
   // ---- Data fetching ----
   const {
@@ -154,38 +155,50 @@ export default function DashboardPage() {
     );
 
   // ---- Actions ----
-  const handleStartRun = useCallback(
-    async (runId: string) => {
+  const runMonitoringAction = useCallback(
+    async (runId: string, action: "start" | "continue") => {
+      const launchKey = `${action}:${runId}`;
+      if (pendingLaunchRef.current === launchKey) {
+        return;
+      }
+
+      pendingLaunchRef.current = launchKey;
+      setPendingLaunchKey(launchKey);
+
       try {
         await startMonitoring.mutateAsync({
           runId,
-          action: "start",
+          action,
           sampleSize: globalEvalDefaults.sampleSize,
           intervalMinutes: globalEvalDefaults.intervalMinutes,
         });
         await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
       } catch {
         // Error handled by mutation state
+      } finally {
+        if (pendingLaunchRef.current === launchKey) {
+          pendingLaunchRef.current = null;
+        }
+        setPendingLaunchKey((current) =>
+          current === launchKey ? null : current
+        );
       }
     },
     [startMonitoring, globalEvalDefaults, refetchRuns, refetchMonitoringStatus]
   );
 
+  const handleStartRun = useCallback(
+    async (runId: string) => {
+      await runMonitoringAction(runId, "start");
+    },
+    [runMonitoringAction]
+  );
+
   const handleContinueRun = useCallback(
     async (runId: string) => {
-      try {
-        await startMonitoring.mutateAsync({
-          runId,
-          action: "continue",
-          sampleSize: globalEvalDefaults.sampleSize,
-          intervalMinutes: globalEvalDefaults.intervalMinutes,
-        });
-        await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
-      } catch {
-        // Error handled by mutation state
-      }
+      await runMonitoringAction(runId, "continue");
     },
-    [startMonitoring, globalEvalDefaults, refetchRuns, refetchMonitoringStatus]
+    [runMonitoringAction]
   );
 
   function refreshAll() {
@@ -494,7 +507,7 @@ export default function DashboardPage() {
               onSelectRun={setSelectedRunId}
               onStartRun={handleStartRun}
               onContinueRun={handleContinueRun}
-              isStarting={startMonitoring.isPending}
+              isStarting={startMonitoring.isPending || pendingLaunchKey !== null}
               onRefresh={refreshAll}
             />
           )}

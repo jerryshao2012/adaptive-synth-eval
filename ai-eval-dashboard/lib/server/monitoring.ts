@@ -16,6 +16,8 @@ import type {
 const REPO_ROOT = path.resolve(process.cwd(), "..");
 const RUNS_DIR = path.join(REPO_ROOT, "outputs", "runs");
 const DEFAULT_LIMIT = 2000;
+const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
+const MONITORING_LAUNCH_LOCK_TTL_MS = 30000;
 
 function runDirPath(runId: string): string {
   return path.join(RUNS_DIR, runId);
@@ -36,6 +38,72 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
     return JSON.parse(content) as T;
   } catch {
     return null;
+  }
+}
+
+function monitoringLaunchLockPath(runDir: string): string {
+  return path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+}
+
+async function removeLaunchLock(runDir: string): Promise<void> {
+  try {
+    await fs.unlink(monitoringLaunchLockPath(runDir));
+  } catch {
+    // Ignore missing or concurrently-removed locks.
+  }
+}
+
+async function isLaunchLockActive(runDir: string): Promise<boolean> {
+  const lock = await readJsonFile<{ expiresAt?: number }>(
+    monitoringLaunchLockPath(runDir)
+  );
+  if (!lock) {
+    return false;
+  }
+
+  if (typeof lock.expiresAt === "number" && lock.expiresAt > Date.now()) {
+    return true;
+  }
+
+  await removeLaunchLock(runDir);
+  return false;
+}
+
+async function acquireLaunchLock(
+  runDir: string,
+  payload: Record<string, unknown>
+): Promise<boolean> {
+  const lockPath = monitoringLaunchLockPath(runDir);
+
+  try {
+    await fs.writeFile(lockPath, JSON.stringify(payload, null, 2), {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+  }
+
+  if (await isLaunchLockActive(runDir)) {
+    return false;
+  }
+
+  await removeLaunchLock(runDir);
+
+  try {
+    await fs.writeFile(lockPath, JSON.stringify(payload, null, 2), {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -66,13 +134,23 @@ export async function readJsonLines<T>(filePath: string): Promise<T[]> {
   }
 }
 
-function statusLabel(stateStatus: string | undefined, hasScores: boolean): RunSummary["monitoringStatus"] {
+function statusLabel(
+  stateStatus: string | undefined,
+  hasScores: boolean,
+  hasLaunchLock = false
+): RunSummary["monitoringStatus"] {
   const normalized = (stateStatus || "").toLowerCase();
   if (normalized === "completed") {
     return "completed";
   }
+  if (normalized === "queued") {
+    return "queued";
+  }
   if (normalized === "in_progress") {
     return "in_progress";
+  }
+  if (hasLaunchLock) {
+    return "queued";
   }
   if (hasScores) {
     return "in_progress";
@@ -123,6 +201,9 @@ export async function listRunSummaries(): Promise<RunSummary[]> {
           path.join(runDir, "run_summary.json")
         );
         const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
+        const hasLaunchLock = await isLaunchLockActive(runDir);
+        const monitoringStateStatus =
+          typeof monitoringState?.status === "string" ? monitoringState.status.toLowerCase() : "";
 
         const progressCompleted = safeNumber(
           monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
@@ -134,7 +215,8 @@ export async function listRunSummaries(): Promise<RunSummary[]> {
           mode: String(runSummary?.mode || runState?.mode || "unknown"),
           monitoringStatus: statusLabel(
             typeof monitoringState?.status === "string" ? monitoringState.status : undefined,
-            hasScores
+            hasScores,
+            hasLaunchLock
           ),
           startedAt: String(
             monitoringState?.started_at || runState?.started_at || runSummary?.started_at || ""
@@ -153,10 +235,12 @@ export async function listRunSummaries(): Promise<RunSummary[]> {
             : undefined,
           hasMonitoringState: Boolean(monitoringState),
           hasMonitoringScores: hasScores,
-          canStart: !monitoringState,
+          canStart: !monitoringState && !hasLaunchLock,
           canContinue:
             Boolean(monitoringState) &&
-            String(monitoringState?.status || "").toLowerCase() !== "completed",
+            monitoringStateStatus !== "completed" &&
+            monitoringStateStatus !== "in_progress" &&
+            !hasLaunchLock,
         };
 
         return summary;
@@ -178,6 +262,7 @@ export async function getMonitoringStatus(runId: string): Promise<MonitoringRunS
   );
   const progressMarkdown = await readTextFile(path.join(runDir, "eval_progress.md"));
   const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
+  const hasLaunchLock = await isLaunchLockActive(runDir);
 
   const completed = safeNumber(
     monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
@@ -188,7 +273,8 @@ export async function getMonitoringStatus(runId: string): Promise<MonitoringRunS
     runId,
     monitoringStatus: statusLabel(
       typeof monitoringState?.status === "string" ? monitoringState.status : undefined,
-      hasScores
+      hasScores,
+      hasLaunchLock
     ),
     progress: {
       completed,
@@ -362,13 +448,49 @@ export async function startMonitoringRun(
     incompleteAction,
   ].join(" ");
 
-  const child = spawn(command, [], {
-    cwd: REPO_ROOT,
-    detached: true,
-    stdio: "ignore",
-    shell: true,
+  const monitoringState = await readJsonFile<Record<string, unknown>>(
+    path.join(runFolder, "monitoring_state.json")
+  );
+  const normalizedStateStatus =
+    typeof monitoringState?.status === "string" ? monitoringState.status.toLowerCase() : "";
+
+  if (normalizedStateStatus === "in_progress") {
+    return {
+      runId,
+      started: false,
+      command,
+      monitoringStatus: "in_progress",
+    };
+  }
+
+  const lockAcquired = await acquireLaunchLock(runFolder, {
+    runId,
+    action: request.action,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + MONITORING_LAUNCH_LOCK_TTL_MS,
   });
-  child.unref();
+
+  if (!lockAcquired) {
+    return {
+      runId,
+      started: false,
+      command,
+      monitoringStatus: normalizedStateStatus === "in_progress" ? "in_progress" : "queued",
+    };
+  }
+
+  try {
+    const child = spawn(command, [], {
+      cwd: REPO_ROOT,
+      detached: true,
+      stdio: "ignore",
+      shell: true,
+    });
+    child.unref();
+  } catch (error) {
+    await removeLaunchLock(runFolder);
+    throw error;
+  }
 
   return {
     runId,

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import {
   CheckCircle2,
   AlertTriangle,
-  XCircle,
   Clock,
   Hash,
   RefreshCw,
@@ -19,30 +18,6 @@ import type { RunSummary, MonitoringRunStatus, ArtifactValidation } from "@/type
 import { cn } from "@/lib/utils";
 
 // ---- Verdict color and icon maps ----
-
-const VERDICT_CONFIG: Record<
-  string,
-  { icon: typeof CheckCircle2; color: string; bgColor: string; borderColor: string }
-> = {
-  healthy: {
-    icon: CheckCircle2,
-    color: "text-emerald-500",
-    bgColor: "bg-emerald-500/10",
-    borderColor: "border-emerald-500/30",
-  },
-  needs_review: {
-    icon: AlertTriangle,
-    color: "text-amber-500",
-    bgColor: "bg-amber-500/10",
-    borderColor: "border-amber-500/30",
-  },
-  failed: {
-    icon: XCircle,
-    color: "text-red-500",
-    bgColor: "bg-red-500/10",
-    borderColor: "border-red-500/30",
-  },
-};
 
 function formatElapsed(ms: number): string {
   const hours = Math.floor(ms / 3600000);
@@ -89,6 +64,8 @@ export function RunSelectorHeader({
   const startedAt = (monitoringStatus?.state?.started_at as string) || selectedRun?.startedAt;
 
   const isRunning = status === "in_progress";
+  const isQueued = status === "queued";
+  const isActionDisabled = isStarting || isRunning || isQueued;
 
   useEffect(() => {
     if (!isRunning) return;
@@ -150,6 +127,7 @@ export function RunSelectorHeader({
                 <select
                   value={selectedRun.runId}
                   onChange={(e) => onSelectRun(e.target.value)}
+                  aria-label="Select evaluation run"
                   className="appearance-none h-9 rounded-lg border border-border bg-background px-3 pr-8 text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 cursor-pointer"
                 >
                   {runs.map((run) => (
@@ -257,7 +235,7 @@ export function RunSelectorHeader({
               <Button
                 size="sm"
                 onClick={() => onStartRun(selectedRun.runId)}
-                disabled={isStarting}
+                disabled={isActionDisabled}
               >
                 {isStarting ? (
                   <RefreshCw className="h-4 w-4 animate-spin" />
@@ -273,7 +251,7 @@ export function RunSelectorHeader({
                 size="sm"
                 variant="outline"
                 onClick={() => onContinueRun(selectedRun.runId)}
-                disabled={isStarting}
+                disabled={isActionDisabled}
               >
                 <RotateCcw className="h-4 w-4" />
                 <span className="ml-1.5">Continue</span>
