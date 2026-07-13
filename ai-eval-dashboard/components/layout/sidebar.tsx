@@ -54,7 +54,7 @@ export function Sidebar({ mobileOpen, onMobileClose, desktopCollapsed }: Sidebar
           </div>
           {isWide && (
             <span className="text-sm font-semibold text-sidebar-foreground truncate hidden lg:inline">
-              AI Eval Platform
+              My Eval Dashboard
             </span>
           )}
         </div>
