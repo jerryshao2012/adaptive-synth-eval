@@ -55,21 +55,29 @@ export async function createDataset(
   const id = randomUUID();
   const now = new Date().toISOString();
 
-  // Resolve record refs from filters
+  // Resolve record refs from approved human reviews only.
   const recordRefs: GoldenDataset["recordRefs"] = [];
+  const seen = new Set<string>();
 
   if (input.filters.runIds && input.filters.runIds.length > 0) {
     for (const runId of input.filters.runIds) {
-      const evalResp = await getMonitoringEvaluations(runId);
-      if (!evalResp) continue;
+      const reviews = await getHumanReviews(runId);
+      for (const review of reviews) {
+        if (review.reviewStatus !== "approved") {
+          continue;
+        }
 
-      for (const record of evalResp.evaluations) {
-        const ref = {
+        const key = `${runId}::${review.conversationId}::${review.turnId}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+
+        recordRefs.push({
           runId,
-          conversationId: record.conversation_id || "",
-          turnId: String(record.turn_id),
-        };
-        recordRefs.push(ref);
+          conversationId: review.conversationId,
+          turnId: review.turnId,
+        });
       }
     }
   }
@@ -83,7 +91,7 @@ export async function createDataset(
     filters: input.filters,
     stats: {
       totalRecords: recordRefs.length,
-      reviewedCount: 0,
+      reviewedCount: recordRefs.length,
       interRaterAgreement: 100,
     },
     createdAt: now,

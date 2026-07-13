@@ -43,8 +43,8 @@ export function CreateDatasetDialog({
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
             A golden dataset collects reviewed evaluation records for model
-            benchmarking and fine-tuning. Records are selected from completed
-            review runs.
+            benchmarking and fine-tuning. Records are selected from approved
+            review queue rows.
           </DialogDescription>
         </DialogHeader>
 
