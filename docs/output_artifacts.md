@@ -25,6 +25,17 @@ outputs/runs/<run_id>/
 
 `run_state.json` tracks in-progress status, completed conversation IDs, rolling metrics, and final completion status. It is used by `ase run --incomplete-run-action ...` to resume or restart interrupted runs safely.
 
+### Monitoring score version metadata
+
+Monitoring rows in `monitoring_scores.jsonl` include `value_versions`. Its
+`metrics` map stores content and policy fingerprints per metric;
+`metric_groups` records each metric's evaluation group; and
+`group_refresh_quality` records `llm`, `heuristic_fallback`, or `dry_run`.
+The composite evaluation fingerprint remains an audit summary. Cache reuse is
+determined per row and per metric group, so a material change refreshes only
+the affected group. A group recorded as `heuristic_fallback` is retried on the
+next monitoring run.
+
 ---
 
 ## Chat History Schema

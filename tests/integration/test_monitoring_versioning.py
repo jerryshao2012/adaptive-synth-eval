@@ -222,8 +222,6 @@ def test_content_fingerprint_changes_with_prompt():
         prompt_template="A totally different evaluation prompt.",
         eval_input_key=tox.eval_input_key,
         invert_llm_score=tox.invert_llm_score,
-        warn_below=tox.warn_below,
-        fail_below=tox.fail_below,
         heuristic=tox.heuristic,
     )
 

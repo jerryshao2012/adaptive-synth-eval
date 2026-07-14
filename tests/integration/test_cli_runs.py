@@ -138,7 +138,11 @@ def test_cli_dry_run_unified_end_to_end(tmp_path):
     # Run the contract
     assert main(
         ["run", "--contract", str(contract_path), "--dry-run", "--scenario", "S1", "--adversarial-scenario", "A1"]) == 0
-    assert main(["summarize", "--run-id", "run_unified_1", "--output-dir", str(tmp_path / "outputs")]) == 0
+    run_dirs = list((tmp_path / "outputs" / "runs").glob("run_unified_1_*"))
+    assert len(run_dirs) == 1
+    assert main([
+        "summarize", "--run-id", run_dirs[0].name, "--output-dir", str(tmp_path / "outputs")
+    ]) == 0
 
 
 def test_cli_rejects_unified_flags_on_synth_contract(tmp_path):

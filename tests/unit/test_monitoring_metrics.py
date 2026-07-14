@@ -211,8 +211,6 @@ def test_content_fingerprint_is_deterministic():
         prompt_template="Score 0.0 if safe, 1.0 if toxic.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=_SAMPLE_HEURISTIC,
     )
     fp2 = compute_metric_content_fingerprint(
@@ -220,8 +218,6 @@ def test_content_fingerprint_is_deterministic():
         prompt_template="Score 0.0 if safe, 1.0 if toxic.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=_SAMPLE_HEURISTIC,
     )
     assert fp1 == fp2
@@ -235,8 +231,6 @@ def test_content_fingerprint_changes_with_prompt():
         prompt_template="Score 0.0 if safe, 1.0 if toxic.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=_SAMPLE_HEURISTIC,
     )
     fp1 = compute_metric_content_fingerprint(**base)
@@ -246,20 +240,43 @@ def test_content_fingerprint_changes_with_prompt():
     assert fp1 != fp2
 
 
-def test_content_fingerprint_changes_with_thresholds():
-    """Changing thresholds changes the content fingerprint."""
+def test_content_fingerprint_ignores_yaml_presentation_whitespace():
+    """Line endings, block indentation, outer blanks, and trailing space are cosmetic."""
     base = dict(
+        metric_key="toxicity",
+        eval_input_key="toxicity",
+        invert_llm_score=True,
+        heuristic=None,
+    )
+    compact = compute_metric_content_fingerprint(
+        **{**base, "prompt_template": "Evaluate the response.\nReturn JSON."}
+    )
+    formatted = compute_metric_content_fingerprint(
+        **{
+            **base,
+            "prompt_template": "\r\n    Evaluate the response.  \r\n    Return JSON.\t\r\n\r\n",
+        }
+    )
+    assert formatted == compact
+
+
+def test_thresholds_change_policy_but_not_content_fingerprint():
+    """Thresholds classify scores but do not change how the evaluator scores."""
+    content = dict(
         metric_key="toxicity",
         prompt_template="Score 0.0 if safe.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=None,
     )
-    fp1 = compute_metric_content_fingerprint(**base)
-    fp2 = compute_metric_content_fingerprint(**{**base, "fail_below": 50.0})
-    assert fp1 != fp2
+    fp1 = compute_metric_content_fingerprint(**content)
+    fp2 = compute_metric_content_fingerprint(**content)
+    assert fp1 == fp2
+    assert compute_policy_fingerprint(
+        metric_key="toxicity", warn_below=85.0, fail_below=65.0
+    ) != compute_policy_fingerprint(
+        metric_key="toxicity", warn_below=85.0, fail_below=50.0
+    )
 
 
 def test_content_fingerprint_changes_with_invert():
@@ -269,8 +286,6 @@ def test_content_fingerprint_changes_with_invert():
         prompt_template="Score 0.0 if safe.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=None,
     )
     fp1 = compute_metric_content_fingerprint(**base)
@@ -285,8 +300,6 @@ def test_content_fingerprint_changes_with_heuristic():
         prompt_template="Score 0.0 if safe.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=_SAMPLE_HEURISTIC,
     )
     fp1 = compute_metric_content_fingerprint(**base)
@@ -302,8 +315,6 @@ def test_content_fingerprint_changes_with_metric_key():
         prompt_template="Score it.",
         eval_input_key="toxicity",
         invert_llm_score=True,
-        warn_below=85.0,
-        fail_below=65.0,
         heuristic=None,
     )
     fp1 = compute_metric_content_fingerprint(**{**base, "metric_key": "toxicity"})

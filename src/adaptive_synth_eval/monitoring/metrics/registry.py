@@ -51,8 +51,6 @@ class MetricRegistry:
                 prompt_template=prompt_template,
                 eval_input_key=eval_input_key,
                 invert_llm_score=invert_llm_score,
-                warn_below=warn_below,
-                fail_below=fail_below,
                 heuristic=h_rule,
             )
 

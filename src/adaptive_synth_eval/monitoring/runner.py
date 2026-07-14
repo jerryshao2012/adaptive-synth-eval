@@ -34,6 +34,70 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _current_model_identity(llm: LLMClient, *, dry_run: bool) -> dict[str, str]:
+    if dry_run:
+        return {"provider": "dry_run", "identifier": "dry_run"}
+    return {
+        "provider": llm.model_provider or "none",
+        "identifier": resolve_model_identifier(llm),
+    }
+
+
+def _current_metric_groups(metrics_config: MetricsConfig) -> dict[str, str]:
+    return {
+        key: metric.evaluation_group
+        for key, metric in metrics_config.metrics.items()
+    }
+
+
+def _stale_groups_for_row(
+        row: dict[str, Any],
+        metrics_config: MetricsConfig,
+        model_identity: dict[str, str],
+) -> set[str]:
+    """Return groups whose cached metric values cannot be safely reused."""
+    current_groups = _current_metric_groups(metrics_config)
+    all_groups = set(metrics_config.evaluation_groups)
+    versions = row.get("value_versions")
+    if not isinstance(versions, dict):
+        return all_groups
+
+    saved_metrics = versions.get("metrics")
+    saved_groups = versions.get("metric_groups")
+    saved_quality = versions.get("group_refresh_quality")
+    saved_model = versions.get("resolved_model")
+    if not all(isinstance(value, dict) for value in (
+        saved_metrics, saved_groups, saved_quality, saved_model,
+    )):
+        return all_groups
+    if saved_model != model_identity:
+        return all_groups
+
+    stale: set[str] = {
+        group for group, quality in saved_quality.items()
+        if quality == "heuristic_fallback" and group in all_groups
+    }
+    all_metric_keys = set(current_groups) | set(saved_groups) | set(saved_metrics)
+    for key in all_metric_keys:
+        current_group = current_groups.get(key)
+        saved_group = saved_groups.get(key)
+        if current_group != saved_group:
+            if isinstance(current_group, str):
+                stale.add(current_group)
+            if isinstance(saved_group, str):
+                stale.add(saved_group)
+            continue
+        if current_group is None:
+            continue
+        saved_metric = saved_metrics.get(key)
+        if not isinstance(saved_metric, dict):
+            stale.add(current_group)
+            continue
+        if saved_metric.get("content_fingerprint") != metrics_config.metric_content_fingerprints.get(key):
+            stale.add(current_group)
+    return stale
+
+
 def _get_row_timestamp(row: dict[str, Any], index: int) -> datetime:
     # Try parsing "timestamp"
     ts_val = row.get("timestamp")
@@ -204,21 +268,16 @@ def run_monitoring(
     # Load existing scores into a dict keyed by (conversation_id, turn_id).
     existing_scores = _load_existing_scores(run_dir / _MONITORING_SCORES_FILE)
 
-    # If the evaluation fingerprint changed, all existing scores are stale.
-    if not same_eval_fingerprint:
-        existing_scores.clear()
-
     # If only policy fingerprints changed, recompute statuses from existing scores.
-    if same_eval_fingerprint and not same_policy_fingerprints:
+    if not same_policy_fingerprints:
         existing_scores = _recompute_statuses(existing_scores, metrics_config)
 
-    next_line_index = 0
-    if same_eval_fingerprint:
-        next_line_index = int(state.get("next_line_index") or 0)
+    reconciliation_needed = not same_eval_fingerprint or not same_policy_fingerprints
+    next_line_index = 0 if reconciliation_needed else int(state.get("next_line_index") or 0)
 
-    base_evaluated = int(state.get("evaluated_rows") or 0) if same_eval_fingerprint else 0
-    base_skipped = int(state.get("skipped_rows") or 0) if same_eval_fingerprint else 0
-    base_windows = int(state.get("windows_completed") or 0) if same_eval_fingerprint else 0
+    base_evaluated = int(state.get("evaluated_rows") or 0) if not reconciliation_needed else 0
+    base_skipped = int(state.get("skipped_rows") or 0) if not reconciliation_needed else 0
+    base_windows = int(state.get("windows_completed") or 0) if not reconciliation_needed else 0
 
     windows_processed_this_run = 0
     evaluated_rows_this_run = 0
@@ -266,6 +325,18 @@ def run_monitoring(
 
             turn_key = _turn_key(chat_row)
             if turn_key in existing_scores:
+                stale_groups = _stale_groups_for_row(
+                    existing_scores[turn_key], metrics_config,
+                    _current_model_identity(llm, dry_run=dry_run),
+                )
+                if stale_groups:
+                    existing_scores[turn_key] = _refresh_existing_row(
+                        existing_scores[turn_key], chat_row, llm, dry_run,
+                        metrics_config, stale_groups, evaluation_fingerprint,
+                        policy_fingerprints, now_iso(),
+                    )
+                    evaluated_rows_this_run += 1
+                    continue
                 skipped_rows_this_run += 1
                 continue
 
@@ -398,7 +469,9 @@ def _evaluate_chat_row(
     chat_timestamp = _get_row_timestamp(chat_row, source_line_index)
     chat_timestamp_iso = chat_timestamp.isoformat(timespec="seconds")
 
-    llm_payload = _evaluate_with_llm(user_text, response_text, llm, metrics_config, dry_run=dry_run)
+    llm_payload, group_quality = _evaluate_with_llm(
+        user_text, response_text, llm, metrics_config, dry_run=dry_run
+    )
 
     safety_metrics: dict[str, Any] = {}
     for key in metrics_config.metric_keys_by_group.get("safety", []):
@@ -442,8 +515,7 @@ def _evaluate_chat_row(
             "evaluation_group": "default",
             "generated_at": started_at,
             "resolved_model": {
-                "provider": llm.model_provider or "dry_run",
-                "deployment": resolve_model_identifier(llm),
+                **_current_model_identity(llm, dry_run=dry_run),
             },
             "prompt_hash": compute_evaluation_fingerprint(
                 metric_content_fingerprints=metrics_config.metric_content_fingerprints,
@@ -457,6 +529,8 @@ def _evaluate_chat_row(
                 }
                 for key, fp in policy_fingerprints.items()
             },
+            "metric_groups": _current_metric_groups(metrics_config),
+            "group_refresh_quality": group_quality,
         },
         "sample_window_id": sample_window_id,
         "source_line_index": source_line_index,
@@ -485,6 +559,51 @@ def _build_group_prompt(group_name: str, metrics: list[MetricDefinition], user_t
         "JSON response:"
     ])
     return "\n".join(prompt_lines)
+
+
+def _refresh_existing_row(
+        row: dict[str, Any], chat_row: dict[str, Any], llm: LLMClient, dry_run: bool,
+        metrics_config: MetricsConfig, stale_groups: set[str], evaluation_fingerprint: str,
+        policy_fingerprints: dict[str, str], started_at: str,
+) -> dict[str, Any]:
+    """Refresh only stale groups and retain valid cached values from other groups."""
+    refreshed = dict(row)
+    user_text = str(chat_row.get("user_message") or refreshed.get("user_text") or "")
+    response_text = str(chat_row.get("bot_response") or refreshed.get("response_text") or "")
+    scores, quality = _evaluate_with_llm(
+        user_text, response_text, llm, metrics_config, dry_run=dry_run, groups=stale_groups
+    )
+    for group in stale_groups:
+        section = f"{group}_metrics"
+        refreshed[section] = {
+            key: _metric_value(metrics_config.metrics[key], scores[key])
+            for key in metrics_config.metric_keys_by_group.get(group, [])
+            if key in scores
+        }
+    _recompute_statuses({("", ""): refreshed}, metrics_config)
+    prior_versions = refreshed.get("value_versions") if isinstance(refreshed.get("value_versions"), dict) else {}
+    prior_quality = prior_versions.get("group_refresh_quality", {}) if isinstance(prior_versions, dict) else {}
+    group_quality = {
+        group: quality.get(group, prior_quality.get(group, "dry_run"))
+        for group in metrics_config.evaluation_groups
+    }
+    refreshed["value_versions"] = {
+        "evaluation_fingerprint": evaluation_fingerprint,
+        "evaluation_group": "default",
+        "generated_at": started_at,
+        "resolved_model": _current_model_identity(llm, dry_run=dry_run),
+        "prompt_hash": evaluation_fingerprint,
+        "metrics": {
+            key: {
+                "content_fingerprint": metrics_config.metric_content_fingerprints.get(key, ""),
+                "policy_fingerprint": policy_fingerprints.get(key, ""),
+            }
+            for key in metrics_config.metrics
+        },
+        "metric_groups": _current_metric_groups(metrics_config),
+        "group_refresh_quality": group_quality,
+    }
+    return refreshed
 
 
 def _compute_heuristic_value(mdef: MetricDefinition, user_text: str, response_text: str) -> float:
@@ -542,15 +661,27 @@ def _evaluate_with_llm(
         metrics_config: MetricsConfig,
         *,
         dry_run: bool,
-) -> dict[str, float]:
+        groups: set[str] | None = None,
+) -> tuple[dict[str, float], dict[str, str]]:
+    selected_groups = groups if groups is not None else set(metrics_config.evaluation_groups)
     heuristic = _heuristic_metrics(user_text, response_text, metrics_config)
+    selected_keys = {
+        key for group in selected_groups
+        for key in metrics_config.metric_keys_by_group.get(group, [])
+    }
     if dry_run:
-        return heuristic
+        return (
+            {key: heuristic[key] for key in selected_keys},
+            {group: "dry_run" for group in selected_groups},
+        )
 
-    merged = dict(heuristic)
+    merged = {key: heuristic[key] for key in selected_keys}
+    quality: dict[str, str] = {}
 
     # Batch by evaluation group (e.g. safety, performance)
     for group_name, keys in metrics_config.metric_keys_by_group.items():
+        if group_name not in selected_groups:
+            continue
         group_metrics = [metrics_config.metrics[k] for k in keys]
         if not group_metrics:
             continue
@@ -564,6 +695,7 @@ def _evaluate_with_llm(
                 "falling back to heuristic scores.",
                 group_name, result.error,
             )
+            quality[group_name] = "heuristic_fallback"
             continue
 
         parsed = _extract_json_object(result.content)
@@ -574,6 +706,7 @@ def _evaluate_with_llm(
                 "falling back to heuristic scores.",
                 group_name,
             )
+            quality[group_name] = "heuristic_fallback"
             continue
 
         for mdef in group_metrics:
@@ -587,8 +720,9 @@ def _evaluate_with_llm(
                     except (TypeError, ValueError):
                         pass
                 merged[mdef.key] = _bounded_float(val, merged[mdef.key])
+        quality[group_name] = "llm"
 
-    return merged
+    return merged, quality
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:

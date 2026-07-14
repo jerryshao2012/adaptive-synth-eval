@@ -30,15 +30,14 @@ def compute_metric_content_fingerprint(
         prompt_template: str,
         eval_input_key: str,
         invert_llm_score: bool,
-        warn_below: float,
-        fail_below: float,
         heuristic: dict[str, Any] | None,
 ) -> str:
     """Compute a stable content fingerprint for a single metric.
 
-    Covers everything that affects the LLM's evaluation output for this metric:
-    the prompt text, the scoring inversion flag, the threshold values, and the
-    heuristic fallback rules.
+    Covers everything that affects the evaluator's score for this metric: the
+    canonicalized prompt text, scoring inversion flag, output key, and
+    heuristic fallback rules. Thresholds are deliberately excluded because
+    they classify an existing score rather than change its value.
 
     Changing any of these produces a different fingerprint, signalling that this
     metric needs LLM re-evaluation.
@@ -48,8 +47,6 @@ def compute_metric_content_fingerprint(
         prompt_template: The per-metric prompt template sent to the LLM.
         eval_input_key: The JSON key the LLM returns for this metric.
         invert_llm_score: Whether the LLM score is inverted (1.0 - raw).
-        warn_below: Score percentage below which status is "warn".
-        fail_below: Score percentage below which status is "fail".
         heuristic: Optional heuristic fallback configuration dict.
 
     Returns:
@@ -62,15 +59,29 @@ def compute_metric_content_fingerprint(
 
     payload: dict[str, Any] = {
         "metric_key": metric_key,
-        "prompt_template": prompt_template,
+        "prompt_template": canonicalize_prompt_template(prompt_template),
         "eval_input_key": eval_input_key,
         "invert_llm_score": invert_llm_score,
-        "warn_below": warn_below,
-        "fail_below": fail_below,
         "heuristic": canonical_heuristic,
     }
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def canonicalize_prompt_template(prompt_template: str) -> str:
+    """Normalize source-formatting differences without changing prompt meaning."""
+    lines = prompt_template.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = [line.rstrip() for line in lines]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    nonblank = [line for line in lines if line]
+    indent = min(
+        (len(line) - len(line.lstrip(" \t")) for line in nonblank),
+        default=0,
+    )
+    return "\n".join(line[indent:] if line else "" for line in lines)
 
 
 def compute_evaluation_fingerprint(
