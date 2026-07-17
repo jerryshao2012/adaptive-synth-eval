@@ -4,24 +4,36 @@ All simulation outputs and evaluation summaries are written to the target output
 
 ## Directory Structure
 
-A completed simulation run produces the following artifacts:
+A completed simulation run writes artifacts under the run folder. Some files are common to all runs, while others are mode- or feature-specific.
 
 ```text
 outputs/runs/<run_id>/
-├── chat_history.jsonl          # Standard simulation turns list (JSON Lines)
-├── chat_history.csv            # Standard simulation turns list (CSV)
-├── conversations.jsonl         # Conversation-level metadata and counts
-├── turns.jsonl                 # Interleaved synthetic & adversarial turns
-├── scores.jsonl                # Individual turn scoring metrics
-├── adversarial_sessions.jsonl  # Detail of adversarial planner states and strategies
-├── failed_examples.jsonl       # turns exceeding adversarial failure threshold
-├── attack_memory.json          # Shared red-teaming attack memory database
-├── run_summary.json            # Overall execution statistics & component-level costs
-├── run_state.json              # Checkpoint/progress state for interruption recovery
-├── run_plan.json               # Seed and parameters generated for the run
-├── generation_report.md        # Formatted markdown summary report
-└── conversations.txt           # (Optional) Formatted speaker-labeled transcripts
+├── contract.normalized.json    # Resolved contract snapshot used for the run
+├── run_plan.json               # Planned conversation list/inputs for this run
+├── run_state.json              # In-progress/completed checkpoint and metrics
+├── run_summary.json            # Final summary payload
+├── generation_report.md        # Human-readable markdown report
+├── chat_history.jsonl          # Per-turn canonical chat history (JSONL)
+├── chat_history.csv            # Per-turn canonical chat history (CSV)
+├── conversations.jsonl         # Per-conversation rows
+├── turns.jsonl                 # Per-turn unified/synth turn rows
+├── scores.jsonl                # Per-turn score rows
+├── conversations.txt           # Optional transcript view (--output-conversations)
+├── run.log                     # Unified mode run log (trajectory + orchestrator logs)
+├── failed_examples.jsonl       # Unified mode: failed adversarial examples
+├── adversarial_sessions.jsonl  # Unified mode: adversarial session records
+├── attack_memory.json          # Unified mode: shared attack memory snapshot (when enabled)
+├── monitoring_scores.jsonl     # Monitoring output (ase monitor run)
+├── monitoring_state.json       # Monitoring resume/checkpoint state
+├── eval_progress.md            # Monitoring progress/status markdown
+└── personas/
+	└── <persona_id>_memory.md  # Unified mode persona memory files
 ```
+
+Notes:
+- `synth` mode produces the common simulation artifacts and omits unified-only files.
+- `unified` mode produces common artifacts plus unified-specific files listed above.
+- Monitoring artifacts (`monitoring_*` and `eval_progress.md`) are created only when running `ase monitor run` against the run folder.
 
 `run_state.json` tracks in-progress status, completed conversation IDs, rolling metrics, and final completion status. It is used by `ase run --incomplete-run-action ...` to resume or restart interrupted runs safely.
 
