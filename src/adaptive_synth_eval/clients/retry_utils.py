@@ -92,6 +92,7 @@ def is_transient_error(error: Exception) -> bool:
                     requests.exceptions.ConnectTimeout,
                     requests.exceptions.Timeout,
                     requests.exceptions.ConnectionError,
+                    httpx.RemoteProtocolError,
                     httpx.ReadTimeout,
                     httpx.ConnectTimeout,
                     httpx.TimeoutException,
@@ -109,6 +110,8 @@ def is_transient_error(error: Exception) -> bool:
     transient_indicators = [
         "timed out",
         "timeout",
+        "peer closed connection",
+        "incomplete message body",
         "connection reset",
         "connection aborted",
         "temporary failure",

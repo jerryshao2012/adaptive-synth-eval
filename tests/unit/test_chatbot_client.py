@@ -3,6 +3,7 @@ import os
 import uuid
 from unittest.mock import patch, Mock
 
+import httpx
 import requests
 
 from adaptive_synth_eval.clients.agentcore_chatbot import AgentCoreChatbotClient
@@ -353,3 +354,10 @@ def test_retry_on_transient_retries_timeout_once_then_succeeds():
 def test_is_transient_error_does_not_retry_content_filter():
     error = RuntimeError("blocked by content filter policy")
     assert is_transient_error(error) is False
+
+
+def test_is_transient_error_retries_remote_protocol_disconnects():
+    error = httpx.RemoteProtocolError(
+        "peer closed connection without sending complete message body (received 0 bytes, expected 34276)"
+    )
+    assert is_transient_error(error) is True
