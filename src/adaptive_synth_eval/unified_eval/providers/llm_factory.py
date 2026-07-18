@@ -59,6 +59,14 @@ class ProvidedLLM:
     synth_chat: SynthChatFn  # ASE side (used by UserSimulator)
 
 
+def _disabled_are_interface(*, system: str, user: str) -> dict:
+    raise RuntimeError("ARE interface was not built for this component")
+
+
+def _disabled_synth_interface(prompt: str) -> str:
+    raise RuntimeError("synth interface was not built for this component")
+
+
 def build_llm(
         spec: LLMSpec,
         *,
@@ -66,29 +74,39 @@ def build_llm(
         retry_initial_backoff: float = 1.0,
         retry_max_backoff: float = 30.0,
         component_label: str = "llm",
+        need_are: bool = True,
+        need_synth: bool = True,
 ) -> ProvidedLLM:
     """Build both ARE and ASE adapters for a single spec."""
     provider = spec.provider.lower()
 
     if provider == "mock":
         # Mock: deterministic, no API key, no network. Both sides share one rng-seeded backend.
-        call_fn = make_mock_backend()
-        synth_chat = _make_mock_synth_chat()
+        call_fn = make_mock_backend() if need_are else _disabled_are_interface
+        synth_chat = _make_mock_synth_chat() if need_synth else _disabled_synth_interface
 
     elif provider == "claude":
         model = spec.model or "claude-haiku-4-5-20251001"
         api_key = _resolve_api_key(spec.api_key_env or "ANTHROPIC_API_KEY")
-        call_fn = make_claude_backend(model=model, api_key=api_key, max_tokens=spec.max_tokens)
-        synth_chat = _make_langchain_synth_chat(
-            "anthropic", model, spec.temperature, api_key=api_key,
+        call_fn = (
+            make_claude_backend(model=model, api_key=api_key, max_tokens=spec.max_tokens)
+            if need_are else _disabled_are_interface
+        )
+        synth_chat = (
+            _make_langchain_synth_chat("anthropic", model, spec.temperature, api_key=api_key)
+            if need_synth else _disabled_synth_interface
         )
 
     elif provider == "openai":
         model = spec.model or "gpt-4o-mini"
         api_key = _resolve_api_key(spec.api_key_env or "OPENAI_API_KEY")
-        call_fn = make_openai_backend(model=model, api_key=api_key, max_tokens=spec.max_tokens)
-        synth_chat = _make_langchain_synth_chat(
-            "openai", model, spec.temperature, api_key=api_key,
+        call_fn = (
+            make_openai_backend(model=model, api_key=api_key, max_tokens=spec.max_tokens)
+            if need_are else _disabled_are_interface
+        )
+        synth_chat = (
+            _make_langchain_synth_chat("openai", model, spec.temperature, api_key=api_key)
+            if need_synth else _disabled_synth_interface
         )
 
     elif provider == "azure-openai":
@@ -98,37 +116,52 @@ def build_llm(
         endpoint = spec.azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
         api_version = spec.azure_api_version or os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01")
         api_key = _resolve_api_key(spec.api_key_env or "AZURE_OPENAI_API_KEY")
-        call_fn = make_azure_openai_backend(
-            deployment=deployment,
-            api_version=api_version,
-            endpoint=endpoint,
-            api_key=api_key,
-            max_tokens=spec.max_tokens,
+        call_fn = (
+            make_azure_openai_backend(
+                deployment=deployment,
+                api_version=api_version,
+                endpoint=endpoint,
+                api_key=api_key,
+                max_tokens=spec.max_tokens,
+            )
+            if need_are else _disabled_are_interface
         )
-        synth_chat = _make_langchain_synth_chat(
-            "azure_openai", deployment, spec.temperature,
-            api_key=api_key, azure_endpoint=endpoint, azure_api_version=api_version,
+        synth_chat = (
+            _make_langchain_synth_chat(
+                "azure_openai", deployment, spec.temperature,
+                api_key=api_key, azure_endpoint=endpoint, azure_api_version=api_version,
+            )
+            if need_synth else _disabled_synth_interface
         )
 
     elif provider == "bedrock":
         model = spec.model or "anthropic.claude-haiku-4-5-20251001-v1:0"
         region = spec.bedrock_region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        call_fn = make_bedrock_backend(model=model, region=region, max_tokens=spec.max_tokens)
+        call_fn = (
+            make_bedrock_backend(model=model, region=region, max_tokens=spec.max_tokens)
+            if need_are else _disabled_are_interface
+        )
         # Synth (user-simulator) runs natively on Bedrock via the Converse API,
         # which works across Bedrock model providers (Amazon Nova, Moonshot Kimi,
         # Anthropic Claude, ...). No LangChain dependency needed.
-        synth_chat = _make_bedrock_synth_chat(
-            model=model, region=region,
-            temperature=spec.temperature, max_tokens=spec.max_tokens,
+        synth_chat = (
+            _make_bedrock_synth_chat(
+                model=model, region=region,
+                temperature=spec.temperature, max_tokens=spec.max_tokens,
+            )
+            if need_synth else _disabled_synth_interface
         )
 
     elif provider == "ollama":
         # ARE has no native ollama backend; route both to mock with a clear warning.
         # If a user really needs ollama on ARE side, they can add a backend later.
-        call_fn = make_mock_backend()
-        synth_chat = _make_langchain_synth_chat(
-            "ollama", spec.model or "qwen3.6:35b-a3b", spec.temperature,
-            ollama_base_url=spec.ollama_base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+        call_fn = make_mock_backend() if need_are else _disabled_are_interface
+        synth_chat = (
+            _make_langchain_synth_chat(
+                "ollama", spec.model or "qwen3.6:35b-a3b", spec.temperature,
+                ollama_base_url=spec.ollama_base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            )
+            if need_synth else _disabled_synth_interface
         )
 
     else:
@@ -138,7 +171,7 @@ def build_llm(
         )
 
     # Wrap with retry — mock backend is free of transient errors so this is a no-op there.
-    if provider != "mock":
+    if provider != "mock" and need_are:
         call_fn = _with_retry(
             call_fn,
             label=component_label,
@@ -152,6 +185,9 @@ def build_llm(
 
 def build_component_llms(contract) -> dict[str, ProvidedLLM]:
     """Resolve a ProvidedLLM per component, inheriting from contract.llm when absent."""
+    names = ["planner", "generator", "judge", "user_simulator"]
+    if contract.run.session_policy == "llm":
+        names.append("policy")
     return {
         name: build_llm(
             contract.llm_for(name),
@@ -159,8 +195,10 @@ def build_component_llms(contract) -> dict[str, ProvidedLLM]:
             retry_initial_backoff=contract.run.retry_initial_backoff_seconds,
             retry_max_backoff=contract.run.retry_max_backoff_seconds,
             component_label=name,
+            need_are=name != "user_simulator",
+            need_synth=name == "user_simulator",
         )
-        for name in ("planner", "generator", "judge", "policy", "user_simulator")
+        for name in names
     }
 
 

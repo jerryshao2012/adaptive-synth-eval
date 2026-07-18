@@ -4,18 +4,17 @@ writes unified artifacts.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
 import random
 import time
-from dataclasses import asdict
+from collections import deque
 from datetime import datetime, timedelta
 from glob import glob
-from typing import Any, Callable
-
-from collections import deque
 from pathlib import Path
+from typing import Any, Callable
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
@@ -31,12 +30,99 @@ from adaptive_synth_eval.unified_eval.orchestrator.conversation import (
     ConversationResult,
     run_conversation,
 )
+from adaptive_synth_eval.unified_eval.orchestrator.memory_registry import AttackMemoryRegistry
 from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
 from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
 from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
 from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTargetClient
 
 logger = logging.getLogger(__name__)
+
+
+def _secret_safe_payload(value: Any, *, redact: bool = False) -> Any:
+    if redact:
+        if isinstance(value, dict):
+            return {str(key): "<redacted>" for key in value}
+        return "<redacted>"
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            sensitive = (
+                    lowered == "auth"
+                    or "password" in lowered
+                    or "secret" in lowered
+                    or ("token" in lowered and lowered != "max_tokens")
+                    or ("api_key" in lowered and lowered != "api_key_env")
+            )
+            out[str(key)] = _secret_safe_payload(item, redact=sensitive)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_secret_safe_payload(item) for item in value]
+    return value
+
+
+def _fingerprint_payload(payload: Any) -> str:
+    canonical = json.dumps(
+        _secret_safe_payload(payload), sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_resume_fingerprints(
+        state: dict[str, Any], *, contract_fingerprint: str, plan_fingerprint: str
+) -> None:
+    version = int(state.get("version", 1) or 1)
+    if version > 2:
+        raise ContractError(
+            f"Unsupported unified run-state version {version}; supported versions are 1 and 2."
+        )
+    if version == 1:
+        logger.warning(
+            "Resuming legacy run-state v1 without contract/plan fingerprints; "
+            "using best-effort compatibility behavior."
+        )
+        return
+    if state.get("contract_fingerprint") != contract_fingerprint:
+        raise ContractError(
+            "Cannot resume: the effective contract differs from the run-state checkpoint."
+        )
+    if state.get("plan_fingerprint") != plan_fingerprint:
+        raise ContractError(
+            "Cannot resume: the filtered run plan differs from the run-state checkpoint."
+        )
+
+
+async def _run_sliding_window(
+        items: list[Any],
+        *,
+        worker,
+        max_concurrency: int,
+        can_admit,
+) -> None:
+    """Run a bounded task window, rechecking admission after every completion."""
+    iterator = iter(items)
+    pending: set[asyncio.Task] = set()
+    exhausted = False
+    limit = max(1, int(max_concurrency))
+
+    while pending or not exhausted:
+        while len(pending) < limit and not exhausted and can_admit():
+            try:
+                item = next(iterator)
+            except StopIteration:
+                exhausted = True
+                break
+            pending.add(asyncio.create_task(worker(item)))
+
+        if not pending:
+            break
+
+        done, pending = await asyncio.wait(
+            pending, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
+            await task
 
 
 def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory:
@@ -47,11 +133,12 @@ def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory
     for path in paths:
         try:
             loaded = AttackMemory.from_dict(json.loads(Path(path).read_text()), max_entries)
-            memory.entries.extend(loaded.entries)
+            memory.merge(loaded.snapshot())
         except (OSError, ValueError) as exc:
             logger.warning("Skipping attack-memory seed %s: %s", path, exc)
-    memory._evict()
-    logger.info("Seeded attack memory from %d file(s): %d entries", len(paths), len(memory.entries))
+    logger.info(
+        "Seeded attack memory from %d file(s): %d entries", len(paths), len(memory.snapshot())
+    )
     return memory
 
 
@@ -263,12 +350,28 @@ async def run_unified_async(
     llms = build_component_llms(contract)
 
     # Shared resources (built BEFORE target so the meter can hook into the target client).
-    token_budget = TokenBudgetManager(max_total_tokens=contract.run.budget)
-    meter = BudgetMeter(budget=token_budget)
+    state_version = int((resumed_state or {}).get("version", 1) or 1)
+    restored_meter = (resumed_state or {}).get("meter") if state_version == 2 else None
+    if isinstance(restored_meter, dict):
+        stored_max = int(
+            (restored_meter.get("budget") or {}).get("max_total_tokens", contract.run.budget)
+        )
+        if stored_max != contract.run.budget:
+            raise ContractError(
+                "Cannot resume: run.budget differs from the v2 checkpoint. Restart the run."
+            )
+        meter = BudgetMeter.from_snapshot(
+            restored_meter, max_total_tokens=contract.run.budget
+        )
+        token_budget = meter.budget
+    else:
+        token_budget = TokenBudgetManager(max_total_tokens=contract.run.budget)
+        meter = BudgetMeter(budget=token_budget)
     # Pre-register every component so the per_component breakdown is present even
     # if no calls were made (e.g. dry-run with zero adversarial turns).
     for component in ("planner", "generator", "judge", "policy", "user_simulator"):
-        meter.register(component, llms[component].spec.model or "unknown")
+        if component in llms:
+            meter.register(component, llms[component].spec.model or "unknown")
     if contract.target.mode == "llm" and contract.target_llm is not None:
         meter.register("target_bot", contract.target_llm.model or "unknown")
 
@@ -294,13 +397,35 @@ async def run_unified_async(
             max_concurrency=max_concurrency_override or _effective_max_concurrency(contract),
         )
 
-    attack_memory = (
-        AttackMemory(max_entries=contract.eval_plan.attack_memory_max_entries)
-        if contract.eval_plan.attack_memory in {"shared"} else None
-    )
-    if attack_memory is not None and contract.eval_plan.seed_attack_memory_path:
-        attack_memory = _seed_attack_memory(
-            contract.eval_plan.seed_attack_memory_path, attack_memory.max_entries
+    restored_memory = (resumed_state or {}).get("attack_memory") if state_version == 2 else None
+    if isinstance(restored_memory, dict):
+        if restored_memory.get("mode") != contract.eval_plan.attack_memory:
+            raise ContractError(
+                "Cannot resume: eval_plan.attack_memory differs from the v2 checkpoint."
+            )
+        if int(restored_memory.get("max_entries", 50)) != contract.eval_plan.attack_memory_max_entries:
+            raise ContractError(
+                "Cannot resume: attack_memory_max_entries differs from the v2 checkpoint."
+            )
+        memory_registry = AttackMemoryRegistry.from_dict(restored_memory)
+        if contract.eval_plan.seed_attack_memory_path:
+            logger.warning(
+                "Ignoring seed_attack_memory_path because restored v2 memory supersedes seeds."
+            )
+    else:
+        shared_seed = None
+        if (
+                contract.eval_plan.attack_memory == "shared"
+                and contract.eval_plan.seed_attack_memory_path
+        ):
+            shared_seed = _seed_attack_memory(
+                contract.eval_plan.seed_attack_memory_path,
+                contract.eval_plan.attack_memory_max_entries,
+            )
+        memory_registry = AttackMemoryRegistry(
+            mode=contract.eval_plan.attack_memory,
+            max_entries=contract.eval_plan.attack_memory_max_entries,
+            shared_memory=shared_seed,
         )
     attack_memory_lock = asyncio.Lock()
     writer_lock = asyncio.Lock()
@@ -347,14 +472,24 @@ async def run_unified_async(
     if completed_conversation_ids:
         plan = [p for p in plan if p["conversation_id"] not in completed_conversation_ids]
 
-    writer.write_json("contract.normalized.json", contract_to_dict(contract))
-    writer.write_json("run_plan.json", _serialize_plan(full_plan))
+    normalized_contract = contract_to_dict(contract)
+    serialized_plan = _serialize_plan(full_plan)
+    contract_fingerprint = _fingerprint_payload(normalized_contract)
+    plan_fingerprint = _fingerprint_payload(serialized_plan)
+    if resumed_state is not None:
+        _validate_resume_fingerprints(
+            resumed_state,
+            contract_fingerprint=contract_fingerprint,
+            plan_fingerprint=plan_fingerprint,
+        )
+    writer.write_json("contract.normalized.json", normalized_contract)
+    writer.write_json("run_plan.json", serialized_plan)
 
     if not resume_incomplete:
         write_run_state(
             writer.run_dir,
             {
-                "version": 1,
+                "version": 2,
                 "mode": "unified",
                 "status": "in_progress",
                 "run_id": run_id,
@@ -364,6 +499,10 @@ async def run_unified_async(
                 "completed_conversations": 0,
                 "completed_conversation_ids": [],
                 "metrics": tracker.to_dict(),
+                "meter": meter.snapshot(),
+                "attack_memory": memory_registry.to_dict(),
+                "contract_fingerprint": contract_fingerprint,
+                "plan_fingerprint": plan_fingerprint,
             },
         )
 
@@ -386,6 +525,9 @@ async def run_unified_async(
         })
     progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat, progress_sink=progress_sink)
     processed_conversation_ids = set(completed_conversation_ids)
+    personas_by_id = contract.persona_by_id()
+    scenarios_by_id = contract.scenario_by_id()
+    adversarial_by_id = contract.adversarial_by_id()
 
     effective_max_concurrency = (
         1 if sequential
@@ -443,9 +585,9 @@ async def run_unified_async(
             try:
                 res = await run_conversation(
                     entry=planned["entry"],
-                    persona=contract.persona_by_id()[planned["persona_id"]],
-                    synth_scenario=contract.scenario_by_id()[planned["synth_scenario_id"]],
-                    adv_scenario=contract.adversarial_by_id()[planned["adversarial_scenario_id"]],
+                    persona=personas_by_id[planned["persona_id"]],
+                    synth_scenario=scenarios_by_id[planned["synth_scenario_id"]],
+                    adv_scenario=adversarial_by_id[planned["adversarial_scenario_id"]],
                     contract=contract,
                     llms=llms,
                     target=target,
@@ -453,7 +595,7 @@ async def run_unified_async(
                     conversation_id=planned["conversation_id"],
                     rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
                     token_budget=token_budget,
-                    attack_memory=attack_memory,
+                    attack_memory=memory_registry.for_persona(planned["persona_id"]),
                     attack_memory_lock=attack_memory_lock,
                     turn_count=planned["turn_count"],
                     realtime_chat=realtime_chat,
@@ -472,18 +614,24 @@ async def run_unified_async(
                     elapsed_seconds=round(time.perf_counter() - started, 2),
                 )
             finally:
-                await progress.mark_completed(planned["conversation_id"])
+                token_budget.release_reservations_for_prefix(
+                    f"{planned['conversation_id']}:"
+                )
+
+            if res.termination_reason == "budget_exhausted" and not res.chat_history:
+                return
 
             # Write progressively under a lock
             async with writer_lock:
                 await asyncio.to_thread(_append_result_to_artifacts, writer, res, output_conversations)
+                memory_registry.commit(planned["persona_id"], res.memory_session)
                 tracker.update(res)
                 processed_conversation_ids.add(str(res.conversation_row.get("conversation_id") or ""))
                 await asyncio.to_thread(
                     write_run_state,
                     writer.run_dir,
                     {
-                        "version": 1,
+                        "version": 2,
                         "mode": "unified",
                         "status": "in_progress",
                         "run_id": run_id,
@@ -493,8 +641,13 @@ async def run_unified_async(
                         "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
                         "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
                         "metrics": tracker.to_dict(),
+                        "meter": meter.snapshot(),
+                        "attack_memory": memory_registry.to_dict(),
+                        "contract_fingerprint": contract_fingerprint,
+                        "plan_fingerprint": plan_fingerprint,
                     },
                 )
+            await progress.mark_completed(planned["conversation_id"])
 
     budget_stopped = False
     start_time = time.time()
@@ -509,8 +662,15 @@ async def run_unified_async(
                     break
                 await _one(planned)
         else:
-            await asyncio.gather(*(_one(p) for p in plan))
-            # Concurrent mode: budget can't short-circuit mid-batch, but post-hoc flag it.
+            await _run_sliding_window(
+                plan,
+                worker=_one,
+                max_concurrency=effective_max_concurrency,
+                can_admit=lambda: (
+                        not (realtime_controller and realtime_controller.stop_requested)
+                        and token_budget.can_continue(contract.run.reserve_tokens)
+                ),
+            )
             budget_stopped = not token_budget.can_continue(contract.run.reserve_tokens)
     finally:
         if realtime_controller:
@@ -531,7 +691,7 @@ async def run_unified_async(
         plan=plan,
         run_id=run_id,
         dry_run=dry_run,
-        attack_memory=attack_memory,
+        memory_registry=memory_registry,
         output_conversations=output_conversations,
         meter=meter,
         budget_stopped=budget_stopped,
@@ -542,7 +702,7 @@ async def run_unified_async(
     write_run_state(
         writer.run_dir,
         {
-            "version": 1,
+            "version": 2,
             "mode": "unified",
             "status": "completed",
             "run_id": run_id,
@@ -553,6 +713,10 @@ async def run_unified_async(
             "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
             "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
             "metrics": tracker.to_dict(),
+            "meter": meter.snapshot(),
+            "attack_memory": memory_registry.to_dict(),
+            "contract_fingerprint": contract_fingerprint,
+            "plan_fingerprint": plan_fingerprint,
             "summary": summary,
         },
     )
@@ -574,6 +738,9 @@ class _RunningStatsTracker:
 
         self.failure_scores: list[float] = []
         self.turns_to_failure: list[int] = []
+        self.trace_severity_scores: list[float] = []
+        self.trajectory_signal_sessions = 0
+        self.failure_surface_counts: dict[str, int] = {}
 
         self.synth_safety_scores: list[float] = []
         self.synth_relevance_scores: list[float] = []
@@ -604,6 +771,16 @@ class _RunningStatsTracker:
 
         tracker.failure_scores = [float(v) for v in payload.get("failure_scores") or []]
         tracker.turns_to_failure = [int(v) for v in payload.get("turns_to_failure") or []]
+        tracker.trace_severity_scores = [
+            float(v) for v in payload.get("trace_severity_scores") or []
+        ]
+        tracker.trajectory_signal_sessions = int(
+            payload.get("trajectory_signal_sessions", 0) or 0
+        )
+        tracker.failure_surface_counts = {
+            str(key): int(value)
+            for key, value in (payload.get("failure_surface_counts") or {}).items()
+        }
         tracker.synth_safety_scores = [float(v) for v in payload.get("synth_safety_scores") or []]
         tracker.synth_relevance_scores = [float(v) for v in payload.get("synth_relevance_scores") or []]
         tracker.synth_groundedness_scores = [float(v) for v in payload.get("synth_groundedness_scores") or []]
@@ -626,6 +803,9 @@ class _RunningStatsTracker:
             "partials": self.partials,
             "failure_scores": self.failure_scores,
             "turns_to_failure": self.turns_to_failure,
+            "trace_severity_scores": self.trace_severity_scores,
+            "trajectory_signal_sessions": self.trajectory_signal_sessions,
+            "failure_surface_counts": self.failure_surface_counts,
             "synth_safety_scores": self.synth_safety_scores,
             "synth_relevance_scores": self.synth_relevance_scores,
             "synth_groundedness_scores": self.synth_groundedness_scores,
@@ -645,17 +825,44 @@ class _RunningStatsTracker:
 
         best_failure = res.conversation_row["best_failure_score"]
         self.max_failure_score = max(self.max_failure_score, best_failure)
-        if best_failure >= self.threshold:
+        if bool(res.conversation_row.get("is_breach", best_failure >= self.threshold)):
             self.failures_at_threshold += 1
             self.turns_to_failure.append(res.conversation_row["adversarial_turns"])
 
-        for row in res.turn_rows:
+        adversarial_score_rows = [
+            row for row in res.score_rows if row.get("turn_type") == "adversarial"
+        ]
+        if not adversarial_score_rows:
+            # Backward compatibility for v1 checkpoints/tests whose score rows did
+            # not carry adversarial outcomes.
+            adversarial_score_rows = [
+                row for row in res.turn_rows if row.get("turn_type") == "adversarial"
+            ]
+        conversation_has_trajectory_signal = False
+        for row in adversarial_score_rows:
             if row.get("turn_type") == "adversarial":
                 fail_score = row.get("failure_score")
                 if isinstance(fail_score, (int, float)):
                     self.failure_scores.append(fail_score)
-                    if 0 < fail_score < self.threshold:
+                    effective = row.get("effective_failure_score", fail_score)
+                    row_threshold = row.get("failure_threshold", self.threshold)
+                    if (
+                            isinstance(effective, (int, float))
+                            and isinstance(row_threshold, (int, float))
+                            and 0 < effective < row_threshold
+                    ):
                         self.partials += 1
+                trace_score = row.get("trace_severity_score")
+                if isinstance(trace_score, (int, float)) and trace_score > 0:
+                    self.trace_severity_scores.append(trace_score)
+                    conversation_has_trajectory_signal = True
+                surface = row.get("failure_surface")
+                if isinstance(surface, str) and surface and surface != "none":
+                    self.failure_surface_counts[surface] = (
+                            self.failure_surface_counts.get(surface, 0) + 1
+                    )
+        if conversation_has_trajectory_signal:
+            self.trajectory_signal_sessions += 1
 
         for row in res.score_rows:
             if row.get("turn_type") == "synth":
@@ -914,6 +1121,10 @@ def _failed_conversation_result(
             "elapsed_seconds": elapsed_seconds,
             "target_latency_seconds": 0.0,
             "best_failure_score": 0,
+            "best_effective_failure_score": 0,
+            "failure_threshold": 0,
+            "is_breach": False,
+            "termination_reason": "runner_exception",
         },
         chat_history=[],
         turn_rows=[
@@ -929,6 +1140,7 @@ def _failed_conversation_result(
         failed_rows=[],
         adversarial_session=None,
         errors=1,
+        termination_reason="runner_exception",
     )
 
 
@@ -957,6 +1169,7 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
         output=contract.output,
         target_llm=(LLMSpec(provider="mock", model="mock") if contract.target_llm else None),
         target_system_prompt=contract.target_system_prompt,
+        trajectory=contract.trajectory,
         warnings=list(contract.warnings) + ["dry_run: forced mock LLM providers"],
     )
 
@@ -969,7 +1182,7 @@ def _persist_and_summarize(
         plan: list[dict[str, Any]],
         run_id: str,
         dry_run: bool,
-        attack_memory: AttackMemory | None,
+        memory_registry: AttackMemoryRegistry,
         output_conversations: bool = False,
         meter: BudgetMeter | None = None,
         budget_stopped: bool = False,
@@ -995,11 +1208,8 @@ def _persist_and_summarize(
     mean_relevance = _mean(tracker.synth_relevance_scores)
     mean_grounded = _mean(tracker.synth_groundedness_scores)
 
-    if attack_memory is not None:
-        writer.write_attack_memory({
-            "entries": [asdict(e) for e in attack_memory.entries],
-            "max_entries": attack_memory.max_entries,
-        })
+    if memory_registry.mode != "none":
+        writer.write_attack_memory(memory_registry.to_dict())
 
     budget_summary = (
         meter.summary(stopped_due_to_budget=budget_stopped) if meter is not None else None
@@ -1110,6 +1320,16 @@ def _persist_and_summarize(
         "performance": performance_stats,
         "scale_projections": scale_projections,
     }
+    if contract.trajectory.enabled:
+        summary["trajectory"] = {
+            "max_trace_severity_score": (
+                max(tracker.trace_severity_scores)
+                if tracker.trace_severity_scores else 0
+            ),
+            "mean_trace_severity_score": _mean(tracker.trace_severity_scores),
+            "sessions_with_signal": tracker.trajectory_signal_sessions,
+            "failure_surface_counts": dict(sorted(tracker.failure_surface_counts.items())),
+        }
     writer.write_unified_summary(summary)
     writer.write_unified_report(summary)
     return summary
@@ -1149,11 +1369,13 @@ def _serialize_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for p in plan:
         rows.append({
             "persona_id": p["persona_id"],
+            "conversation_id": p["conversation_id"],
             "synth_scenario_id": p["synth_scenario_id"],
             "adversarial_scenario_id": p["adversarial_scenario_id"],
             "turn_count": p["turn_count"],
             "conversation_key": p["conversation_key"],
             "weight": p["entry"].weight,
+            "schedule": p["entry"].schedule.__dict__,
             "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
         })
     return rows

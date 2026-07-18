@@ -1,6 +1,7 @@
 """Smoke tests for unified contract loader."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,7 @@ import pytest
 
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import (
+    contract_to_dict,
     load_unified_contract,
     parse_unified_contract,
 )
@@ -50,6 +52,14 @@ def test_ratio_out_of_range_rejected():
     payload = _base_payload()
     payload["eval_plan"]["entries"][0]["synth_to_adversarial_ratio"] = 1.5
     with pytest.raises(ContractError):
+        parse_unified_contract(payload)
+
+
+def test_unknown_attack_memory_mode_is_rejected():
+    payload = _base_payload()
+    payload["eval_plan"]["attack_memory"] = "global-ish"
+
+    with pytest.raises(ContractError, match="attack_memory"):
         parse_unified_contract(payload)
 
 
@@ -166,3 +176,146 @@ def test_load_unified_contract_resolves_env_vars_from_dotenv_file(tmp_path):
             del os.environ["ASE_TEST_UNIFIED_ENDPOINT"]
         contract = load_unified_contract(contract_path)
         assert contract.target.endpoint == "https://unified-dotenv.example.com"
+
+
+def test_trajectory_and_global_threshold_are_applied_to_adversarial_scenarios():
+    payload = _base_payload()
+    payload["trajectory"] = {"enabled": True, "trace_field": "execution_trace"}
+    payload["scoring"] = {"adversarial": {"failure_threshold": 4}}
+    payload["adversarial_scenario_catalog"][0]["judge_overrides"] = {"rubric": "legacy"}
+
+    contract = parse_unified_contract(payload)
+
+    assert contract.trajectory.enabled is True
+    assert contract.trajectory.trace_field == "execution_trace"
+    assert contract.adversarial_scenario_catalog[0].failure_threshold == 4
+    assert contract.adversarial_scenario_catalog[0].judge_overrides == {"rubric": "legacy"}
+    assert any("judge_overrides" in warning for warning in contract.warnings)
+
+
+def test_explicit_scenario_threshold_overrides_global_threshold():
+    payload = _base_payload()
+    payload["scoring"] = {"adversarial": {"failure_threshold": 4}}
+    payload["adversarial_scenario_catalog"][0]["failure_threshold"] = 2
+
+    contract = parse_unified_contract(payload)
+
+    assert contract.adversarial_scenario_catalog[0].failure_threshold == 2
+
+
+def test_contract_v2_round_trip_preserves_nested_llms_schedule_target_and_trajectory():
+    payload = _base_payload()
+    payload["schema_version"] = 2
+    payload["llm"] = {
+        "provider": "bedrock-openai",
+        "model": "top-model",
+        "bedrock": {"region": "ca-central-1", "endpoint": "https://bedrock.example"},
+    }
+    payload["components"] = {
+        "judge": {
+            "provider": "azure-openai",
+            "model": "judge-model",
+            "azure": {
+                "endpoint": "https://azure.example",
+                "deployment": "judge-deployment",
+                "api_version": "2026-01-01",
+            },
+        }
+    }
+    payload["target"] = {
+        "enabled": True,
+        "endpoint": "mock",
+        "mode": "llm",
+        "system_prompt": "Be safe",
+        "chatbot_llm": {
+            "provider": "ollama",
+            "model": "target-model",
+            "ollama": {"base_url": "http://localhost:11434"},
+        },
+    }
+    payload["eval_plan"]["entries"][0].pop("synth_to_adversarial_ratio")
+    payload["eval_plan"]["entries"][0]["schedule"] = {
+        "mode": "phased",
+        "warmup_turns": 1,
+        "p_synth": 0.25,
+    }
+    payload["trajectory"] = {"enabled": True, "trace_field": "trace_data"}
+
+    original = parse_unified_contract(payload)
+    normalized = contract_to_dict(original)
+    reparsed = parse_unified_contract(normalized)
+
+    assert normalized["schema_version"] == 2
+    assert normalized["llm"]["bedrock"]["endpoint"] == "https://bedrock.example"
+    assert "bedrock_endpoint" not in normalized["llm"]
+    assert normalized["eval_plan"]["entries"][0]["schedule"]["mode"] == "phased"
+    assert "hr_familiarity" not in normalized["persona_pool"][0]
+    assert "privacy_sensitivity" not in normalized["persona_pool"][0]
+    assert reparsed.llm == original.llm
+    assert reparsed.components == original.components
+    assert reparsed.target_llm == original.target_llm
+    assert reparsed.target_system_prompt == "Be safe"
+    assert reparsed.eval_plan.entries[0].schedule == original.eval_plan.entries[0].schedule
+    assert reparsed.trajectory == original.trajectory
+
+
+def test_legacy_flat_llm_fields_are_accepted_for_all_llm_locations():
+    payload = _base_payload()
+    flat = {
+        "provider": "bedrock-openai",
+        "model": "legacy",
+        "bedrock_region": "us-east-2",
+        "bedrock_endpoint": "https://legacy.example",
+    }
+    payload["llm"] = dict(flat)
+    payload["components"] = {"planner": dict(flat)}
+    payload["target"] = {
+        "enabled": True,
+        "endpoint": "mock",
+        "mode": "llm",
+        "chatbot_llm": dict(flat),
+    }
+
+    contract = parse_unified_contract(payload)
+
+    assert contract.llm.bedrock_endpoint == "https://legacy.example"
+    assert contract.components.planner.bedrock_region == "us-east-2"
+    assert contract.target_llm.bedrock_endpoint == "https://legacy.example"
+
+
+def test_nested_llm_fields_win_over_legacy_fields_with_warning():
+    payload = _base_payload()
+    payload["llm"] = {
+        "provider": "azure-openai",
+        "model": "m",
+        "azure_endpoint": "https://legacy.example",
+        "azure": {"endpoint": "https://nested.example"},
+    }
+
+    contract = parse_unified_contract(payload)
+
+    assert contract.llm.azure_endpoint == "https://nested.example"
+    assert any("azure_endpoint" in warning for warning in contract.warnings)
+
+
+def test_future_contract_schema_version_is_rejected():
+    payload = _base_payload()
+    payload["schema_version"] = 3
+
+    with pytest.raises(ContractError, match="schema_version"):
+        parse_unified_contract(payload)
+
+
+def test_normalized_contract_redacts_target_auth_secrets():
+    payload = _base_payload()
+    payload["target"]["auth"] = {
+        "Authorization": "Bearer super-secret-token",
+        "password": "do-not-write-me",
+    }
+
+    normalized = contract_to_dict(parse_unified_contract(payload))
+    serialized = json.dumps(normalized)
+
+    assert "super-secret-token" not in serialized
+    assert "do-not-write-me" not in serialized
+    assert normalized["target"]["auth"]["Authorization"] == "<redacted>"

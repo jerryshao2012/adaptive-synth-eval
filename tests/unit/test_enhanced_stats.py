@@ -15,6 +15,16 @@ def test_count_tokens():
     assert isinstance(tokens, int)
 
 
+def test_count_tokens_reuses_cached_encoding():
+    from adaptive_synth_eval.clients.utils import _get_token_encoding
+
+    _get_token_encoding.cache_clear()
+    count_tokens("first")
+    count_tokens("second")
+
+    assert _get_token_encoding.cache_info().hits >= 1
+
+
 def test_write_generation_report_with_enhanced_stats(tmp_path):
     writer = ArtifactWriter(tmp_path, run_id="test_run")
 

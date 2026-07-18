@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+from functools import lru_cache
 
 from rich.console import Console
 from rich.panel import Panel
@@ -219,13 +220,19 @@ def get_ssl_verify_config():
     return True
 
 
+@lru_cache(maxsize=1)
+def _get_token_encoding():
+    import tiktoken
+
+    return tiktoken.get_encoding("cl100k_base")
+
+
 def count_tokens(text: str | None) -> int:
     """Calculate token count for a string using tiktoken, falling back to char length estimate if unavailable."""
     if not text:
         return 0
     try:
-        import tiktoken
-        encoding = tiktoken.get_encoding("cl100k_base")
+        encoding = _get_token_encoding()
         return len(encoding.encode(text))
     except Exception:
         # Fallback estimation: roughly 4 characters per token

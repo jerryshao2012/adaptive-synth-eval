@@ -13,6 +13,47 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+_TRACE_ACTIVITY_KEYS = (
+    "agents_called",
+    "handoffs",
+    "tool_calls",
+    "retrieved_items",
+    "memory_reads",
+    "memory_writes",
+    "errors",
+)
+
+
+def _has_meaningful_value(value: Any) -> bool:
+    if value is None or value is False or value == 0 or value == "":
+        return False
+    if isinstance(value, dict):
+        return any(_has_meaningful_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_meaningful_value(item) for item in value)
+    return True
+
+
+def _has_meaningful_raw(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            _has_meaningful_raw(item)
+            for key, item in value.items()
+            if key != "latency_ms"
+        )
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_meaningful_raw(item) for item in value)
+    return _has_meaningful_value(value)
+
+
+def has_meaningful_trace(trace: Dict[str, Any] | None) -> bool:
+    """Return whether a normalized trace contains activity worth judging."""
+    if not isinstance(trace, dict):
+        return False
+    if any(_has_meaningful_value(trace.get(key)) for key in _TRACE_ACTIVITY_KEYS):
+        return True
+    return _has_meaningful_raw(trace.get("raw_trace"))
+
 
 def normalize_trace(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     """Coerce a raw trace dict into the canonical trajectory schema.

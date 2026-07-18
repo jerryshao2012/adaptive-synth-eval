@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 
 from .llm_backends import LLMCallFn
 from ..core.token_budget import TokenBudgetManager, TokenUsage
@@ -68,18 +68,29 @@ class LLMClient:
         {"content": "<json string>", "usage": {"prompt_tokens": int, "completion_tokens": int}}
     """
 
-    def __init__(self, call_fn: LLMCallFn, budget: TokenBudgetManager):
+    def __init__(
+            self,
+            call_fn: LLMCallFn,
+            budget: TokenBudgetManager,
+            on_usage: Callable[[int, int], None] | None = None,
+    ):
         self.call_fn = call_fn
         self.budget = budget
+        self.on_usage = on_usage
 
     def complete_json(self, system: str, user: str) -> Dict[str, Any]:
         result = self.call_fn(system=system, user=user)
 
         usage = result.get("usage", {})
-        self.budget.add(TokenUsage(
-            prompt_tokens=int(usage.get("prompt_tokens", 0)),
-            completion_tokens=int(usage.get("completion_tokens", 0)),
-        ))
+        prompt_tokens = int(usage.get("prompt_tokens", 0))
+        completion_tokens = int(usage.get("completion_tokens", 0))
+        with self.budget._lock:
+            self.budget.add(TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            ))
+            if self.on_usage is not None:
+                self.on_usage(prompt_tokens, completion_tokens)
 
         raw = result.get("content", "{}")
         if raw is None:

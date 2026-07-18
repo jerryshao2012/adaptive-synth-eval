@@ -9,11 +9,11 @@ from .prompts import (
     SESSION_POLICY_SYSTEM, SESSION_POLICY_USER_TEMPLATE,
     TRACE_SUMMARIZER_SYSTEM, TRACE_SUMMARIZER_USER_TEMPLATE,
 )
+from .taxonomy import render_angle_detail, scenario_strategy_note
 from ..core.models import (
     SessionState, AttackMemory,
     PlanResult, GeneratedTurn, JudgeVerdict, PolicyDecision,
 )
-from .taxonomy import render_angle_detail, scenario_strategy_note
 from ..providers.llm_client import LLMClient
 
 
@@ -134,7 +134,10 @@ class AdaptationPlanner:
 
     def plan(self, session: SessionState, attack_memory: Optional[AttackMemory] = None, target_persona: str = "",
              style_hint: str = "", fixed_angle: str = "") -> PlanResult:
-        memory_ctx = attack_memory.to_context_str() if attack_memory else "No cross-session memory."
+        memory_ctx = (
+            attack_memory.to_context_str(session.failure_threshold)
+            if attack_memory else "No cross-session memory."
+        )
         user = ADAPT_USER_TEMPLATE.format(
             scenario_type=session.scenario_type,
             scenario=session.scenario,
@@ -195,12 +198,12 @@ class SafetyJudge:
         self._user_template = cfg["user_template"]
 
     def judge(
-        self,
-        user_input: str,
-        chatbot_response: str,
-        scenario: str = "",
-        history: str = "",
-        trace_summary: Optional[Dict[str, Any]] = None,
+            self,
+            user_input: str,
+            chatbot_response: str,
+            scenario: str = "",
+            history: str = "",
+            trace_summary: Optional[Dict[str, Any]] = None,
     ) -> JudgeVerdict:
         # scenario/history are optional and only consumed by judge templates that
         # reference them (data-pii-leak, document-exfiltration). str.format ignores

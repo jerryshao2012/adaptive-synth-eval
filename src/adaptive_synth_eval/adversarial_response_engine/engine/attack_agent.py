@@ -5,7 +5,6 @@ from .components import AdaptationPlanner, TurnGenerator
 from .selector import select_angle
 from ..core.models import SessionState, AttackMemory, TurnProbe
 
-
 # Cross-session framing diversity: each conversation gets a soft "lead register" +
 # "probe architecture" bias drawn from its seeded rng, so the ~5000 conversations
 # don't collapse onto one voice. These mirror the generator's VARIATION MATRIX; they
@@ -74,7 +73,10 @@ class AttackAgent:
         Returns the committed angle, drawing a new one when none is set yet or when
         consecutive refusals indicate the current line of attack is exhausted.
         """
-        stalled = session.repeated_refusals >= self.rotate_after_refusals
+        stalled = (
+                self.rotate_after_refusals > 0
+                and session.repeated_refusals >= self.rotate_after_refusals
+        )
         if self._session_angle is None or stalled:
             exclude = {self._session_angle} if (stalled and self._session_angle) else None
             self._session_angle = select_angle(self.attack_memory, self.rng, exclude=exclude)

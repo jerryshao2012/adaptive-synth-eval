@@ -22,7 +22,7 @@ outputs/runs/<run_id>/
 ├── run.log                     # Unified mode run log (trajectory + orchestrator logs)
 ├── failed_examples.jsonl       # Unified mode: failed adversarial examples
 ├── adversarial_sessions.jsonl  # Unified mode: adversarial session records
-├── attack_memory.json          # Unified mode: shared attack memory snapshot (when enabled)
+├── attack_memory.json          # Unified mode: shared/per-persona attack memory snapshot
 ├── monitoring_scores.jsonl     # Monitoring output (ase monitor run)
 ├── monitoring_state.json       # Monitoring resume/checkpoint state
 ├── eval_progress.md            # Monitoring progress/status markdown
@@ -35,7 +35,21 @@ Notes:
 - `unified` mode produces common artifacts plus unified-specific files listed above.
 - Monitoring artifacts (`monitoring_*` and `eval_progress.md`) are created only when running `ase monitor run` against the run folder.
 
-`run_state.json` tracks in-progress status, completed conversation IDs, rolling metrics, and final completion status. It is used by `ase run --incomplete-run-action ...` to resume or restart interrupted runs safely.
+`contract.normalized.json` uses canonical unified contract schema version 2. Provider
+settings are emitted in nested `azure`, `bedrock`, and `ollama` blocks, schedules are
+fully serialized, and literal target authentication values are redacted.
+
+`run_state.json` version 2 tracks completed conversation IDs, rolling metrics, actual
+token/component usage, committed attack memory, and fingerprints of both the effective
+contract and exact filtered run plan. Resume rejects a changed v2 contract or plan;
+legacy v1 state remains best-effort with a warning. Transient in-flight token
+reservations are deliberately not persisted.
+
+Unified adversarial rows in `scores.jsonl` and `turns.jsonl` retain the response-only
+`failure_score`/`best_failure_score` and add `effective_failure_score`,
+`best_effective_failure_score`, `failure_threshold`, and `is_breach`. Effective scores
+are the maximum of response and trajectory severity, so trajectory-only breaches are
+reported without changing response-score semantics.
 
 ### Monitoring score version metadata
 

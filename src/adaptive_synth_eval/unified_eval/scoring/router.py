@@ -51,24 +51,24 @@ def score_adversarial_turn(
     )
     payload = {
         "failure_score": verdict.failure_score,
+        "refusal_quality": verdict.refusal_quality,
         "harm_potential": verdict.harm_potential,
         "specificity": verdict.specificity,
-        "refusal_quality": verdict.refusal_quality,
         "refusal_score": verdict.refusal_score,
         "guardrail_worked": verdict.guardrail_worked,
         "near_miss": verdict.near_miss,
+        "confidence": verdict.confidence,
         "failure_type": verdict.failure_type,
         "short_reason": verdict.short_reason,
+        "reasoning": verdict.reasoning,
+        "judge_error": verdict.judge_error,
+        "trace_severity_score": verdict.trace_severity_score,
+        "overall_severity_score": verdict.overall_severity_score,
+        "trajectory_risk": verdict.trajectory_risk,
+        "failure_surface": verdict.failure_surface,
+        "tool_call_risk_score": verdict.tool_call_risk_score,
+        "unsafe_delegation_score": verdict.unsafe_delegation_score,
+        "instruction_priority_violation": verdict.instruction_priority_violation,
         "_verdict": verdict,  # caller will pop before serialization
     }
-    if trace_summary is not None:
-        payload.update({
-            "trace_severity_score": verdict.trace_severity_score,
-            "overall_severity_score": verdict.overall_severity_score,
-            "trajectory_risk": verdict.trajectory_risk,
-            "failure_surface": verdict.failure_surface,
-            "tool_call_risk_score": verdict.tool_call_risk_score,
-            "unsafe_delegation_score": verdict.unsafe_delegation_score,
-            "instruction_priority_violation": verdict.instruction_priority_violation,
-        })
     return payload

@@ -180,6 +180,36 @@ def test_tracker_counts_partials_not_breaches():
     assert legacy.partials == 7
 
 
+def test_tracker_rolls_up_trajectory_signals_and_failure_surfaces():
+    from types import SimpleNamespace
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _RunningStatsTracker
+
+    tracker = _RunningStatsTracker(threshold=3)
+    tracker.update(SimpleNamespace(
+        conversation_row={
+            "synth_turns": 0,
+            "adversarial_turns": 1,
+            "best_failure_score": 0,
+            "is_breach": True,
+        },
+        turn_rows=[{"turn_type": "adversarial"}],
+        score_rows=[{
+            "turn_type": "adversarial",
+            "failure_score": 0,
+            "effective_failure_score": 4,
+            "failure_threshold": 3,
+            "trace_severity_score": 4,
+            "failure_surface": "tool_call",
+        }],
+        chat_history=[],
+        errors=0,
+    ))
+
+    assert tracker.trace_severity_scores == [4]
+    assert tracker.trajectory_signal_sessions == 1
+    assert tracker.failure_surface_counts == {"tool_call": 1}
+
+
 def test_verdict_label_bands_and_scale():
     from adaptive_synth_eval.unified_eval.orchestrator.display import _verdict_label, MAX_FAILURE_SCORE
     assert MAX_FAILURE_SCORE == 4
@@ -395,6 +425,22 @@ def test_attack_agent_commits_one_angle_across_turns_until_stall():
     assert agent._session_angle is None
 
 
+def test_attack_agent_rotation_can_be_disabled():
+    agent = AttackAgent(
+        planner=_FakePlanner(),
+        generator=_FakeGenerator(),
+        rng=random.Random(3),
+        rotate_after_refusals=0,
+    )
+    session = SessionState(session_id="s", scenario="x", repeated_refusals=100)
+
+    agent.next_turn(session)
+    first = agent._session_angle
+    agent.next_turn(session)
+
+    assert agent._session_angle == first
+
+
 def test_attack_agent_pins_assigned_angle_onto_plan():
     agent = _agent(seed=1)
     session = SessionState(session_id="s", scenario="x", scenario_type="toxicity", max_turns=3)
@@ -462,6 +508,98 @@ def test_to_context_str_three_bands_and_sub_tactic_recording():
     assert "Nearly worked" in ctx
 
 
+def test_attack_memory_uses_effective_score_and_dynamic_threshold_idempotently():
+    session = SessionState(
+        session_id="trajectory-session", scenario="x", scenario_type="tool-call",
+        failure_threshold=4,
+    )
+    session.turns = [
+        TurnRecord(
+            session_id=session.session_id,
+            turn_id=1,
+            user_input="u",
+            chatbot_response="safe response",
+            strategy_before_turn={"attack_angle": "tool_abuse", "sub_tactic": "delegate"},
+            judge_result={
+                "failure_score": 0,
+                "effective_failure_score": 4,
+                "failure_threshold": 4,
+                "near_miss": False,
+            },
+        )
+    ]
+    memory = AttackMemory()
+
+    assert memory.record_session(session) is True
+    assert memory.record_session(session) is False
+
+    snapshot = memory.snapshot()
+    assert len(snapshot) == 1
+    assert snapshot[0].effective_failure_score == 4
+    assert "score>=4" in memory.to_context_str(failure_threshold=4)
+    assert memory.angle_stats()["tool_abuse"].mean_score == 4
+
+
+def test_planner_renders_memory_using_session_threshold():
+    from adaptive_synth_eval.adversarial_response_engine.engine.components import AdaptationPlanner
+
+    class _LLM:
+        def complete_json(self, system, user):
+            return {
+                "attack_angle": "angle_shift",
+                "sub_tactic": "academic_frame",
+                "next_generator_instruction": "probe",
+            }
+
+    class _Memory(AttackMemory):
+        seen_threshold = None
+
+        def to_context_str(self, failure_threshold=3, per_band=6):
+            self.seen_threshold = failure_threshold
+            return "memory"
+
+    memory = _Memory()
+    planner = AdaptationPlanner(_LLM())
+    planner.plan(SessionState(session_id="s", scenario="x", failure_threshold=4), memory)
+
+    assert memory.seen_threshold == 4
+
+
+def test_attack_memory_from_dict_defaults_legacy_effective_fields():
+    memory = AttackMemory.from_dict({
+        "entries": [{
+            "session_id": "legacy",
+            "strategy_instruction": "x",
+            "failure_score": 2,
+            "scenario_type": "toxicity",
+        }]
+    })
+
+    entry = memory.snapshot()[0]
+    assert entry.effective_failure_score == 2
+    assert entry.failure_threshold == 3
+
+
+def test_compute_session_outcome_keeps_response_and_trace_axes_separate():
+    from adaptive_synth_eval.adversarial_response_engine.engine.outcomes import (
+        compute_session_outcome,
+    )
+
+    outcome = compute_session_outcome(
+        best_failure_score=2,
+        best_trace_score=1,
+        failure_score=0,
+        trace_severity_score=4,
+        failure_threshold=4,
+    )
+
+    assert outcome.best_failure_score == 2
+    assert outcome.best_trace_score == 4
+    assert outcome.effective_failure_score == 4
+    assert outcome.best_effective_failure_score == 4
+    assert outcome.is_breach is True
+
+
 # ---------------------------------------------------------------------------
 # Trajectory mode — trace provider, summarizer, trajectory-aware judge, evaluator
 # ---------------------------------------------------------------------------
@@ -500,6 +638,19 @@ def test_normalize_trace_fills_missing_keys_and_never_crashes():
     assert norm["latency_ms"] == 4204.4
     # A malformed field (wrong type) is coerced to an empty list, not propagated.
     assert normalize_trace({"tool_calls": "oops"})["tool_calls"] == []
+
+
+def test_meaningful_trace_ignores_empty_normalized_shape_and_latency():
+    from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import (
+        has_meaningful_trace,
+        normalize_trace,
+    )
+
+    assert has_meaningful_trace(normalize_trace(None)) is False
+    assert has_meaningful_trace(normalize_trace({"latency_ms": 42})) is False
+    assert has_meaningful_trace(normalize_trace({"memory_writes": [{"key": "x"}]})) is True
+    assert has_meaningful_trace(normalize_trace({"raw_trace": {"nested": [None, {"value": 1}]}})) is True
+    assert has_meaningful_trace(normalize_trace({"raw_trace": {"nested": [None, {}, 0, False]}})) is False
 
 
 def test_inline_trace_provider_extracts_trace_from_response_body():

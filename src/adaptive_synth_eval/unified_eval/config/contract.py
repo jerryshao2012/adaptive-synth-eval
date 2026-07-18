@@ -38,6 +38,7 @@ from adaptive_synth_eval.unified_eval.config.schemas import (
     Schedule,
     ScoringConfig,
     Suite,
+    TrajectoryConfig,
     UnifiedContract,
 )
 
@@ -68,6 +69,11 @@ def load_unified_contract(path: str | Path) -> UnifiedContract:
 
 def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = None) -> UnifiedContract:
     warnings: list[str] = []
+    schema_version = int(payload.get("schema_version", 1))
+    if schema_version not in {1, 2}:
+        raise ContractError(
+            f"Unsupported unified contract schema_version {schema_version}; supported versions are 1 and 2."
+        )
     for key in _REQUIRED_TOP:
         if key not in payload:
             raise ContractError(f"Missing required contract section: {key}")
@@ -75,14 +81,16 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
     suite = Suite(**_filter_keys(payload["suite"], Suite))
     run = RunSettings(**_filter_keys(payload.get("run", {}), RunSettings))
 
-    llm = _parse_llm_spec(payload["llm"])
-    components = _parse_components(payload.get("components", {}))
+    llm = _parse_llm_spec(payload["llm"], warnings=warnings, context="llm")
+    components = _parse_components(payload.get("components", {}), warnings)
 
     target_payload = payload["target"]
     target = _parse_target_chatbot(target_payload)
     # Optional LLM-as-target config (only used when target.mode == "llm").
     target_llm = (
-        _parse_llm_spec(target_payload["chatbot_llm"])
+        _parse_llm_spec(
+            target_payload["chatbot_llm"], warnings=warnings, context="target.chatbot_llm"
+        )
         if isinstance(target_payload.get("chatbot_llm"), dict)
         else None
     )
@@ -98,21 +106,29 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
     personas = [_parse_persona(_apply_persona_aliases(item, warnings)) for item in payload["persona_pool"]]
     scenarios = [_parse_scenario(item, warnings) for item in payload["scenario_catalog"]]
 
+    scoring = _parse_scoring(payload.get("scoring", {}))
+
     # Extract adversarial scenarios defined directly in scenario_catalog
     adv_scenarios = []
     for item in payload.get("scenario_catalog", []):
         if "scenario_type" in item and "scenario_text" in item:
-            adv_scenarios.append(_parse_adversarial(item))
+            adv_scenarios.append(
+                _parse_adversarial(item, scoring.adversarial_failure_threshold, warnings)
+            )
 
     # Also parse from adversarial_scenario_catalog if present
     if "adversarial_scenario_catalog" in payload:
         for item in payload["adversarial_scenario_catalog"]:
             # Avoid duplicate scenario IDs
             if not any(a.scenario_id == item["scenario_id"] for a in adv_scenarios):
-                adv_scenarios.append(_parse_adversarial(item))
+                adv_scenarios.append(
+                    _parse_adversarial(item, scoring.adversarial_failure_threshold, warnings)
+                )
 
     eval_plan = _parse_eval_plan(payload["eval_plan"], warnings)
-    scoring = _parse_scoring(payload.get("scoring", {}))
+    trajectory = TrajectoryConfig(
+        **_filter_keys(payload.get("trajectory", {}) or {}, TrajectoryConfig)
+    )
 
     _validate_references(personas, scenarios, adv_scenarios, eval_plan)
     _validate_turns(eval_plan.conversation_turns)
@@ -143,6 +159,7 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
         output=output,
         target_llm=target_llm,
         target_system_prompt=target_system_prompt,
+        trajectory=trajectory,
         warnings=warnings,
     )
 
@@ -180,26 +197,28 @@ def _apply_persona_aliases(payload: dict[str, Any], warnings: list[str]) -> dict
 
 
 def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
+    target = _target_to_dict(contract.target)
+    if contract.target_llm is not None:
+        target["chatbot_llm"] = _llm_to_dict(contract.target_llm)
+    if contract.target_system_prompt:
+        target["system_prompt"] = contract.target_system_prompt
     return {
+        "schema_version": 2,
         "suite": contract.suite.__dict__,
         "run": contract.run.__dict__,
-        "llm": contract.llm.__dict__,
+        "llm": _llm_to_dict(contract.llm),
         "components": {
-            name: (override.__dict__ if override else None)
+            name: (_llm_to_dict(override) if override else None)
             for name, override in contract.components.__dict__.items()
         },
-        "target": _target_to_dict(contract.target),
+        "target": target,
         "time_window": {
             "start_day": contract.time_window.start_day.isoformat(),
             "num_synthetic_days": contract.time_window.num_synthetic_days,
             "compressed_runtime_minutes": contract.time_window.compressed_runtime_minutes,
         },
-        "persona_pool": [p.__dict__ for p in contract.persona_pool],
-        "scenario_catalog": [
-            {**{k: v for k, v in s.__dict__.items() if k != "failure_injection"},
-             "failure_injection": s.failure_injection.__dict__}
-            for s in contract.scenario_catalog
-        ],
+        "persona_pool": [_persona_to_dict(p) for p in contract.persona_pool],
+        "scenario_catalog": [_scenario_to_dict(s) for s in contract.scenario_catalog],
         "adversarial_scenario_catalog": [a.__dict__ for a in contract.adversarial_scenario_catalog],
         "eval_plan": {
             "total_conversations": contract.eval_plan.total_conversations,
@@ -207,14 +226,24 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "attack_memory": contract.eval_plan.attack_memory,
             "seed_attack_memory_path": contract.eval_plan.seed_attack_memory_path,
             "attack_memory_max_entries": contract.eval_plan.attack_memory_max_entries,
-            "entries": [e.__dict__ for e in contract.eval_plan.entries],
+            "entries": [
+                {
+                    "persona_id": entry.persona_id,
+                    "synth_scenario_id": entry.synth_scenario_id,
+                    "adversarial_scenario_id": entry.adversarial_scenario_id,
+                    "weight": entry.weight,
+                    "schedule": entry.schedule.__dict__,
+                    "max_turns": entry.max_turns,
+                }
+                for entry in contract.eval_plan.entries
+            ],
         },
         "scoring": {
             "synth": {"weights": contract.scoring.synth_weights},
             "adversarial": {"failure_threshold": contract.scoring.adversarial_failure_threshold},
         },
+        "trajectory": contract.trajectory.__dict__,
         "output": {"base_dir": str(contract.output.base_dir), "run_id": contract.output.run_id},
-        "warnings": contract.warnings,
     }
 
 
@@ -223,7 +252,28 @@ def _filter_keys(payload: dict[str, Any], cls) -> dict[str, Any]:
     return {k: payload[k] for k in names if k in payload}
 
 
-def _parse_llm_spec(payload: dict[str, Any]) -> LLMSpec:
+def _provider_value(
+        payload: dict[str, Any],
+        nested: dict[str, Any],
+        *,
+        legacy_key: str,
+        nested_key: str,
+        warnings: list[str],
+        context: str,
+) -> Any:
+    legacy = payload.get(legacy_key)
+    value = nested.get(nested_key)
+    if value is not None and legacy is not None and value != legacy:
+        warnings.append(
+            f"{context} sets both {legacy_key!r} and its nested equivalent; using the nested value."
+        )
+    return value if value is not None else legacy
+
+
+def _parse_llm_spec(
+        payload: dict[str, Any], *, warnings: list[str] | None = None, context: str = "llm"
+) -> LLMSpec:
+    warnings = warnings if warnings is not None else []
     azure = payload.get("azure", {}) or {}
     bedrock = payload.get("bedrock", {}) or {}
     ollama = payload.get("ollama", {}) or {}
@@ -233,18 +283,41 @@ def _parse_llm_spec(payload: dict[str, Any]) -> LLMSpec:
         max_tokens=int(payload.get("max_tokens", 1024)),
         temperature=float(payload.get("temperature", 0.7)),
         api_key_env=payload.get("api_key_env"),
-        azure_endpoint=azure.get("endpoint"),
-        azure_deployment=azure.get("deployment"),
-        azure_api_version=azure.get("api_version"),
-        bedrock_region=bedrock.get("region"),
-        ollama_base_url=ollama.get("base_url"),
+        azure_endpoint=_provider_value(
+            payload, azure, legacy_key="azure_endpoint", nested_key="endpoint",
+            warnings=warnings, context=context,
+        ),
+        azure_deployment=_provider_value(
+            payload, azure, legacy_key="azure_deployment", nested_key="deployment",
+            warnings=warnings, context=context,
+        ),
+        azure_api_version=_provider_value(
+            payload, azure, legacy_key="azure_api_version", nested_key="api_version",
+            warnings=warnings, context=context,
+        ),
+        bedrock_region=_provider_value(
+            payload, bedrock, legacy_key="bedrock_region", nested_key="region",
+            warnings=warnings, context=context,
+        ),
+        bedrock_endpoint=_provider_value(
+            payload, bedrock, legacy_key="bedrock_endpoint", nested_key="endpoint",
+            warnings=warnings, context=context,
+        ),
+        ollama_base_url=_provider_value(
+            payload, ollama, legacy_key="ollama_base_url", nested_key="base_url",
+            warnings=warnings, context=context,
+        ),
     )
 
 
-def _parse_components(payload: dict[str, Any]) -> ComponentOverrides:
+def _parse_components(payload: dict[str, Any], warnings: list[str]) -> ComponentOverrides:
     def _opt(key: str) -> LLMSpec | None:
         raw = payload.get(key)
-        return _parse_llm_spec(raw) if isinstance(raw, dict) else None
+        return (
+            _parse_llm_spec(raw, warnings=warnings, context=f"components.{key}")
+            if isinstance(raw, dict)
+            else None
+        )
 
     return ComponentOverrides(
         planner=_opt("planner"),
@@ -255,15 +328,23 @@ def _parse_components(payload: dict[str, Any]) -> ComponentOverrides:
     )
 
 
-def _parse_adversarial(payload: dict[str, Any]) -> AdversarialScenario:
+def _parse_adversarial(
+        payload: dict[str, Any], default_threshold: int, warnings: list[str]
+) -> AdversarialScenario:
     _require_keys(payload, ["scenario_id", "scenario_type", "scenario_text"], "adversarial_scenario")
+    judge_overrides = cast(dict[str, Any], payload.get("judge_overrides", {})) or {}
+    if judge_overrides:
+        warnings.append(
+            f"adversarial scenario {payload['scenario_id']!r} defines judge_overrides; "
+            "the values are preserved but are not currently applied."
+        )
     return AdversarialScenario(
         scenario_id=str(payload["scenario_id"]),
         scenario_type=str(payload["scenario_type"]),
         scenario_text=str(payload["scenario_text"]),
         hijack_target=payload.get("hijack_target"),
-        failure_threshold=int(payload.get("failure_threshold", 3)),
-        judge_overrides=cast(dict[str, Any], payload.get("judge_overrides", {})) or {},
+        failure_threshold=int(payload.get("failure_threshold", default_threshold)),
+        judge_overrides=judge_overrides,
         fresh_start_after_refusals=int(payload.get("fresh_start_after_refusals", 2)),
     )
 
@@ -286,11 +367,16 @@ def _parse_eval_plan(payload: dict[str, Any], warnings: list[str]) -> EvalPlan:
     entries = [_parse_entry(item, warnings) for item in payload["entries"]]
     raw_total = payload.get("total_conversations")
     total_conversations = int(raw_total) if raw_total is not None and isinstance(raw_total, (int, float, str)) else None
+    attack_memory = str(payload.get("attack_memory", "shared"))
+    if attack_memory not in {"shared", "per_persona", "none"}:
+        raise ContractError(
+            "eval_plan.attack_memory must be one of shared|per_persona|none"
+        )
     return EvalPlan(
         total_conversations=total_conversations,
         conversation_turns=turns,
         entries=entries,
-        attack_memory=str(payload.get("attack_memory", "shared")),
+        attack_memory=attack_memory,
         seed_attack_memory_path=_parse_seed_attack_memory_path(
             payload.get("seed_attack_memory_path")
         ),
@@ -391,8 +477,56 @@ def _validate_turns(turns: ConversationTurns) -> None:
         raise ContractError("conversation_turns must be within 1-20 and min <= max")
 
 
+def _llm_to_dict(spec: LLMSpec) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "provider": spec.provider,
+        "model": spec.model,
+        "max_tokens": spec.max_tokens,
+        "temperature": spec.temperature,
+    }
+    if spec.api_key_env:
+        out["api_key_env"] = spec.api_key_env
+    azure = {
+        "endpoint": spec.azure_endpoint,
+        "deployment": spec.azure_deployment,
+        "api_version": spec.azure_api_version,
+    }
+    bedrock = {"region": spec.bedrock_region, "endpoint": spec.bedrock_endpoint}
+    ollama = {"base_url": spec.ollama_base_url}
+    if any(value is not None for value in azure.values()):
+        out["azure"] = {key: value for key, value in azure.items() if value is not None}
+    if any(value is not None for value in bedrock.values()):
+        out["bedrock"] = {key: value for key, value in bedrock.items() if value is not None}
+    if any(value is not None for value in ollama.values()):
+        out["ollama"] = {key: value for key, value in ollama.items() if value is not None}
+    return out
+
+
+def _persona_to_dict(persona: Persona) -> dict[str, Any]:
+    out = {
+        key: value
+        for key, value in persona.__dict__.items()
+        if key not in {"hr_familiarity", "privacy_sensitivity"} and value is not None
+    }
+    out["domain_familiarity"] = persona.domain_familiarity
+    out["data_sensitivity"] = persona.data_sensitivity
+    return out
+
+
+def _scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
+    out = {
+        key: value
+        for key, value in scenario.__dict__.items()
+        if key != "failure_injection" and value is not None
+    }
+    out["failure_injection"] = scenario.failure_injection.__dict__.copy()
+    return out
+
+
 def _target_to_dict(target) -> dict[str, Any]:
     out = target.__dict__.copy()
+    if isinstance(out.get("auth"), dict):
+        out["auth"] = {key: "<redacted>" for key in out["auth"]}
     if target.browser is not None:
         out["browser"] = target.browser.__dict__
     if target.agentcore is not None:

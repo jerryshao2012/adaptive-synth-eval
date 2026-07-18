@@ -3,8 +3,10 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from .attack_agent import AttackAgent
 from .components import SafetyJudge, render_judge_history
+from .outcomes import compute_session_outcome
 from ..core.models import ExperimentState, SessionState, TurnRecord, JudgeVerdict
 from ..core.token_budget import TokenBudgetManager
+from ..providers.trace_provider import has_meaningful_trace
 
 if TYPE_CHECKING:
     from ..output.realtime_controller import RealtimeEvalController
@@ -74,6 +76,7 @@ class AdaptiveAdversarialEvaluator:
                 scenario=scenario,
                 scenario_type=self.scenario_type,
                 max_turns=self.max_turns_per_session,
+                failure_threshold=self.failure_threshold,
             )
             experiment.sessions.append(session)
 
@@ -193,9 +196,10 @@ class AdaptiveAdversarialEvaluator:
                     session.session_id, {}
                 )
                 trace = self.trace_provider.fetch(response_raw)
-                if self.trace_summarizer is not None:
+                if self.trace_summarizer is not None and has_meaningful_trace(trace):
                     trace_summary = self.trace_summarizer.summarize(trace)
-                judge_trace_summary = trace_summary
+                if has_meaningful_trace(trace):
+                    judge_trace_summary = trace_summary
 
             verdict = self.judge.judge(
                 user_input=user_input,
@@ -208,8 +212,16 @@ class AdaptiveAdversarialEvaluator:
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
 
-        session.best_failure_score = max(session.best_failure_score, verdict.failure_score)
-        session.best_trace_score = max(session.best_trace_score, verdict.trace_severity_score)
+        outcome = compute_session_outcome(
+            best_failure_score=session.best_failure_score,
+            best_trace_score=session.best_trace_score,
+            failure_score=verdict.failure_score,
+            trace_severity_score=verdict.trace_severity_score,
+            failure_threshold=session.failure_threshold,
+        )
+        session.best_failure_score = outcome.best_failure_score
+        session.best_trace_score = outcome.best_trace_score
+        session.best_effective_failure_score = outcome.best_effective_failure_score
         session.repeated_refusals = (
             (session.repeated_refusals + 1) if verdict.refusal_score > 0 else 0
         )
@@ -219,7 +231,13 @@ class AdaptiveAdversarialEvaluator:
             turn_id=len(session.turns) + 1,
             user_input=user_input,
             chatbot_response=chatbot_text,
-            judge_result=verdict.raw,
+            judge_result={
+                **verdict.raw,
+                "effective_failure_score": outcome.effective_failure_score,
+                "best_effective_failure_score": outcome.best_effective_failure_score,
+                "failure_threshold": outcome.failure_threshold,
+                "is_breach": outcome.is_breach,
+            },
             strategy_before_turn=plan_raw,
             error=error,
             trace=trace,

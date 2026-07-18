@@ -6,6 +6,7 @@ budget reflects the full run cost.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager, TokenUsage
@@ -83,43 +84,77 @@ class BudgetMeter:
     """
     budget: TokenBudgetManager
     components: dict[str, ComponentMeter] = field(default_factory=dict)
+    _lock: threading.RLock = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._lock = self.budget._lock
 
     def register(self, component: str, model: str) -> None:
-        self.components.setdefault(component, ComponentMeter(component=component, model=model))
+        with self._lock:
+            self.components.setdefault(component, ComponentMeter(component=component, model=model))
 
     def record(self, component: str, prompt: int, completion: int) -> None:
         """Record usage AND charge against the global budget.
         Use for synth and target calls (which don't otherwise hit TokenBudgetManager).
         """
-        meter = self.components.get(component)
-        if meter is None:
-            meter = ComponentMeter(component=component, model="unknown")
-            self.components[component] = meter
-        meter.add(prompt, completion)
-        self.budget.add(TokenUsage(prompt_tokens=int(prompt or 0), completion_tokens=int(completion or 0)))
+        with self._lock:
+            meter = self.components.get(component)
+            if meter is None:
+                meter = ComponentMeter(component=component, model="unknown")
+                self.components[component] = meter
+            meter.add(prompt, completion)
+            self.budget.add(TokenUsage(
+                prompt_tokens=int(prompt or 0), completion_tokens=int(completion or 0)
+            ))
 
     def record_passthrough(self, component: str, prompt: int, completion: int) -> None:
         """Record usage on the per-component meter only; the global budget is
         already being updated elsewhere (e.g. by ARE's LLMClient.complete_json).
         """
-        meter = self.components.get(component)
-        if meter is None:
-            meter = ComponentMeter(component=component, model="unknown")
-            self.components[component] = meter
-        meter.add(prompt, completion)
+        with self._lock:
+            meter = self.components.get(component)
+            if meter is None:
+                meter = ComponentMeter(component=component, model="unknown")
+                self.components[component] = meter
+            meter.add(prompt, completion)
 
     @property
     def total_cost_usd(self) -> float:
-        return sum(m.cost_usd for m in self.components.values())
+        with self._lock:
+            return sum(m.cost_usd for m in self.components.values())
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "budget": self.budget.snapshot(),
+                "components": [meter.to_dict() for meter in self.components.values()],
+            }
+
+    @classmethod
+    def from_snapshot(cls, payload: dict, *, max_total_tokens: int) -> "BudgetMeter":
+        budget = TokenBudgetManager(max_total_tokens=max_total_tokens)
+        budget.restore_usage(payload.get("budget", {}))
+        meter = cls(budget=budget)
+        for raw in payload.get("components", []):
+            component = ComponentMeter(
+                component=str(raw.get("component", "unknown")),
+                model=str(raw.get("model", "unknown")),
+                prompt_tokens=int(raw.get("prompt_tokens", 0) or 0),
+                completion_tokens=int(raw.get("completion_tokens", 0) or 0),
+                calls=int(raw.get("calls", 0) or 0),
+            )
+            meter.components[component.component] = component
+        return meter
 
     def summary(self, *, stopped_due_to_budget: bool) -> dict:
-        return {
-            "max_total_tokens": self.budget.max_total_tokens,
-            "used_total_tokens": self.budget.used_total_tokens,
-            "used_prompt_tokens": self.budget.used_prompt_tokens,
-            "used_completion_tokens": self.budget.used_completion_tokens,
-            "remaining_tokens": self.budget.remaining_tokens,
-            "stopped_due_to_budget": stopped_due_to_budget,
-            "estimated_cost_usd": round(self.total_cost_usd, 4),
-            "per_component": [m.to_dict() for m in self.components.values()],
-        }
+        with self._lock:
+            return {
+                "max_total_tokens": self.budget.max_total_tokens,
+                "used_total_tokens": self.budget.used_total_tokens,
+                "used_prompt_tokens": self.budget.used_prompt_tokens,
+                "used_completion_tokens": self.budget.used_completion_tokens,
+                "remaining_tokens": self.budget.remaining_tokens,
+                "stopped_due_to_budget": stopped_due_to_budget,
+                "estimated_cost_usd": round(self.total_cost_usd, 4),
+                "per_component": [m.to_dict() for m in self.components.values()],
+            }
