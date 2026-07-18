@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 from adaptive_synth_eval.monitoring.fingerprint import compute_metric_content_fingerprint
-from ._base import MetricSpec
+from ._base import MetricSpec, parse_judge_spec
 
 
 class MetricRegistry:
@@ -31,6 +31,7 @@ class MetricRegistry:
             fail_below = float(data["fail_below"])
             invert_llm_score = bool(data.get("invert_llm_score", False))
             prompt_template = data["prompt_template"]
+            judge = parse_judge_spec(data.get("judge"), metric_key=key)
 
             # Validate threshold ordering.
             if fail_below >= warn_below:
@@ -67,6 +68,7 @@ class MetricRegistry:
                 prompt_template=prompt_template,
                 heuristic=h_rule,
                 content_fingerprint=content_fp,
+                judge=judge,
             )
             self._specs[spec.key] = spec
 

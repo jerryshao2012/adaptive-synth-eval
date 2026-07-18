@@ -15,6 +15,7 @@ import yaml
 
 from adaptive_synth_eval.monitoring.fingerprint import compute_metric_content_fingerprint
 from .metrics._base import MetricSpec as MetricDefinition
+from .metrics._base import parse_judge_spec
 from .metrics.registry import MetricRegistry
 
 
@@ -95,6 +96,7 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
             _validate_thresholds(key, warn_below, fail_below)
 
             invert = bool(defn.get("invert_llm_score", False))
+            judge = parse_judge_spec(defn.get("judge"), metric_key=key)
 
             h_data = defn.get("heuristic")
             h_rule: dict | None = h_data if isinstance(h_data, dict) else None
@@ -120,6 +122,7 @@ def load_metrics_config(path: Path | None = None) -> MetricsConfig:
                 prompt_template=prompt_template,
                 heuristic=h_rule,
                 content_fingerprint=content_fp,
+                judge=judge,
             )
             metrics[key] = metric
             groups.add(evaluation_group)

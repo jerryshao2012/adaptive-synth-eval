@@ -116,6 +116,95 @@ def test_unchanged_config_skips_all_rows(tmp_path):
     assert state.get("policy_fingerprints") is not None
 
 
+def test_append_only_history_continues_from_saved_position(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_append"
+    _write_chat_history(run_dir, total_rows=2)
+    args = _monitor_args(run_dir, sample_size=1000)
+
+    assert main(args) == 0
+    history_path = run_dir / "chat_history.jsonl"
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "timestamp": "2026-01-01T00:02:00",
+            "conversation_id": "conv-3",
+            "turn_id": 3,
+            "persona_id": "P001",
+            "user_message": "How does policy apply to case 3?",
+            "bot_response": "Policy answer for case 3.",
+        }) + "\n")
+
+    assert main(args) == 0
+
+    assert len(_read_jsonl(run_dir / "monitoring_scores.jsonl")) == 3
+    state = json.loads((run_dir / "monitoring_state.json").read_text(encoding="utf-8"))
+    assert state["chat_history_source"]["size_bytes"] == history_path.stat().st_size
+    assert len(state["chat_history_source"]["sha256"]) == 64
+
+
+def test_rewritten_history_rescans_and_refreshes_reference_input_batch(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_rewrite"
+    _write_chat_history(run_dir, total_rows=1)
+    history_path = run_dir / "chat_history.jsonl"
+    row = _read_jsonl(history_path)[0]
+    row["reference_context"] = "context-v1"
+    history_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    args = _monitor_args(run_dir, sample_size=1000)
+
+    assert main(args) == 0
+    before = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    before_batches = before["value_versions"]["judge_batches"]
+
+    row["reference_context"] = "context-v2"
+    history_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    assert main(args) == 0
+
+    after = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    after_batches = after["value_versions"]["judge_batches"]
+    safety_id = next(
+        key for key, value in after_batches.items()
+        if value["evaluation_group"] == "safety"
+    )
+    performance_id = next(
+        key for key, value in after_batches.items()
+        if value["evaluation_group"] == "performance"
+    )
+    assert after_batches[safety_id]["input_fingerprint"] == before_batches[safety_id]["input_fingerprint"]
+    assert after_batches[performance_id]["input_fingerprint"] != before_batches[performance_id]["input_fingerprint"]
+    assert after["value_versions"]["metric_modes"]["groundedness"] == "reference_backed"
+
+
+def test_retryable_fallback_rescans_and_refreshes_only_stale_batch(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_retry"
+    _write_chat_history(run_dir, total_rows=1)
+    args = _monitor_args(run_dir, sample_size=1000)
+    assert main(args) == 0
+
+    scores_path = run_dir / "monitoring_scores.jsonl"
+    score = _read_jsonl(scores_path)[0]
+    performance_id = next(
+        key for key, value in score["value_versions"]["judge_batches"].items()
+        if value["evaluation_group"] == "performance"
+    )
+    score["value_versions"]["judge_batches"][performance_id]["refresh_quality"] = (
+        "heuristic_fallback"
+    )
+    scores_path.write_text(json.dumps(score) + "\n", encoding="utf-8")
+    state_path = run_dir / "monitoring_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["retryable_fallbacks"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert main(args) == 0
+
+    refreshed = _read_jsonl(scores_path)[0]
+    assert all(
+        batch["refresh_quality"] == "dry_run"
+        for batch in refreshed["value_versions"]["judge_batches"].values()
+    )
+    final_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert final_state["retryable_fallbacks"] is False
+
+
 def test_resume_after_crash_preserves_scores(tmp_path):
     """Resume after partial run picks up correctly."""
     run_dir = tmp_path / "outputs" / "runs" / "run_c"
@@ -242,3 +331,29 @@ def test_content_fingerprint_changes_with_prompt():
     assert modified_composite != baseline, (
         "Changing a metric's content fingerprint must change the composite fingerprint"
     )
+
+
+def test_evaluation_fingerprint_changes_with_judge_protocol_or_metric_route():
+    config = load_metrics_config()
+    base_kwargs = {
+        "metric_content_fingerprints": config.metric_content_fingerprints,
+        "model_provider": "mixed",
+        "model_identifier": "metric_routed",
+        "judge_protocol_version": "protocol-v1",
+        "judge_settings": {"temperature": 0.0, "max_tokens": 800},
+        "metric_judge_fingerprints": {"toxicity": "judge-a"},
+    }
+
+    baseline = compute_evaluation_fingerprint(**base_kwargs)
+    changed_protocol = compute_evaluation_fingerprint(
+        **{**base_kwargs, "judge_protocol_version": "protocol-v2"}
+    )
+    changed_route = compute_evaluation_fingerprint(
+        **{
+            **base_kwargs,
+            "metric_judge_fingerprints": {"toxicity": "judge-b"},
+        }
+    )
+
+    assert changed_protocol != baseline
+    assert changed_route != baseline

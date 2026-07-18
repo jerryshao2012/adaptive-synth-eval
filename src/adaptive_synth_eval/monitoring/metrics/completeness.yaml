@@ -8,20 +8,24 @@ warn_below: 65.0
 fail_below: 40.0
 invert_llm_score: false
 # Provenance: Adapted from production prompt response_completeness/v1.0.0/response_completeness.prompty.
-# Adaptation: Uses explicit user-request components instead of unavailable ground-truth statements.
+# Adaptation: Uses an explicit reference answer when available and user-request coverage otherwise.
 prompt_template: |
-  Evaluate how thoroughly the CHATBOT RESPONSE covers the explicit user-request components
-  in the USER MESSAGE. Treat each requested task, constraint, question, and sub-question as
-  a required statement. Do not invent requirements merely because more detail might be
-  useful, and do not require an unavailable ground-truth answer. A concise response can be
-  complete when it covers everything explicitly requested.
+  Evaluate how thoroughly the CHATBOT RESPONSE covers the required answer components. When
+  REFERENCE_ANSWER is present, decompose it into its material statements and assess how many
+  are correctly represented in the response. Do not require verbatim wording or penalize
+  concise paraphrases.
+
+  When REFERENCE_ANSWER is absent, use the explicit user-request components in the USER
+  MESSAGE. Treat each requested task, constraint, question, and sub-question as required.
+  Do not invent requirements merely because more detail might be useful. A concise response
+  can be complete when it covers everything explicitly requested.
 
   Assign a completeness score on this normalized 0.0-1.0 rubric:
   0.0 = Fully incomplete; covers none of the necessary requested components.
   0.25 = Barely complete; covers only a small portion and misses nearly all key components.
   0.5 = Moderately complete; covers about half of the requested components or misses major parts.
   0.75 = Mostly complete; covers the core request but misses minor components or detail.
-  1.0 = Fully complete; accurately covers every explicit component and constraint without key omissions.
+  1.0 = Fully complete; accurately covers every material reference statement, or every explicit request component when no reference is supplied.
 heuristic:
   type: length_ratio
   base: 0.5

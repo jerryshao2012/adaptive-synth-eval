@@ -15,6 +15,7 @@ from adaptive_synth_eval.monitoring.fingerprint import (
 from adaptive_synth_eval.monitoring.metric_definitions import (
     load_metrics_config,
 )
+from adaptive_synth_eval.monitoring.metrics.registry import MetricRegistry
 from adaptive_synth_eval.monitoring.runner import (
     _build_group_prompt,
     _compute_heuristic_value,
@@ -35,6 +36,77 @@ def test_loads_all_ten_metrics():
         "style", "precision",
     }
     assert set(config.metrics.keys()) == expected
+
+
+def test_shipped_metrics_inherit_default_judge_route():
+    config = load_metrics_config()
+
+    assert all(metric.judge is None for metric in config.metrics.values())
+
+
+def test_registry_parses_optional_metric_judge_override(tmp_path):
+    metric_path = tmp_path / "relevance.yaml"
+    metric_path.write_text(
+        """
+key: relevance
+evaluation_group: performance
+label: Relevance
+description: Relevant response.
+detail: Measures relevance.
+eval_input_key: relevance
+warn_below: 85
+fail_below: 60
+invert_llm_score: false
+prompt_template: Evaluate relevance on a normalized 0.0-1.0 scale.
+judge:
+  provider: azure
+  model: judge-deployment
+  api_key_env: JUDGE_AZURE_KEY
+heuristic:
+  type: overlap
+""".strip(),
+        encoding="utf-8",
+    )
+
+    metric = MetricRegistry(tmp_path).get("relevance")
+
+    assert metric.judge is not None
+    assert metric.judge.provider == "azure_openai"
+    assert metric.judge.model == "judge-deployment"
+    assert metric.judge.api_key_env == "JUDGE_AZURE_KEY"
+
+
+@pytest.mark.parametrize(
+    ("judge_yaml", "message"),
+    [
+        ("provider: unsupported", "Unsupported judge provider"),
+        ("provider: openai\n  endpoint: https://example.com", "unknown field"),
+        ("provider: openai\n  model: '   '", "non-empty"),
+    ],
+)
+def test_registry_rejects_invalid_metric_judge_override(tmp_path, judge_yaml, message):
+    (tmp_path / "metric.yaml").write_text(
+        f"""
+key: metric
+evaluation_group: performance
+label: Metric
+description: Description.
+detail: Detail.
+eval_input_key: metric
+warn_below: 85
+fail_below: 60
+invert_llm_score: false
+prompt_template: Evaluate the response on a normalized 0.0-1.0 scale.
+judge:
+  {judge_yaml}
+heuristic:
+  type: overlap
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        MetricRegistry(tmp_path)
 
 
 def test_every_metric_has_valid_thresholds():
@@ -218,11 +290,26 @@ def test_compliance_gr_10_preserves_financial_interest_education_exception():
 
 
 def test_groundedness_does_not_treat_missing_external_evidence_as_failure():
-    groundedness = load_metrics_config().metrics["groundedness"].prompt_template.lower()
+    groundedness = " ".join(
+        load_metrics_config().metrics["groundedness"].prompt_template.lower().split()
+    )
 
+    assert "reference_context" in groundedness
+    assert "when reference_context is present" in groundedness
     assert "absence of external grounding evidence alone does not lower the score" in groundedness
     assert "penalize only clear contradictions, fabricated specifics, or unjustified certainty" in groundedness
     assert "do not penalize the act of supplying requested facts" in groundedness
+
+
+def test_completeness_uses_reference_answer_when_available_and_query_fallback():
+    completeness = " ".join(
+        load_metrics_config().metrics["completeness"].prompt_template.lower().split()
+    )
+
+    assert "reference_answer" in completeness
+    assert "when reference_answer is present" in completeness
+    assert "explicit user-request components" in completeness
+    assert "when reference_answer is absent" in completeness
 
 
 def test_every_metric_has_content_fingerprint():

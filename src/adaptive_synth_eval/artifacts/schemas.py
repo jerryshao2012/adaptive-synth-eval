@@ -29,6 +29,8 @@ class ChatHistoryRecord:
     retrieved_policy_ids: list[str] | None = None
     response_raw: dict[str, Any] | None = None
     generation_metadata: dict[str, Any] | None = None
+    reference_context: str | None = None
+    reference_answer: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

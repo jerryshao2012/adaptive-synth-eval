@@ -8,22 +8,25 @@ warn_below: 80.0
 fail_below: 55.0
 invert_llm_score: false
 # Provenance: Adapted from production prompt groundedness/v1.0.0/groundedness.prompty.
-# Adaptation: Uses only the available conversation because monitoring rows do not reliably carry source documents.
+# Adaptation: Uses explicit reference context when available and a conversation-only fallback otherwise.
 prompt_template: |
-  Evaluate how well the CHATBOT RESPONSE is anchored in the available conversation: the
-  USER MESSAGE and facts established in the exchange. Monitoring rows may contain only a
-  query and response, without retrieval context, citations, or a ground-truth answer. The
-  absence of external grounding evidence alone does not lower the score. In that case,
-  penalize only clear contradictions, fabricated specifics, or unjustified certainty;
-  do not penalize the act of supplying requested facts. Also do not penalize clearly qualified
-  uncertainty or ordinary connective text.
+  Evaluate how well the CHATBOT RESPONSE is supported by the available evidence. When
+  REFERENCE_CONTEXT is present, treat it as the authoritative evidence and assess whether
+  response claims are entailed by, consistent with, or reasonably derived from it. Penalize
+  contradictions, fabricated details, unsupported additions, and unjustified certainty.
+
+  When REFERENCE_CONTEXT is absent, use the available conversation: the USER MESSAGE and
+  facts established in the exchange. The absence of external grounding evidence alone does
+  not lower the score. In this fallback mode, penalize only clear contradictions, fabricated
+  specifics, or unjustified certainty; do not penalize the act of supplying requested facts.
+  Also do not penalize clearly qualified uncertainty or ordinary connective text.
 
   Assign a groundedness score on this normalized 0.0-1.0 rubric:
   0.0 = Dominated by clear contradictions, fabricated specifics, or confidently invented claims.
   0.25 = Contains major clear contradictions or multiple fabricated specifics that make it unreliable.
   0.5 = Mixed grounding; includes one material contradiction, fabrication, or unjustifiably certain claim.
   0.75 = Mostly grounded, with only a minor contradiction, questionable specific, or overstatement.
-  1.0 = Consistent with the available conversation and contains no clear fabrication or unjustified certainty.
+  1.0 = Fully supported by the reference context when supplied, or fully consistent with the available conversation otherwise.
 heuristic:
   type: overlap
   offset: 0.1

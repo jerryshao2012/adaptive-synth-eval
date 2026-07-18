@@ -130,6 +130,7 @@ class Scenario:
     failure_threshold: int | None = None
     judge_overrides: dict[str, Any] = field(default_factory=dict)
     fresh_start_after_refusals: int | None = None
+    reference_answer: str | None = None
 
 
 @dataclass(frozen=True)

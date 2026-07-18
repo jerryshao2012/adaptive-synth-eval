@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from adaptive_synth_eval.config.contract import ContractError, contract_to_dict, load_contract
+from adaptive_synth_eval.config.schemas import FailureInjection, Scenario
 
 
 def _base_contract(tmp_path):
@@ -62,6 +63,31 @@ def test_load_contract_normalizes_defaults_and_warns_for_legacy_tools(tmp_path):
     assert contract.output.base_dir == tmp_path
     assert contract.traffic.conversation_turns.min == 3
     assert any("tool_expectations" in warning for warning in contract.warnings)
+
+
+def test_load_contract_parses_optional_scenario_reference_answer(tmp_path):
+    payload = _base_contract(tmp_path)
+    payload["scenario_catalog"][0]["context"] = "Employees qualify after 90 days."
+    payload["scenario_catalog"][0]["reference_answer"] = (
+        "Eligibility begins after 90 days of employment."
+    )
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    contract = load_contract(path)
+    scenario = contract.scenario_catalog[0]
+
+    assert scenario.context == "Employees qualify after 90 days."
+    assert scenario.reference_answer == "Eligibility begins after 90 days of employment."
+
+
+def test_scenario_reference_answer_does_not_shift_extended_positional_arguments():
+    scenario = Scenario(
+        "S001", None, None, [], FailureInjection(), {}, "context", "adversarial",
+    )
+
+    assert scenario.scenario_type == "adversarial"
+    assert scenario.reference_answer is None
 
 
 def test_load_contract_rejects_missing_persona_required_field(tmp_path):

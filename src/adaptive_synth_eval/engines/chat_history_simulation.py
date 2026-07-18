@@ -398,6 +398,8 @@ async def run_simulation_async(
                 expected_retrieval_topics=scenario.expected_retrieval_topics,
                 planned_failure_modes=turn.planned_failure_modes,
                 applied_failure_modes=turn.applied_failure_modes,
+                reference_context=scenario.context,
+                reference_answer=scenario.reference_answer,
                 groundedness_score=score.groundedness_score,
                 relevance_score=score.relevance_score,
                 safety_score=score.safety_score,

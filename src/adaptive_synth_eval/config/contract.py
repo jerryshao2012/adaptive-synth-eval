@@ -303,6 +303,7 @@ def _parse_scenario(payload: dict[str, Any], warnings: list[str]) -> Scenario:
         success_criteria=cast(dict[str, Any], payload["success_criteria"]) if isinstance(payload["success_criteria"],
                                                                                          dict) else {},
         context=payload.get("context"),
+        reference_answer=payload.get("reference_answer"),
         scenario_type=str(payload["scenario_type"]) if payload.get("scenario_type") is not None else None,
         scenario_text=str(payload["scenario_text"]) if payload.get("scenario_text") is not None else None,
         hijack_target=str(payload["hijack_target"]) if payload.get("hijack_target") is not None else None,

@@ -89,11 +89,15 @@ def compute_evaluation_fingerprint(
         metric_content_fingerprints: dict[str, str],
         model_provider: str,
         model_identifier: str,
+        judge_protocol_version: str | None = None,
+        judge_settings: dict[str, Any] | None = None,
+        metric_judge_fingerprints: dict[str, str] | None = None,
 ) -> str:
-    """Compute a composite evaluation fingerprint from per-metric fingerprints + model.
+    """Compute a composite fingerprint from metric, model, and judge configuration.
 
     The fingerprint captures everything that affects LLM evaluation outputs:
-    every metric's prompt/template/thresholds/heuristic AND the model identity.
+    every metric's prompt/template/thresholds/heuristic, model identity, and
+    optional metric-routed judge protocol/settings.
 
     Changing any metric's content OR switching model/ deployment produces a
     different fingerprint, which signals that a fresh LLM evaluation is required.
@@ -111,6 +115,14 @@ def compute_evaluation_fingerprint(
         "model_provider": model_provider,
         "model_identifier": model_identifier,
     }
+    if judge_protocol_version is not None:
+        payload["judge_protocol_version"] = judge_protocol_version
+    if judge_settings is not None:
+        payload["judge_settings"] = judge_settings
+    if metric_judge_fingerprints is not None:
+        payload["metric_judge_fingerprints"] = dict(
+            sorted(metric_judge_fingerprints.items())
+        )
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -162,14 +174,20 @@ def resolve_model_identifier(llm: LLMClient) -> str:
     if provider == "azure_openai":
         import os
 
+        configured = str(
+            llm.config.get("azure_deployment")
+            or llm.config.get("model")
+            or ""
+        ).strip()
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
-        return deployment or "azure_openai"
+        return configured or deployment or "azure_openai"
 
     if provider in ("anthropic", "openai", "ollama", "bedrock"):
         import os
 
+        configured = str(llm.config.get("model") or "").strip()
         model = os.getenv("MODEL_NAME", "").strip()
-        return model or provider
+        return configured or model or provider
 
     return provider
 

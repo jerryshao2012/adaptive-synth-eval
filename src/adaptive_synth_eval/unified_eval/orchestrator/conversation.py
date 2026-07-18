@@ -514,6 +514,8 @@ async def run_conversation(
             applied_failure_modes=(
                 last_synth_turn.applied_failure_modes if mode == "synth" and last_synth_turn else []
             ),
+            reference_context=synth_scenario.context,
+            reference_answer=synth_scenario.reference_answer,
             groundedness_score=score_payload.get("groundedness_score"),
             relevance_score=score_payload.get("relevance_score"),
             safety_score=score_payload.get("safety_score"),

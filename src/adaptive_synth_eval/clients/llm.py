@@ -147,6 +147,7 @@ class LLMClient:
                 api_version = self._cfg("azure_api_version", "AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
                 verify_ssl = os.getenv("VERIFY_SSL", "true").lower() != "false"
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                top_p = self._cfg_float("top_p", "MODEL_TOP_P", 1.0)
                 max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
 
                 logger.info(
@@ -158,6 +159,7 @@ class LLMClient:
                     azure_deployment=deployment,
                     api_version=api_version,
                     temperature=temperature,
+                    top_p=top_p,
                     max_tokens=max_tokens,
                     http_client=httpx.Client(verify=verify_ssl),
                     **auth_kwargs,
@@ -167,6 +169,7 @@ class LLMClient:
             elif self.model_provider == "anthropic":
                 from langchain_anthropic import ChatAnthropic
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                top_p = self._cfg_float("top_p", "MODEL_TOP_P", 1.0)
                 max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
                 model_name = self._cfg("model", "MODEL_NAME", "claude-sonnet-4-5-20250929")
                 key_env = self._cfg("api_key_env", "ANTHROPIC_API_KEY_ENV", "ANTHROPIC_API_KEY")
@@ -174,6 +177,7 @@ class LLMClient:
                 self._model = ChatAnthropic(
                     model=model_name,
                     temperature=temperature,
+                    top_p=top_p,
                     max_tokens=max_tokens,
                     api_key=SecretStr(os.getenv(key_env, "")),
                 )
@@ -181,6 +185,7 @@ class LLMClient:
             elif self.model_provider == "openai":
                 from langchain_openai import ChatOpenAI
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                top_p = self._cfg_float("top_p", "MODEL_TOP_P", 1.0)
                 max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
                 model_name = self._cfg("model", "MODEL_NAME", "gpt-4o-mini")
                 key_env = self._cfg("api_key_env", "OPENAI_API_KEY_ENV", "OPENAI_API_KEY")
@@ -188,6 +193,7 @@ class LLMClient:
                 self._model = ChatOpenAI(
                     model=model_name,
                     temperature=temperature,
+                    top_p=top_p,
                     max_tokens=max_tokens,
                     api_key=SecretStr(os.getenv(key_env, "")),
                 )
@@ -195,6 +201,7 @@ class LLMClient:
             elif self.model_provider == "ollama":
                 from langchain_ollama import ChatOllama
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                top_p = self._cfg_float("top_p", "MODEL_TOP_P", 1.0)
                 model_name = self._cfg("model", "MODEL_NAME", "qwen3.6:35b-a3b")
                 base_url = self._cfg("ollama_base_url", "OLLAMA_BASE_URL",
                                      os.getenv("OLLAMA_API_BASE", "http://localhost:11434"))
@@ -203,6 +210,7 @@ class LLMClient:
                     model=model_name,
                     base_url=base_url,
                     temperature=temperature,
+                    top_p=top_p,
                     keep_alive="15m",
                     reasoning=False,
                 )
@@ -211,6 +219,7 @@ class LLMClient:
                 from langchain_openai import ChatOpenAI
                 model_name = self._cfg("model", "MODEL_NAME", "amazon.nova-micro-v1:0")
                 temperature = self._cfg_float("temperature", "MODEL_TEMPERATURE", 0.7)
+                top_p = self._cfg_float("top_p", "MODEL_TOP_P", 1.0)
                 max_tokens = self._cfg_int("max_tokens", "MODEL_MAX_TOKENS", 1024)
                 key_env = self._cfg("api_key_env", "AWS_BEDROCK_TOKEN_ENV", "AWS_BEARER_TOKEN_BEDROCK")
                 region = self._cfg("bedrock_region", "AWS_REGION", "us-east-1")
@@ -220,6 +229,7 @@ class LLMClient:
                 self._model = ChatOpenAI(
                     model=model_name,
                     temperature=temperature,
+                    top_p=top_p,
                     max_tokens=max_tokens,
                     api_key=SecretStr(os.getenv(key_env, "")),
                     base_url=base_url,
@@ -255,8 +265,14 @@ class LLMClient:
             key_env = self._cfg("api_key_env", "AZURE_OPENAI_API_KEY_ENV", "AZURE_OPENAI_API_KEY")
             return {"api_key": SecretStr(os.getenv(key_env, ""))}
 
-    def complete(self, prompt: str) -> LLMResult:
-        """Generate a completion using the configured LLM provider."""
+    def complete(
+            self,
+            prompt: str,
+            *,
+            system_prompt: str | None = None,
+            json_mode: bool = False,
+    ) -> LLMResult:
+        """Generate a completion, optionally using role-separated JSON judging."""
         if not self.enabled:
             return LLMResult(content="", raw={"mock": True, "prompt": prompt}, error="llm_disabled")
 
@@ -276,8 +292,20 @@ class LLMClient:
                     error="model_initialization_failed"
                 )
 
-            # Use LangChain's invoke method
-            response = model.invoke(prompt)
+            invocation_model = model
+            if json_mode and self.model_provider in {"openai", "azure_openai", "bedrock"}:
+                invocation_model = model.bind(response_format={"type": "json_object"})
+
+            invocation: Any = prompt
+            if system_prompt is not None:
+                from langchain_core.messages import HumanMessage, SystemMessage
+
+                invocation = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt),
+                ]
+
+            response = invocation_model.invoke(invocation)
             content = response.content if hasattr(response, 'content') else str(response)
 
             return LLMResult(
