@@ -1,6 +1,8 @@
 # Output Artifacts & Schemas
 
-All simulation outputs and evaluation summaries are written to the target output directory under `outputs/runs/<run_id>/`.
+This is the schema authority for files emitted by evaluation and monitoring runs. For workflow instructions, see the [CLI guide](cli_usage.md), [unified evaluation guide](unified_evaluation.md), and [monitoring guide](monitoring.md). Contract fields are defined separately in the [contract reference](contracts.md).
+
+With the default output configuration, simulation outputs and evaluation summaries are written under `outputs/runs/<run_id>/`. A custom `output.base_dir` changes the base location.
 
 ## Directory Structure
 
@@ -27,7 +29,7 @@ outputs/runs/<run_id>/
 ├── monitoring_state.json       # Monitoring resume/checkpoint state
 ├── eval_progress.md            # Monitoring progress/status markdown
 └── personas/
-	└── <persona_id>_memory.md  # Unified mode persona memory files
+	└── <persona_id>_memory.md  # Synth and unified persona memory files
 ```
 
 Notes:
@@ -35,21 +37,90 @@ Notes:
 - `unified` mode produces common artifacts plus unified-specific files listed above.
 - Monitoring artifacts (`monitoring_*` and `eval_progress.md`) are created only when running `ase monitor run` against the run folder.
 
-`contract.normalized.json` uses canonical unified contract schema version 2. Provider
+For **unified runs**, `contract.normalized.json` uses canonical unified contract schema version 2. Provider
 settings are emitted in nested `azure`, `bedrock`, and `ollama` blocks, schedules are
 fully serialized, and literal target authentication values are redacted.
+The parser also accepts schema-v1 contracts and legacy flat `LLMSpec` fields, including
+`bedrock_endpoint`, at the top-level, component, and target LLM locations. If a nested and
+legacy field conflict, the nested value wins with a warning. Unsupported future schema
+versions fail validation. `judge_overrides` is round-tripped with a warning but is not
+currently applied to judge behavior. Synth runs serialize their separate synth contract
+shape and do not label it unified schema version 2.
 
-`run_state.json` version 2 tracks completed conversation IDs, rolling metrics, actual
+For **unified runs**, `run_state.json` version 2 tracks completed conversation IDs, rolling metrics, actual
 token/component usage, committed attack memory, and fingerprints of both the effective
 contract and exact filtered run plan. Resume rejects a changed v2 contract or plan;
 legacy v1 state remains best-effort with a warning. Transient in-flight token
-reservations are deliberately not persisted.
+reservations are deliberately not persisted. Synth runs currently write run-state
+version 1; the unified v2 fingerprint and memory semantics do not apply to synth state.
+
+For **unified runs**, `run_plan.json` is the exact ordered and filtered conversation plan,
+including each resolved turn schedule. The plan and canonical secret-safe contract are
+independently fingerprinted with SHA-256 in unified run-state version 2. Synth also emits
+a run plan, but it is not covered by these unified-v2 fingerprint claims.
+
+Budget-driven unified runs are currently sequential. Finite plans use a bounded sliding
+window, with per-turn reservations acquired by a conversation task immediately before
+turn work. If an admitted task cannot reserve its first turn, no zero-turn conversation
+row is written and its ID is not marked complete.
 
 Unified adversarial rows in `scores.jsonl` and `turns.jsonl` retain the response-only
 `failure_score`/`best_failure_score` and add `effective_failure_score`,
 `best_effective_failure_score`, `failure_threshold`, and `is_breach`. Effective scores
 are the maximum of response and trajectory severity, so trajectory-only breaches are
 reported without changing response-score semantics.
+
+### Unified adversarial score fields
+
+`scores.jsonl` is the authoritative normalized verdict artifact. Every adversarial score
+row includes:
+
+| Field group | Fields |
+| :--- | :--- |
+| Response verdict | `failure_score`, `refusal_quality`, `harm_potential`, `specificity`, `refusal_score`, `guardrail_worked`, `near_miss`, `confidence` |
+| Explanation/error | `failure_type`, `short_reason`, `reasoning`, `judge_error` |
+| Trajectory verdict | `trace_severity_score`, `overall_severity_score`, `trajectory_risk`, `failure_surface`, `tool_call_risk_score`, `unsafe_delegation_score`, `instruction_priority_violation` |
+| Outcome | `best_failure_score`, `effective_failure_score`, `best_effective_failure_score`, `failure_threshold`, `is_breach` |
+
+The outcome fields have these stable meanings:
+
+| Field | Meaning |
+| :--- | :--- |
+| `failure_score` | Response-only judge score for this turn |
+| `best_failure_score` | Highest response-only score in the conversation so far |
+| `effective_failure_score` | `max(failure_score, trace_severity_score)` for this turn |
+| `best_effective_failure_score` | Highest effective score in the conversation so far |
+| `failure_threshold` | Scenario threshold, or the global adversarial threshold when the scenario omits one |
+| `is_breach` | Whether this row's effective score meets this row's threshold |
+
+`turns.jsonl` carries those six outcome fields on adversarial rows. Conversation rows and
+top-level adversarial-session rows carry the best-score/threshold/breach subset, while
+each adversarial-session turn carries the six turn-level fields. `failed_examples.jsonl`
+contains only rows where `is_breach` is true. Full normalized verdict completeness is
+guaranteed in `scores.jsonl`; other artifacts retain the verdict subsets appropriate to
+their purpose.
+
+Conversation `termination_reason` values include `completed`, `failure_threshold`,
+`session_policy`, `budget_exhausted`, `stopped`, and `runner_exception` where applicable.
+
+When trajectory mode is enabled, `run_summary.json` adds `trajectory` with
+`max_trace_severity_score`, `mean_trace_severity_score`, `sessions_with_signal`, and
+`failure_surface_counts`. Empty traces stay response-only and do not call the summarizer.
+The current mean is calculated from positive trace-severity signals only; zero-severity
+meaningful traces are not included.
+
+### Attack memory artifact
+
+`attack_memory.json` is written for `shared` and `per_persona` modes and omitted for
+`none`. Shared mode stores one `entries` array. Per-persona mode stores a `personas` map,
+with one independently capped memory payload per persona. Entries include the legacy
+response-only `failure_score` plus `effective_failure_score` and `failure_threshold`;
+legacy entries default the effective score to their response score and the threshold to
+`3`.
+
+> **Current limitation:** memory entries preserve their historical thresholds, but the
+> planner's rendered worked/partial/refused labels currently classify aggregated scores
+> against the current session threshold rather than each entry's stored threshold.
 
 ### Monitoring score version metadata
 
@@ -66,7 +137,7 @@ next monitoring run.
 
 ## Chat History Schema
 
-The principal files `chat_history.jsonl` and `chat_history.csv` share the same column layout, documenting every turn:
+The principal files `chat_history.jsonl` and `chat_history.csv` document every turn. They share these fields:
 
 | Field Name | Type | Description |
 | :--- | :--- | :--- |
@@ -90,8 +161,12 @@ The principal files `chat_history.jsonl` and `chat_history.csv` share the same c
 | `error` | `str` | HTTP or backend client error string (if failed) |
 | `synthetic_flag` | `bool` | True if synthetic generation |
 
-### Optional/Metadata Fields (Unified Runs)
+### Optional and metadata fields
 
 - `retrieved_policy_ids` (`list`): List of document or policy IDs retrieved by the target bot.
 - `response_raw` (`dict`): The raw JSON payload returned by the chatbot endpoint.
-- `generation_metadata` (`dict`): Unified metadata including turn type (`synth` or `adversarial`) and red-teaming strategy fields.
+- `generation_metadata` (`dict`): Generation metadata; unified rows include turn type (`synth` or `adversarial`) and adversarial strategy fields where applicable.
+
+`response_raw` is retained in `chat_history.jsonl` but intentionally omitted from the
+CSV field list. `retrieved_policy_ids` and `generation_metadata` are present in both
+formats when available.

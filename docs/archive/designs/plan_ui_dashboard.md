@@ -1,4 +1,5 @@
 # AI Evaluation Continuous Monitoring Dashboard — Implementation Plan
+> **Archive status — Superseded plan.** This historical implementation plan is retained for design context. See the [implemented dashboard](../../../ai-eval-dashboard/README.md) and the current [monitoring documentation](../../monitoring.md).
 
 ## 1. Overview
 

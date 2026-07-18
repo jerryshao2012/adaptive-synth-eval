@@ -1,181 +1,129 @@
-# Loop Engineering for Adversarial Adaptive Synthetic Evaluation
+# Loop Engineering
 
-Date: 2026-06-10
-Last Updated: 2026-06-16
+This guide is the conceptual reference for continuous evaluation loops in Adaptive Synth Eval. For startup, incident response, and routine operation, use the [Loop operations runbook](loop_operations_runbook.md).
 
-## 1. Purpose
+## Readiness model
 
-This document is the cleaned, current source of truth for loop engineering in `adaptive-synth-eval`.
+The readiness level controls how much authority a loop may exercise:
 
-- continuously evaluate target chatbot behavior with adaptive synthetic and adversarial traffic,
-- reason over prior outcomes,
-- apply constrained recoveries under checker guardrails,
-- run unattended with strict pause/budget/safety controls at L3.
+- `L0`: direct, one-shot contract execution with `ase run`; it is not a loop profile level.
+- `L1`: report-only looping with planner selection and post-run reflection.
+- `L2`: assisted actions guarded by a maker/checker split.
+- `L3`: unattended scheduling with persistent pause state, active windows, budget caps, and multi-profile coordination.
 
-## 2. Readiness Model and Current Status
+Loop profile parsing accepts `L1`, `L2`, and `L3`. A direct evaluation remains the `L0` baseline.
 
-Readiness levels used in this repo:
-- `L0`: static contract execution (`ase run`)
-- `L1`: report-only loops with planner + reflection
-- `L2`: assisted actions with maker/checker enforcement
-- `L3`: unattended loops with kill switch, caps, and coordination
+## Module architecture
 
-## 3. Implemented Architecture
+Loop runtime code lives in `src/adaptive_synth_eval/loop/`:
 
-### 3.1 Runtime modules
+- `profiles.py` parses and validates checked-in profiles and their targets.
+- `planner.py` selects targets and reflects on outcomes through an `LLMClient`, with deterministic fallback behavior.
+- `policy.py` proposes bounded assisted actions for L2 and L3 profiles.
+- `verifier.py` applies the checker decision before target execution.
+- `scheduler.py` runs one profile or coordinates multiple profiles by priority, active window, and failure backoff.
+- `state_store.py` persists machine-readable state and renders operator-facing state, budget, and log files.
+- `audit.py` reports profile readiness, safeguards, and required artifact availability.
 
-Loop runtime lives under `src/adaptive_synth_eval/loop/`:
-- `profiles.py`: profile schema parsing and validation
-- `state_store.py`: durable loop state + markdown/log artifacts + pause/resume state updates
-- `planner.py`: planner/reflection reasoning via `LLMClient` with deterministic fallback
-- `policy.py`: assisted-action planning, denylist and retry policy logic
-- `verifier.py`: checker decisions and rejection behavior
-- `scheduler.py`: single-profile scheduler + multi-profile coordinator (priority/backoff/window-aware)
-- `audit.py`: readiness/safeguards report generation
+The `loop` command group in `src/adaptive_synth_eval/cli.py` connects these modules to the existing evaluation runner. It does not introduce a separate contract executor.
 
-CLI wiring is in `src/adaptive_synth_eval/cli.py` under the `loop` command group.
+## Cycle model
 
-### 3.2 Core loop flow
+A loop cycle follows this control flow:
 
-1. Load profile and initialize loop assets.
-2. Read persisted loop state.
-3. Planner proposes next target(s) and rationale.
-4. Policy engine proposes assisted actions (if eligible).
-5. Checker approves/rejects target/action plan.
-6. Execute target run via existing `ase run` internals.
-7. Reflect on outcomes.
-8. Persist state, markdown summaries, and append-only log.
+1. Load the profile and persisted state.
+2. Enforce L3 preflight controls when applicable.
+3. Ask the planner to select targets and explain the selection.
+4. Let the policy engine propose eligible assisted actions.
+5. Require checker approval for L2 and L3 target/action plans.
+6. Execute selected contracts through the existing `ase run` internals.
+7. Reflect on run results.
+8. Persist the outcome, budget counters, assisted-action history, and operator artifacts.
 
-At `L3`, preflight controls are enforced before execution:
-- kill switch (`paused`),
-- daily run/token caps,
-- active window eligibility.
+Without a configured or available reasoning model, planning and reflection use deterministic report-only fallbacks.
 
-## 4. Loop CLI Commands
+## Control guarantees
 
-Supported commands:
-- `ase loop init --profile <id> [--profiles-dir loops/profiles --output-dir outputs]`
-- `ase loop run --profile <id> [--dry-run|--no-dry-run]`
-- `ase loop start --profile <id> [--once] [--max-cycles N]`
-- `ase loop start --all [--once] [--max-cycles N]`
-- `ase loop status [--profile <id>]`
-- `ase loop audit [--profile <id>]`
-- `ase loop pause --profile <id> [--reason "..."]`
-- `ase loop resume --profile <id>`
+### L1 report-only behavior
 
-Backward compatibility retained:
-- `validate-contract`
-- `run`
-- `summarize`
+- The planner can select configured targets and record its rationale.
+- The loop runs the selected evaluation contracts and records reflection output.
+- No assisted recovery action is proposed by the policy engine.
 
-## 5. Profile Schema (Current)
+### L2 assisted behavior
 
-Loop profiles are stored under `loops/profiles/*.yaml`.
+- Policy and checker are separate steps in the execution path.
+- A denylist match rejects target execution.
+- High-risk or blocked assisted actions are rejected.
+- Per-action retry limits are enforced from `checker_policy.max_retry_attempts`.
+- Approved actions and their outcomes are written to the loop log.
 
-Common fields:
-- `profile_id`
-- `readiness_level` (`L1|L2|L3`)
-- `cadence`
-- `targets`
+Supported assisted actions include safe resume of incomplete runs, bounded restart of stale failed runs, unified concurrency caps, and regeneration of missing summaries.
+
+### L3 unattended behavior
+
+L3 adds these controls to L2:
+
+- Persistent `pause` and `resume` state acts as an admission kill switch for subsequent scheduler cycles.
+- Active windows gate scheduled execution.
+- Daily run and token caps are checked before a cycle and can auto-pause a profile after a cycle reaches a cap.
+- Consecutive checker failures can auto-pause a profile.
+- Multi-profile scheduling orders profiles by ascending `priority` value.
+- A failed profile receives bounded exponential backoff without preventing other eligible profiles from running.
+
+The scheduler reads pause state before starting each cycle. Pausing does not cancel a target or cycle already in progress; stopping in-flight work requires separately stopping the scheduler or active process and following the deployment's target-execution incident procedure.
+
+The readiness audit checks that an L3 profile has initialized artifacts, at least one daily cap, an active window, and a positive checker-failure threshold. It reports configuration readiness; it does not replace operational review.
+
+## Profile schema
+
+Profiles are YAML or JSON files under `loops/profiles/` by default.
+
+Required fields:
+
+- `profile_id`: stable profile identifier.
+- `readiness_level`: `L1`, `L2`, or `L3`.
+- `cadence`: cron-like cadence or an interval understood by the scheduler.
+- `targets`: non-empty list of target mappings; each target requires an existing `contract` path and may select `persona`, `scenario`, `adversarial_scenario`, or `dry_run`.
+
+Common optional fields:
+
 - `max_iterations_per_cycle`
 - `budget_policy_ref`
 - `human_gates`
+- `escalation_rules`
 - `denylist`
 - `checker_policy`
 - `llm_config`
 
-L3-focused fields:
+L3 scheduling and containment fields:
+
 - `paused`
 - `priority`
-- `active_windows`
+- `active_windows`, such as `MON-FRI@08:00-18:00` (evaluated against the scheduler's UTC clock)
 - `daily_run_cap`
 - `daily_token_cap`
 
-Notes:
-- `checker_policy` governs retry and auto-pause thresholds.
-- `targets` are validated against contract path existence.
+`llm_config` requires `provider` and `model_name` when present. It can also set `endpoint_url`, `max_tokens_per_call`, `temperature`, and `fallback_provider`.
 
-## 6. Persisted Artifacts
+Relevant `checker_policy` keys include `max_retry_attempts`, `safe_max_concurrency`, `allow_auto_resume`, `allow_auto_restart_stale_failed`, `stale_failed_restart_after_minutes`, and `auto_pause_after_checker_failures`.
 
-Runtime artifacts are under `outputs/loops/`:
-- `STATE.md`: human-readable loop status and inbox
-- `loop-budget.md`: run/token budget snapshots
-- `loop-run-log.md`: append-only loop event history
-- `state/<profile_id>.json`: durable machine-readable loop state
+The checked-in examples are:
 
-Key persisted state includes:
-- planner/reasoning/reflection outputs
-- checker decisions
-- assisted action history and attempts
-- pause status and reason
-- consecutive checker failure count
-- budget counters and cap references
+- `loops/profiles/daily_triage.yaml` — an L1 report-only profile.
+- `loops/profiles/unified_regression_guard.yaml` — an L3 unattended profile with active-window, budget, and checker controls.
 
-## 7. L2 and L3 Control Guarantees
+## Artifact model
 
-### 7.1 L2 assisted loop guarantees
+Initializing a profile creates shared operator views in the runtime output tree (by default, outputs/loops/) and one durable state file per profile:
 
-- Maker/checker split enforced in code path.
-- Checker rejection hard-fails loop cycle.
-- Denylist can veto risky target/action classes.
-- Max retry attempts per action are enforced.
-- Assisted actions are logged to `loop-run-log.md`.
+- `STATE.md`: status, targets, pause reason, latest reasoning/reflection, recent runs, and human inbox.
+- `loop-budget.md`: daily and weekly run/token counters plus configured caps.
+- `loop-run-log.md`: append-only initialization, pause/resume, assisted-action, run, and cycle events.
+- `state/<profile_id>.json`: machine-readable profile state, recent cycles, budget counters, checker failures, and assisted-action attempts.
 
-### 7.2 L3 unattended loop guarantees
+Target evaluation artifacts continue to live under `outputs/runs/<run_id>/`; the loop state references their outcomes rather than replacing them.
 
-- Manual kill switch (`pause` / `resume`) is persistent.
-- Auto-pause on repeated checker failures (threshold-driven).
-- Auto-pause when daily run or token caps are breached.
-- Active-window gating for unattended schedules.
-- Multi-profile coordination honors priority ordering.
-- Backoff is applied after per-profile failures.
+## Operational interface
 
-## 8. Example Profiles in Repo
-
-Current checked-in examples include:
-- `loops/profiles/daily_triage.yaml`
-- `loops/profiles/unified_regression_guard.yaml`
-
-`unified_regression_guard` is the primary L3-style unattended profile template.
-
-## 9. Operations and Runbook
-
-Operational guide:
-- `docs/loop_operations_runbook.md`
-
-Recommended unattended startup:
-- `ase loop start --all --profiles-dir loops/profiles --output-dir outputs`
-
-Recommended readiness check:
-- `ase loop audit --profiles-dir loops/profiles --output-dir outputs`
-
-## 10. Test Coverage Summary
-
-Loop-focused test coverage includes:
-- profile parsing/validation
-- scheduler cadence and coordination behavior
-- planner/reflection fallback and LLM paths
-- CLI loop command flows
-- policy/verifier behavior and rejection gates
-- pause/resume and L3 cap/failure auto-pause behavior
-
-Recent focused command used in development:
-- `.\.venv\Scripts\python.exe -m pytest tests/unit/test_loop_profiles.py tests/unit/test_loop_reasoner.py tests/unit/test_loop_scheduler.py tests/unit/test_loop_cli.py tests/unit/test_loop_policy.py tests/unit/test_cli.py -q`
-
-## 11. Optional Follow-up Work (Not Required for Current L3)
-
-Potential enhancements that are intentionally optional:
-- structured reasoning audit stream (for example `reasoning-audit.jsonl`)
-- richer active-window syntax and timezone controls
-- external escalation connectors (Jira/Slack/GitHub)
-- long-duration unattended soak dashboards
-
-## 12. Definition of Done (Current)
-
-Loop engineering is considered complete for this repository when:
-- loop commands are production-usable and documented,
-- L1/L2/L3 profiles can run with expected safeguards,
-- state, logs, and budget artifacts provide traceability,
-- maker/checker controls are enforced where required,
-- unattended operation is guarded by kill switch + caps + failure auto-pause,
-- non-loop CLI behavior remains backward compatible.
+The available loop commands are `init`, `run`, `start`, `status`, `audit`, `pause`, and `resume`. See the [CLI command map](cli_usage.md#loop-command-map) for a compact list and the [operations runbook](loop_operations_runbook.md) for safe operating procedures.

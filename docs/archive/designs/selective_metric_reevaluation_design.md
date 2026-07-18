@@ -1,4 +1,5 @@
 # Selective Metric Re-evaluation Design
+> **Archive status — Implemented design history.** This document records the design that informed the current selective re-evaluation behavior. See the current [monitoring documentation](../../monitoring.md).
 
 ## Goal
 

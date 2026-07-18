@@ -1,229 +1,161 @@
-# User Simulation with LLM Configuration
+# User Simulation with an LLM
 
-## Overview
+The `UserSimulator` uses an optional LLM to generate realistic persona-driven messages. It combines persona attributes, scenario intent, conversation history, configured failure modes, and persistent [persona memory](persona_memory.md). If no provider is configured or detected, it falls back to deterministic templates.
 
-The adaptive-synth-eval system uses LLMs to generate realistic user messages during chat simulation. This allows for more natural and varied conversation flows compared to template-based approaches.
+## Configure the simulator
 
-## How It Works
+Contract configuration makes the selected provider and model reproducible, but synth and
+unified modes use different provider factories and therefore different provider names.
+Do not copy provider aliases between these paths.
 
-When you configure an LLM provider, the `UserSimulator` automatically uses it to generate contextually appropriate user messages based on:
-- **Persona attributes** (role, location, seniority, communication style)
-- **Scenario intent** (what the user wants to accomplish)
-- **Conversation history** (previous turns in the dialogue)
-- **Failure injection modes** (typos, ambiguity, frustration, etc.)
-- **Persona memory** (persistent demographics, preferences, and long-term recall from prior conversations; see the [Persona Memory Guide](./docs/persona_memory.md))
+### Synth contracts
 
-If no LLM is configured, the system falls back to deterministic template messages.
+The optional top-level `llm` block configures the synth/legacy `LLMClient`:
 
-## Configuration
-
-### Step 1: Choose Your LLM Provider
-
-Copy `src/.env.example` to `src/.env` and configure ONE of the following providers:
-
-#### Option 1: Azure OpenAI (Recommended for Enterprise)
-
-```bash
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
-AZURE_OPENAI_API_KEY=your_azure_openai_api_key_here
-AZURE_OPENAI_API_VERSION=2024-12-01-preview
+```yaml
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  max_tokens: 1024
+  temperature: 0.7
+  api_key_env: OPENAI_API_KEY
 ```
 
-For Managed Identity authentication (no API key):
-```bash
-AZURE_AUTH_TYPE=managed_identity
-AZURE_CLIENT_ID=your_managed_identity_client_id
-AZURE_OPENAI_SCOPE=https://cognitiveservices.azure.com/.default
+For Azure OpenAI in a synth contract, use the normalized synth client name
+`azure_openai` (the aliases `azure` and `azureopenai` also normalize to it):
+
+```yaml
+llm:
+  provider: azure_openai
+  model: gpt-4o-mini
+  api_key_env: AZURE_OPENAI_API_KEY
+  azure:
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    api_version: "${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}"
 ```
 
-#### Option 2: Anthropic Claude
+If synth `llm.provider` is omitted or empty, this client can auto-detect a provider from
+the environment.
 
-```bash
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-MODEL_NAME=claude-sonnet-4-5-20250929
+### Unified contracts
+
+Unified contracts require a top-level `llm` specification. The user simulator inherits
+that specification unless `components.user_simulator` overrides it. The unified factory
+accepts exactly `mock`, `claude`, `openai`, `azure-openai`, `bedrock`, and `ollama`.
+
+```yaml
+llm:
+  provider: azure-openai
+  model: gpt-4o-mini
+  azure:
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    api_version: "${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}"
+
+components:
+  user_simulator:
+    provider: claude
+    model: claude-haiku-4-5-20251001
+    api_key_env: ANTHROPIC_API_KEY
 ```
 
-#### Option 3: OpenAI
+Unified native Bedrock uses `provider: bedrock`, the standard `boto3` credential chain,
+and region precedence `bedrock.region` → `AWS_DEFAULT_REGION` → `us-east-1`. It does not
+use the bearer-token Bedrock path described below for the synth/legacy client.
+
+> **Unified Ollama limitation:** Ollama is real only for the unified user-simulator
+> interface. The current unified factory silently uses the mock backend for ARE planner,
+> generator, and judge calls. Adversarial results from a unified `provider: ollama` run
+> are not Ollama-backed adversarial scores.
+
+Copy `src/.env.example` to `src/.env` and set the referenced credentials. Keep secrets out of the contract. Corporate TLS/proxy and cloud authentication guidance belongs in [environment setup](environment_setup.md).
+
+## Synth/legacy provider detection
+
+The synth/legacy `LLMClient` supports these provider names and environment fallbacks:
+
+| Provider | Explicit `provider` | Primary environment values |
+| :--- | :--- | :--- |
+| Azure OpenAI | `azure_openai` (aliases `azure`, `azureopenai`) | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY`, `MODEL_NAME` |
+| OpenAI | `openai` | `OPENAI_API_KEY`, `MODEL_NAME` |
+| Ollama | `ollama` | `OLLAMA_BASE_URL` or `OLLAMA_API_BASE`, `MODEL_NAME` |
+| Bedrock OpenAI-compatible endpoint | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK`, `AWS_REGION`, optional `AWS_BEDROCK_ENDPOINT`, `MODEL_NAME` |
+
+For credential indirection, `api_key_env` selects the environment variable containing the key/token. Provider defaults are `AZURE_OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `AWS_BEARER_TOKEN_BEDROCK`.
+
+### Auto-detection order
+
+When a synth contract does not specify a provider, the client checks in this order:
+
+1. Azure OpenAI (`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`)
+2. Anthropic (`ANTHROPIC_API_KEY`)
+3. OpenAI (`OPENAI_API_KEY`)
+4. Ollama (`OLLAMA_BASE_URL` or `OLLAMA_API_BASE`)
+5. Bedrock (`AWS_BEARER_TOKEN_BEDROCK`)
+
+An explicit synth contract provider takes precedence over auto-detection. Unified
+contracts do not use this auto-detection path; their explicit `LLMSpec` is built by the
+unified factory.
+
+## Run a simulation
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key_here
-MODEL_NAME=gpt-4o-mini
-```
-
-#### Option 4: Ollama (Local Models - Free)
-
-```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3.6:35b-a3b
-```
-
-First install Ollama and pull a model:
-```bash
-ollama pull qwen3.6:35b-a3b
-```
-
-### Step 2: Install Dependencies
-
-```bash
-cd adaptive-synth-eval
 uv sync
-```
-
-This installs:
-- `langchain` - Unified LLM interface
-- `langchain-openai` - OpenAI/Azure OpenAI support
-- `langchain-anthropic` - Anthropic Claude support
-- `langchain-ollama` - Ollama support
-- `azure-identity` - Azure Managed Identity support
-- `httpx` - HTTP client with SSL control
-- `pydantic` - Data validation
-
-### Step 3: Run Simulation
-
-```bash
-# Dry-run mode (generates user messages without calling chatbot)
+uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
 uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
-
-# Full simulation (calls both user simulation LLM and target chatbot)
-uv run ase run --contract contracts/examples/chatbot_test_contract.yaml
 ```
 
-## Auto-Detection
+For this synth example, `--dry-run` mocks/disables the target call but does not force the
+user simulator to mock mode. A configured simulator LLM can still be called. If no synth
+provider is configured or detected, the simulator uses template messages. Use provider
+configuration—not `--dry-run` alone—to determine whether synth generation makes an LLM
+call. Unified dry-run differs: its runner forces harness component and LLM-target specs
+to `mock` before building clients.
 
-The system automatically detects which LLM provider to use based on environment variables:
+## Message generation and memory
 
-1. **Azure OpenAI**: Checks for `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT`
-2. **Anthropic**: Checks for `ANTHROPIC_API_KEY`
-3. **OpenAI**: Checks for `OPENAI_API_KEY`
-4. **Ollama**: Checks for `OLLAMA_BASE_URL`
+On each synth turn, the simulator builds a prompt from:
 
-Priority order: Azure → Anthropic → OpenAI → Ollama
+- persona demographics and communication style;
+- scenario intent, context, retrieval topics, and success criteria;
+- recent user/assistant history;
+- planned failure-injection modes;
+- demographics, preferences, settings, summaries, and long-term recall loaded from the persona memory file.
 
-You can also explicitly specify a provider:
-```python
-from adaptive_synth_eval.clients.llm import LLMClient
-
-client = LLMClient(enabled=True, model_provider="anthropic")
-```
-
-## SSL Configuration
-
-For corporate environments with TLS interception:
-
-```bash
-VERIFY_SSL=false
-SSL_CERT_FILE=/path/to/corporate-ca-bundle.pem
-```
-
-## Example Output
-
-With LLM enabled, generated user messages look like:
-
-```
-Turn 1: "Hi there! I'm a new employee starting next week in Toronto. I heard we have parental leave benefits but I'm not sure how they work. Can you help me understand what I'm eligible for?"
-
-Turn 2: "That makes sense, but I'm a bit confused about the timeline. If my partner gives birth in March, when exactly can I start my leave? And do I need to apply before or after the birth?"
-
-Turn 3: "Thanks for clarifying! One more thing - I work remotely from Canada but our office is in the US. Which country's policies apply to me?"
-```
-
-Without LLM (fallback templates):
-
-```
-Turn 1: "Hi, I need help with parental_leave_policy. I want to understand_eligibility."
-Turn 2: "Follow-up 2: can you clarify how this applies to someone in Canada?"
-Turn 3: "Thanks. Can you summarize what I should do next?"
-```
+The model is initialized lazily on the first LLM-backed turn. If `LLMResult.error` is set,
+including for a content-filter block, `UserSimulator` logs a warning and emits its
+deterministic fallback message for that turn. The simulator does not propagate a
+structured error row to the runner for this condition.
 
 ## Troubleshooting
 
-### Error: "no_provider_configured"
+### `no_provider_configured`
 
-**Cause**: No LLM provider environment variables are set.
+The synth/legacy client had no explicit provider and none of its auto-detection variables were present. Add a synth `llm.provider` plus its provider settings, or configure one of the environment combinations above.
 
-**Solution**: Configure one of the providers in your `.env` file as shown above.
+### `llm_disabled`
 
-### Error: "llm_disabled"
+The synth/legacy client is disabled, so the simulator emits a template fallback. This
+does not by itself indicate a credential failure, and synth `--dry-run` alone does not
+disable an otherwise configured simulator provider.
 
-**Cause**: The LLM client is disabled (this is normal in dry-run mode if no provider is configured).
+### Azure authentication failure
 
-**Solution**: Set up an LLM provider or accept template-based fallback messages.
+For API-key authentication, verify the environment variable named by `api_key_env` (default `AZURE_OPENAI_API_KEY`). Managed identity settings (`AZURE_AUTH_TYPE`, optional `AZURE_CLIENT_ID`, and `AZURE_OPENAI_SCOPE`) apply to the synth/legacy client; the current unified Azure backend uses its API-key path.
 
-### Error: Import errors for langchain packages
+### Ollama connection failure
 
-**Cause**: Dependencies not installed.
+Start the Ollama service and confirm its base URL. Unified mode reads the model from its explicit LLM spec and uses `OLLAMA_BASE_URL`; the synth/legacy client can fall back to `MODEL_NAME` and `OLLAMA_BASE_URL`/`OLLAMA_API_BASE`.
 
-**Solution**: Run `uv sync` to install all required packages.
+### TLS, proxy, AWS, or network errors
 
-### Error: Azure authentication failures
+Use the platform-specific checks in [environment setup](environment_setup.md) rather than disabling verification without understanding the trust boundary.
 
-**Cause**: Missing or incorrect API key / Managed Identity configuration.
+## Related documentation
 
-**Solution**: 
-- For API key auth: Verify `AZURE_OPENAI_API_KEY` is correct
-- For Managed Identity: Ensure `AZURE_AUTH_TYPE=managed_identity` and `AZURE_CLIENT_ID` is set
-
-### Error: Connection refused (Ollama)
-
-**Cause**: Ollama service not running.
-
-**Solution**: Start Ollama with `ollama serve` and ensure the model is pulled.
-
-## Performance Considerations
-
-- **Temperature**: Set to 0.7 for balanced creativity vs. consistency
-- **Latency**: Local models (Ollama) are fastest; cloud models add network latency
-- **Cost**: Each conversation turn costs tokens; monitor usage with cloud providers
-- **Concurrency**: The simulation engine respects `max_concurrency` settings to avoid rate limits
-
-## Advanced Usage
-
-### Custom Model Parameters
-
-You can modify the temperature and other parameters in `src/adaptive_synth_eval/clients/llm.py`:
-
-```python
-self._model = AzureChatOpenAI(
-    # ... other params ...
-    temperature=0.7,  # Adjust for more/less variability
-    max_tokens=500,   # Limit response length
-)
-```
-
-### Explicit Provider Selection
-
-Override auto-detection by passing `model_provider` parameter:
-
-```python
-from adaptive_synth_eval.generation.turns import UserSimulator
-
-simulator = UserSimulator(persona, scenario, turn_count=5)
-simulator.llm_client = LLMClient(enabled=True, model_provider="ollama")
-```
-
-### Logging
-
-Enable debug logging to see LLM interactions:
-
-```bash
-export LOG_LEVEL=DEBUG
-uv run ase run --contract your_contract.yaml
-```
-
-## Architecture Reference
-
-The implementation follows the pattern from `./deepagents-demo/deep_research/model_factory.py`:
-
-- **Lazy initialization**: Models are created only when first needed
-- **Provider abstraction**: Unified interface across different LLM vendors
-- **Environment-driven**: All configuration via environment variables
-- **Error resilience**: Graceful fallback to templates when LLM unavailable
-- **Rate limiting**: Built-in retry logic with exponential backoff
-
-## Next Steps
-
-1. Configure your preferred LLM provider in `src/.env`
-2. Run a small test: `uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run`
-3. Inspect generated conversations in `outputs/runs/chatbot_test_run/conversations.jsonl`
-4. Scale up to full simulations once satisfied with message quality
+- [Contract reference](contracts.md) — schema, providers, target modes, and examples.
+- [Persona memory](persona_memory.md) — persisted user context and lifecycle.
+- [CLI guide](cli_usage.md) — validation and run commands.
+- [Environment setup](environment_setup.md) — credentials, TLS, proxies, AWS, and network troubleshooting.

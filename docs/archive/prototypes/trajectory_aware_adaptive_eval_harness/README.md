@@ -1,4 +1,5 @@
 # Trajectory-Aware Adaptive Adversarial Evaluation Harness
+> **Archive status — Standalone prototype.** Its five-point scale and standalone source are historical prototype behavior, not the current evaluation contract. See the current [unified evaluation documentation](../../../unified_evaluation.md) and [adversarial agent walkthrough](../../../adversarial_agent_walkthrough.md).
 
 ## Overview
 

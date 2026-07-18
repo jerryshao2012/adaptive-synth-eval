@@ -1,206 +1,99 @@
 # Adversarial Adaptive Synthetic Evaluation
 
-A Python CLI tool for generating synthetic multi-turn chat histories and performing adversarial red-teaming to evaluate HR policy chatbots. This contract-driven simulation engine creates realistic conversation data without requiring production telemetry or external dependencies.
+## Product overview
 
-## 🎯 Overview
+Adversarial Adaptive Synthetic Evaluation (ASE) is a contract-driven Python CLI for testing HR policy chatbots without relying on production traffic. It generates realistic multi-turn conversations, mixes benign and adversarial behavior, scores target responses, and writes reproducible artifacts for analysis and monitoring.
 
-Adversarial Adaptive Synthetic Eval helps you:
-- **Generate realistic test data**: Create thousands of diverse, persona-driven conversations.
-- **Test chatbot behavior**: Validate responses across different user types, scenarios, and edge cases.
-- **Inject failures**: Simulate ambiguous queries, typos, frustration, and policy boundary pressure.
-- **Evaluate at scale**: Run concurrent simulations with configurable traffic patterns.
-- **Red-team chatbots**: Perform adversarial red-teaming to uncover vulnerabilities.
-- **Run continuous loops**: Autonomously discover evaluation targets, apply constrained recoveries, and run unattended with safety guardrails (L1/L2/L3 readiness levels).
+## Capabilities
 
----
+- Generate persona-driven synthetic conversations with configurable scenarios, traffic, and failure injection.
+- Run unified evaluations that interleave benign turns with adaptive adversarial probes.
+- Exercise API, browser, and AWS Bedrock AgentCore targets.
+- Score response quality and safety, then persist machine-readable and human-readable artifacts.
+- Re-evaluate existing run artifacts for monitoring and review them in a local dashboard.
+- Coordinate repeat evaluations with guarded L0-L3 loop profiles, budgets, and kill switches.
 
-## 🏗️ Architecture
-
-```mermaid
-graph TB
-    subgraph CLI["CLI Entry Point (cli.py)"]
-        Validate["validate-contract"]
-        Run["run --contract"]
-        Summarize["summarize --run-id"]
-        LoopInit["loop init"]
-        LoopStart["loop start --all"]
-    end
-
-    subgraph ContractLayer["Contract Layer (config/)"]
-        ContractParser["Contract Parser"]
-        Validator["Contract Validator"]
-        EnvResolver["Environment Resolver"]
-    end
-
-    subgraph UnifiedEval["Unified Evaluation (unified_eval/)"]
-        Orchestrator["Orchestrator"]
-        UnifiedPersonas["Personas Engine"]
-        UnifiedProviders["Providers Factory"]
-        UnifiedScoring["Scoring Engine"]
-    end
-
-    subgraph StaticExec["Synth Execution (engines/, generation/)"]
-        GenEngine["Generation Engine"]
-        SimEngine["Simulation Engine"]
-        LegacyScoring["Legacy Scoring"]
-    end
-
-    subgraph LoopExec["Loop Execution (loop/)"]
-        LoopProfiles["Loop Profiles"]
-        Scheduler["Multi-Profile Scheduler"]
-        Planner["Planner"]
-        Policy["Policy Engine"]
-        Verifier["Verifier/Checker"]
-        StateStore["State Store"]
-    end
-
-    subgraph AdversarialExec["Adversarial Red-Teaming (adversarial_response_engine/)"]
-        RedTeamEngine["Red-Team Engine"]
-        SafetyJudge["Safety Judge"]
-        AdversaryActors["Adversary Actors"]
-        ReflectionEngine["Reflection Engine"]
-    end
-
-    subgraph Monitoring["Monitoring (monitoring/)"]
-        MonitorRunner["Monitor Runner"]
-        MetricRegistry["Metric Registry"]
-        FingerprintEngine["Fingerprint Engine"]
-        HeuristicFallback["Heuristic Fallback"]
-    end
-
-    subgraph LLMClients["LLM Clients & Backends (clients/)"]
-        AzureOpenAI["Azure OpenAI"]
-        AWSBedrock["AWS Bedrock"]
-        Ollama["Ollama"]
-        OpenAIAPI["OpenAI API"]
-        Anthropic["Anthropic"]
-    end
-
-    subgraph Persistence["Artifact Persistence (artifacts/, outputs/)"]
-        ChatHistory["chat_history.jsonl"]
-        RunState["run_state.json"]
-        LoopState["loop-state.json"]
-        StateArtifacts["STATE.md"]
-    end
-
-    subgraph Targets["Evaluation Targets"]
-        ChatbotEndpoint["Chatbot Endpoint"]
-        BrowserUI["Browser UI"]
-        AgentCore["Agent/Core API"]
-    end
-
-    CLI --> ContractLayer
-    ContractLayer --> Validator
-    
-    Validator --> UnifiedEval
-    Validator --> StaticExec
-    Validator --> LoopExec
-    Validator --> AdversarialExec
-
-    UnifiedEval --> Orchestrator
-    Orchestrator --> UnifiedPersonas
-    UnifiedPersonas --> UnifiedProviders
-    UnifiedProviders --> Targets
-    Targets --> UnifiedScoring
-    UnifiedScoring --> Persistence
-
-    StaticExec --> GenEngine
-    GenEngine --> SimEngine
-    SimEngine --> LegacyScoring
-    LegacyScoring --> Persistence
-
-    LoopExec --> LoopProfiles
-    LoopProfiles --> Scheduler
-    Scheduler --> Planner
-    Planner --> Policy
-    Policy --> Verifier
-    Verifier --> StateStore
-    StateStore --> Persistence
-
-    AdversarialExec --> RedTeamEngine
-    RedTeamEngine --> SafetyJudge
-    SafetyJudge --> AdversaryActors
-    AdversaryActors --> ReflectionEngine
-    ReflectionEngine --> Persistence
-
-    Planner -.LLM Reasoning.-> LLMClients
-    ReflectionEngine -.LLM Reasoning.-> LLMClients
-    SafetyJudge -.LLM Judgment.-> LLMClients
-    GenEngine -.LLM Messages.-> LLMClients
-    UnifiedPersonas -.LLM Messages.-> LLMClients
-    UnifiedScoring -.LLM Evaluation.-> LLMClients
-    MonitorRunner -.LLM Evaluation.-> LLMClients
-
-    SimEngine --> Targets
-    RedTeamEngine --> Targets
-
-    CLI --> MonitorRunner
-    MonitorRunner --> FingerprintEngine
-    FingerprintEngine --> MetricRegistry
-    MonitorRunner --> HeuristicFallback
-    MonitorRunner --> Persistence
-    
-    style CLI fill:#e1f5ff,stroke:#333,stroke-width:1px,color:#000
-    style ContractLayer fill:#f3e5f5,stroke:#333,stroke-width:1px,color:#000
-    style UnifiedEval fill:#e8eaf6,stroke:#333,stroke-width:1px,color:#000
-    style StaticExec fill:#e8f5e9,stroke:#333,stroke-width:1px,color:#000
-    style LoopExec fill:#fff3e0,stroke:#333,stroke-width:1px,color:#000
-    style AdversarialExec fill:#fce4ec,stroke:#333,stroke-width:1px,color:#000
-    style Monitoring fill:#e0f2f1,stroke:#333,stroke-width:1px,color:#000
-    style LLMClients fill:#f1f8e9,stroke:#333,stroke-width:1px,color:#000
-    style Persistence fill:#eceff1,stroke:#333,stroke-width:1px,color:#000
-    style Targets fill:#ede7f6,stroke:#333,stroke-width:1px,color:#000
-```
-
----
-
-## 📋 Table of Contents
-
-- [Setup](#setup)
-- [Quick Start](#quick-start)
-- [Detailed Documentation](#detailed-documentation)
-- [Project Structure](#project-structure)
-- [Testing](#testing)
-
----
-
-## Setup
+## Quick start
 
 ### Prerequisites
 
-1. **Python 3.11+**
-2. **uv package manager** (recommended)
+- Python 3.11 or later
+- [`uv`](https://docs.astral.sh/uv/) for dependency and environment management
 
-#### Install uv
+Install `uv` if needed:
 
 ```bash
-# macOS/Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Alternative via pip
-pip install uv
 ```
 
-### Project Setup
+Alternatively, install it with `pip install uv`.
 
-1. Copy the example environment file and configure your settings:
-   ```bash
-   cp src/.env.example src/.env
-   ```
-2. Edit `src/.env` and fill in your API keys and endpoints.
-3. Install package and local dependencies:
-   ```bash
-   uv sync
-   ```
+### Set up the project
 
-To make the `ase` command available globally in your workspace without prefixing `uv run`, run:
+```bash
+cp src/.env.example src/.env
+uv sync
+```
+
+Add provider credentials and endpoints to `src/.env` before making live model or target calls. To make `ase` available outside `uv run`, optionally install the project as a tool:
+
 ```bash
 uv tool install --editable .
 ```
 
-### Dashboard Setup
+### Validate and dry-run an evaluation
 
-To run the monitoring dashboard with Yarn:
+```bash
+uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
+```
+
+The dry-run exercises the workflow without real LLM or target calls. To watch the generated conversation in the terminal:
+
+```bash
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run --realtime-chat
+```
+
+Copy the run ID printed by `ase run`, then summarize that completed run:
+
+```bash
+uv run ase summarize --run-id <printed_run_id>
+```
+
+For recovery flags, realtime controls, and the full command reference, see the [CLI guide](docs/cli_usage.md).
+
+## Choose an evaluation workflow
+
+| Goal | Workflow | Start with |
+| --- | --- | --- |
+| Generate realistic benign traffic | `synth` mode | [User simulation](docs/user_simulation_llm.md) and [contracts](docs/contracts.md) |
+| Mix benign traffic with safety probes | `unified` mode | [Unified evaluation](docs/unified_evaluation.md) |
+| Understand or extend adaptive attacks | Adversarial response engine | [Adversarial agent walkthrough](docs/adversarial_agent_walkthrough.md) |
+| Re-score completed run artifacts | Monitoring | [Monitoring guide](docs/monitoring.md) |
+| Schedule guarded repeat evaluations | Loop execution | [Loop architecture](docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) and [operations runbook](docs/loop_operations_runbook.md) |
+
+Contracts auto-select the execution mode: top-level `simulation_suite` selects `synth`, while top-level `suite` selects `unified`.
+
+## Compact architecture
+
+```mermaid
+flowchart LR
+    Contract["YAML contract"] --> Synth["Synth evaluation"]
+    Contract --> Unified["Unified evaluation"]
+    Synth --> Target["Target chatbot"]
+    Unified --> Target
+    Target --> Artifacts["Run artifacts"]
+    Artifacts --> Monitoring["Monitoring"]
+    Artifacts --> Dashboard["Dashboard"]
+    Monitoring --> Dashboard
+    Loops["Guarded loops"] -. coordinate repeat runs .-> Contract
+```
+
+The CLI parses and validates a contract, dispatches it to the synth or unified runner, invokes the configured target, and stores results under `outputs/runs/<run_id>/`. Unified runs use the adversarial response engine for attack planning and safety judging. Loops coordinate repeated runs, while monitoring evaluates existing artifacts for the dashboard.
+
+## Dashboard
+
+The local Next.js dashboard reads run and monitoring artifacts from `outputs/runs/`.
 
 ```bash
 cd ai-eval-dashboard
@@ -208,148 +101,53 @@ yarn install
 yarn dev
 ```
 
-This starts the dashboard on `http://localhost:3000` and lets it read run artifacts from `outputs/runs/` in the repository root.
+Open [http://localhost:3000](http://localhost:3000). See the [dashboard setup guide](ai-eval-dashboard/README.md) for dashboard commands and the [monitoring guide](docs/monitoring.md) for producing and maintaining monitoring results.
 
----
+## Documentation map
 
-## Quick Start
+Use the [documentation hub](docs/README.md) to find the right guide by task and audience. It routes new users through contracts and CLI basics, evaluators through synth and unified workflows, analysts through artifacts and the dashboard, and operators through monitoring and continuous loops.
 
-### 1. Validate a Contract
-
-```bash
-uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
-```
-
-### 2. Run a Dry-Run Simulation
-
-Test your contract without making real chatbot API calls:
-
-```bash
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
-```
-
-### 3. Stream Realtime Chat
-
-Watch conversations unfold live in your terminal with interactive controls (speed up, pause, switch personas, alter user styles):
-
-```bash
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run --realtime-chat
-```
-
-If a previous run with the same `run_id` was interrupted, choose recovery behavior explicitly:
-
-```bash
-# Continue remaining conversations from checkpoint state
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --incomplete-run-action resume
-
-# Start over and clean prior artifacts for that run_id
-uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --incomplete-run-action restart
-```
-
-### 4. Summarize a Run
-
-```bash
-uv run ase summarize --run-id unified_evaluation_demo_run
-```
-
-### 5. Run Continuous Monitoring Eval on Existing Chat History
-
-Evaluate an existing run folder using sampled windows and write results to
-`monitoring_scores.jsonl` in the same run directory.
-
-PowerShell (Windows):
-
-```powershell
-uv run ase monitor run `
-    --run-folder outputs/runs/unified_evaluation_demo_run `
-    --sample-size 1000 `
-    --interval-minutes 30
-```
-
-Bash/zsh:
-
-```bash
-uv run ase monitor run \
-    --run-folder outputs/runs/unified_evaluation_demo_run \
-    --sample-size 1000 \
-    --interval-minutes 30
-```
-
-Use explicit recovery behavior when a monitoring run is interrupted:
-
-```bash
-# Continue from monitoring_state.json
-uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --incomplete-run-action resume
-
-# Restart monitoring progress and re-evaluate
-uv run ase monitor run --run-folder outputs/runs/unified_evaluation_demo_run --sample-size 1000 --incomplete-run-action restart
-```
-
-Notes:
-- Input source is `chat_history.jsonl` under the selected run folder.
-- Versioning is automatic via three-tier SHA-256 fingerprints:
-  - **Metric content fingerprint** (per metric): hashes prompt template, thresholds, heuristic, and scoring logic. Changing any of these in a metric's YAML file produces a new fingerprint.
-  - **Composite evaluation fingerprint**: combines all per-metric content fingerprints + model identity. Any change triggers LLM re-evaluation for affected groups.
-  - **Policy fingerprint** (per metric): thresholds only. Threshold changes recalculate pass/warn/fail statuses — zero LLM cost.
-- Same evaluation fingerprint is idempotent: already-evaluated turns are skipped.
-- LLM runtime uses environment configuration by default (same provider discovery flow as existing runtime clients).
-- Use `--dry-run` for deterministic local scoring without live LLM calls.
-
----
-
-## Detailed Documentation
-
-Detailed guides covering all components and configuration reference are available in the [docs/](./docs) directory:
-
-- [**Simulation Contracts Guide**](./docs/contracts.md): Complete schema reference for YAML contracts, personas, scenarios, traffic patterns, and validation.
-- [**CLI Usage & Commands Guide**](./docs/cli_usage.md): Reference for `ase` commands, arguments, interactive real-time controllers, and corporate proxy/SSL configuration.
-- [**LLM User Simulation Guide**](./docs/user_simulation_llm.md): Dynamic message generation setup utilizing Azure OpenAI, Ollama, Anthropic, or OpenAI.
-- [**Unified & Adversarial Evaluation**](./docs/unified_evaluation.md): Red-teaming and safety testing with adaptive planners, safety judges, and schedules.
-- [**Adversarial Agent Walkthrough**](./docs/adversarial_agent_walkthrough.md): Technical deep-dive walkthrough of the adaptive adversarial red-teaming engine, actors, and algorithms.
-- [**Persona Memory System**](./docs/persona_memory.md): isolated, markdown-based memory tracking that evolves across conversation sessions.
-- [**Output Schema & Artifacts**](./docs/output_artifacts.md): Folder structures and detailed column definitions for output `chat_history` files.
-- [**Loop Engineering**](./docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md): Continuous evaluation loops with AI-driven discovery, assisted actions, and unattended execution (L0–L3).
-- [**Loop Operations Runbook**](./docs/loop_operations_runbook.md): Production operations guide for unattended loop scheduling, kill switches, and recovery.
-
----
-
-## Project Structure
+## Project structure
 
 ```text
 adaptive-synth-eval/
-├── contracts/
-│   └── examples/                  # Example YAML contracts and test configs
-├── docs/                          # User guides, architecture notes, and runbooks
-│   └── trajectory_aware_adaptive_eval_harness/
-├── examples/                      # Small runnable demo scripts
-├── loops/
-│   └── profiles/                  # Continuous evaluation loop profiles
-├── outputs/
-│   └── runs/                      # Generated run artifacts (one folder per run_id)
-├── src/
-│   └── adaptive_synth_eval/       # Main package
-│       ├── adversarial_response_engine/
-│       ├── artifacts/
-│       ├── clients/
-│       ├── config/
-│       ├── engines/
-│       ├── evaluation/
-│       ├── generation/
-│       ├── loop/
-│       ├── monitoring/
-│       │   ├── metrics/           # Per-metric YAML configs (auto-discovered, content-fingerprinted)
-│       ├── scoring/
-│       └── unified_eval/
-│   └── tests/
-│       ├── integration/           # End-to-end and CLI workflow tests
-│       └── unit/                  # Component and utility tests
+├── ai-eval-dashboard/           # Local monitoring and review dashboard
+├── contracts/examples/          # Runnable synth and unified contracts
+├── docs/                        # Guides, architecture notes, and runbooks
+├── loops/profiles/              # Continuous-evaluation profiles
+├── outputs/runs/                # Artifacts grouped by run_id
+├── src/adaptive_synth_eval/
+│   ├── adversarial_response_engine/
+│   ├── clients/                 # Target and model backends
+│   ├── config/                  # Synth contract schema and parsing
+│   ├── engines/                 # Synth execution
+│   ├── loop/                    # Repeat-run coordination and safeguards
+│   ├── monitoring/              # Post-run monitoring evaluation
+│   └── unified_eval/            # Unified orchestration and scoring
+└── tests/
+    ├── integration/
+    └── unit/
 ```
 
----
+## Development and testing
 
-## Testing
+Run the complete test suite:
 
-Run the test suite using pytest:
 ```bash
 uv run pytest
+```
+
+Run a narrower suite while developing:
+
+```bash
+uv run pytest tests/unit/
+uv run pytest tests/integration/
+uv run pytest -k "test_name_pattern"
+```
+
+Validate CLI wiring without executing an evaluation:
+
+```bash
+uv run ase --help
+uv run ase run --help
 ```

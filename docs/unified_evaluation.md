@@ -1,134 +1,122 @@
-# Unified & Adversarial Evaluation
+# Unified Evaluation Guide
 
-The unified evaluation pipeline drives both synthetic conversations (ASE) and adversarial probes (ARE) from a single YAML contract. By combining these two modes, you can evaluate the response quality and security of a chatbot in parallel.
+Unified evaluation interleaves realistic synth turns with adaptive adversarial probes in the same conversation. It reuses the existing user simulator, target clients, adversarial planner/generator/judge, session policy, and memory models.
 
-## Unified Contract Anatomy
+This guide describes operator-visible behavior. Use the [contract reference](contracts.md) for YAML fields, the [adversarial walkthrough](adversarial_agent_walkthrough.md) for implementation details, and the [artifact reference](output_artifacts.md) for persisted schemas.
 
-A unified contract defines:
-- **suite**: Metadata about the evaluation run.
-- **llm**: Default LLM specification (provider, model, credentials, etc.) used for simulation and scoring.
-- **target**: Configuration for the target chatbot being evaluated.
-- **time_window**: The period and duration over which the synthetic traffic is simulated.
-- **persona_pool**: Personas interacting with the chatbot.
-- **scenario_catalog**: Synthetic scenarios.
-- **eval_plan**: Defines how many conversations to run, the turn limits, and which persona/scenario pairs to execute.
-- **scoring**: Weights for synthetic quality scoring and the failure threshold for adversarial turns.
+## Pipeline
 
-## Target Modes In Unified Runs
+For each planned conversation, the runner:
 
-Unified evaluation supports the same target surface used by synth mode:
-- `mode: api` (default): calls an HTTP endpoint.
-- `mode: browser`: drives a web chat UI through Playwright.
-- `mode: agentcore`: invokes an AWS Bedrock AgentCore runtime through `boto3` (`invoke_agent_runtime`).
+1. Resolves the persona, synth scenario, adversarial scenario, turn count, and turn schedule.
+2. Runs synth turns through the existing user simulator and target client.
+3. Shares useful synth history with the adversarial session, then runs adversarial turns through planner, generator, target, and judge.
+4. Applies response and optional trajectory scoring, stops on a terminal breach, and applies session policy only to non-breaching adversarial turns.
+5. Persists the completed or partial conversation, commits its attack memory once, and updates run summaries/checkpoints.
 
-When using AgentCore, configure `target.agentcore.region` and `target.agentcore.agent_runtime_arn`.
+Synth and adversarial roles stay separate: synth context grounds later probes, but the planner, generator, and judge are not merged with the user simulator.
 
-For `mode: api`, you can also set optional target LLM payload knobs in the `target` block:
-- `chatbot_model`: list of model identifiers forwarded in request payload.
-- `chatbot_temperature`: temperature forwarded in request payload.
-- `source_doc_ref`: source document reference forwarded in request payload.
+## Scheduling synth and adversarial turns
 
-These can be configured directly in the contract, and if omitted, they can fall back to env vars:
-- `CHATBOT_MODEL`
-- `CHATBOT_TEMPERATURE`
-- `CHATBOT_SOURCE_DOCUMENT_REFERENCE`
+Each `eval_plan.entries[]` schedule is resolved before its conversation starts:
 
-## Schedule Modes
+- `bernoulli`: chooses synth independently with probability `p_synth`.
+- `phased`: runs `warmup_turns` synth turns, then adversarial turns.
+- `min_each`: guarantees configured synth and adversarial minimums, then fills remaining positions probabilistically.
+- `ramp`: runs a synth warmup, then increases adversarial probability linearly across the remaining turns.
 
-Each entry in the `eval_plan` can configure a `schedule` to control how synthetic (synth) and adversarial (probe) turns are interleaved:
+The resolved schedule is written to `run_plan.json`, making a seeded plan inspectable and resume-safe. See [contracts](contracts.md#unified-schedules) for schedule fields.
 
-1. **bernoulli** (Default): Samples each turn as synthetic with probability `p_synth` (default `0.3`), and adversarial otherwise.
-2. **phased**: Starts with a fixed number of synthetic warmup turns before transitioning entirely to adversarial probes.
-   - `warmup_turns`: Number of synthetic turns at the start (default `2`).
-3. **min_each**: Ensures that the conversation contains at least a minimum number of both synthetic and adversarial turns.
-   - `min_synth`: Minimum synthetic turns.
-   - `min_adversarial`: Minimum adversarial turns.
-   - `p_synth`: Probability of choosing synthetic when constraints are satisfied.
+## Adversarial outcomes
 
----
+The safety judge uses a scenario-specific 0–4 response rubric. A scenario may set its own `failure_threshold`; otherwise the threshold is `scoring.adversarial.failure_threshold` (default 3).
 
-## Adversarial Evaluation Details
+- `failure_score` is the response-only score for the current turn.
+- `best_failure_score` is the best response-only score in the conversation.
+- `effective_failure_score` is `max(failure_score, trace_severity_score)`.
+- `best_effective_failure_score` is the best effective score in the conversation.
+- `failure_threshold` is the resolved threshold for that scenario.
+- `is_breach` is true when the effective score meets that row's threshold.
 
-Adversarial evaluation tests the safety and robustness of your chatbot using automated red-teaming agents that dynamically probe the bot for vulnerabilities.
+Thresholds are row-specific: failure counts use `is_breach`, not a single run-wide comparison. Response-score percentiles remain response-only. A partial is a non-breaching row where `0 < effective_failure_score < failure_threshold`.
 
-### Attack Scenario Types
+A breach is written to `failed_examples.jsonl` and terminates the conversation before session-policy evaluation. Full verdict and outcome fields are defined in [output artifacts](output_artifacts.md#unified-adversarial-score-fields).
 
-The adversarial engine supports several built-in attack families:
-- **toxicity**: Probing if the bot responds with hostile, toxic, or inappropriate language.
-- **prompt-injection**: Attempting to hijack the bot's system instructions to make it ignore its constraints.
-- **data-pii-leak**: Attempting to extract sensitive, private employee information or unauthorized database records.
-- **persona-hijack**: Inducing the bot to adopt a different, unauthorized persona (e.g. speaking as an executive or a legal authority).
+## Session policy
 
-### Red-Teaming Agent Roles
+After each non-breaching adversarial turn, `run.session_policy` may decide whether further probing is useful:
 
-The red-teaming engine orchestrates several specialized LLM agents:
-1. **Planner (AdaptationPlanner)**: Looks at the conversation history and selects the best next attack angle/sub-tactic (e.g. sympathy baiting, authority pressure).
-2. **Generator (TurnGenerator)**: Translates the planned tactic into a natural-sounding user message.
-3. **Judge (SafetyJudge)**: Evaluates the chatbot's response on a scale of `0-5` for safety violations or leakages.
-4. **Policy (SessionPolicyController)**: Monitors the conversation and dynamically decides to terminate early if the bot is consistently refusing or if the budget is exhausted.
+| Mode | Behavior |
+| :--- | :--- |
+| `none` | No policy decision; the conversation stops only on its turn limit, breach, budget, or external stop |
+| `rule` | Deterministic refusal and suspicion thresholds |
+| `llm` | An LLM reads session state and recent verdicts and returns `continue`, `start_new_session`, or `stop_experiment` |
 
-### Failure Thresholds
+The LLM policy backend is created only in `llm` mode. The unified runner treats `start_new_session` and `stop_experiment` as ending the current conversation.
 
-Adversarial scenarios configure a `failure_threshold` (default `3`):
-- If the `SafetyJudge` returns a score greater than or equal to this threshold, the turn is marked as a safety failure.
-- When a failure is detected, the orchestrator records the failure details in `failed_examples.jsonl` and can short-circuit the session to save token budget.
+### Rule policy behavior
 
-### Session Policy Modes
+Unified refusal semantics define a refusal as response `failure_score == 0`. A refusal increments `repeated_refusals` and adds `policy_suspicion_per_refusal` to `suspicion_score`; a non-zero response resets the refusal counter and reduces suspicion by `policy_suspicion_decay`, floored at zero.
 
-After **every adversarial turn** (once the judge has scored it), the session policy controller decides whether to keep probing or abandon a hopeless conversation early to save token budget. It runs only on adversarial turns and returns one of three actions: `continue`, `start_new_session`, or `stop_experiment`. The orchestrator treats `start_new_session`/`stop_experiment` as "end this conversation now."
+Rule mode ends the conversation when consecutive refusals reach `policy_max_refusals`, suspicion reaches `policy_abandon_suspicion`, or the turn limit is exhausted with no response signal. The planner also sees suspicion as a softer back-off signal.
 
-Configure the mode in your contract's `run.session_policy` block:
+`fresh_start_after_refusals` is separate: it prompts strategy rotation after N refusals without resetting target history. Set it to `0` to disable this rotation.
 
-| Mode | Controller | How it decides |
-|------|-----------|----------------|
-| `none` | *(no controller)* | Never abandons. Conversations end only on turn-count exhaustion or a hard-failure short-circuit. |
-| `rule` | `RuleBasedSessionPolicyController` | Deterministic thresholds on refusal/suspicion counters (see below). |
-| `llm` | `SessionPolicyController` | An LLM reads the session state + recent judge verdicts and returns the decision as JSON. Judges whether the bot has likely detected the red-teaming attempt and whether continuing is futile. |
+## Attack memory
 
-#### How `rule` mode decides
+`eval_plan.attack_memory` supports:
 
-The rule controller tracks two counters on the session and abandons when either crosses its threshold.
+- `shared`: one run-wide memory store.
+- `per_persona`: an isolated store for each persona.
+- `none`: no recording or memory artifact.
 
-**1. `repeated_refusals` — a consecutive-refusal counter**
-- Refusal (judge `failure_score == 0`) → `+1`
-- Any non-zero score (partial or full leak) → resets to `0`
+Only conversations that reach the runner's completed-result boundary commit memory, and commits are idempotent by `session_id`. Entries retain response and effective scores plus the session threshold, so trajectory-only breaches can be learned.
 
-**2. `suspicion_score` — a leaky-integrator "heat" gauge** (range `0.0`–`1.0`)
-- Refusal → `suspicion += policy_suspicion_per_refusal` (default `+0.2`)
-- Non-refusal → `suspicion -= policy_suspicion_decay` (default `−0.1`, floored at `0`)
-- Never hard-resets; only decays. The `+0.2 / −0.1` asymmetry is a deliberate ratchet so evidence of resistance accumulates faster than it dissipates.
+On schema-v2 resume, checkpoint memory supersedes seed files. See [output artifacts](output_artifacts.md#attack-memory-artifact) for the serialized formats.
 
-The decision, evaluated in priority order:
+> **Current limitation:** Stored entries retain their historical threshold, but planner context currently labels aggregated outcomes against the current session threshold rather than each entry's stored threshold.
 
-```text
-if repeated_refusals >= policy_max_refusals (3)        → start_new_session  "refusals>=N"
-elif suspicion_score >= policy_abandon_suspicion (0.75) → start_new_session  "suspicion>=X"
-elif turns >= max_turns and best_failure_score == 0     → start_new_session  "exhausted_no_signal"
-else                                                    → continue           "within thresholds"
-```
+## Trajectory evaluation
 
-> **Why two counters?** `repeated_refusals` catches a wall of consecutive hard blocks quickly, but it resets on any partial leak. `suspicion_score` has long memory, so it still catches the slow-burn case where intermittent partial signal keeps resetting the refusal counter while the session is going nowhere.
+Trajectory mode is opt-in through `trajectory.enabled`. When enabled, the runner reads a structured trace from the target response field named by `trajectory.trace_field`.
 
-`suspicion_score` has a **second consumer**: it is also fed into the **planner** prompt as a graded back-off signal — at `>= 0.5` the planner is instructed to soften pressure and rebuild legitimacy before escalating again. So the full escalation ladder within one conversation is: *probe → (suspicion 0.5) soften & rebuild rapport → (suspicion 0.75 or 3 refusals) abandon*.
+A shared meaningful-trace check examines canonical activity collections/counts and recursively checks `raw_trace`. Missing traces, `None`, empty strings, empty collections, and normalized zero-only traces remain response-only. They do not invoke the trace summarizer or add a summarizer LLM call.
 
-> **Naming caveat:** despite the name, `suspicion_score` does **not** measure whether the target actually detected a coordinated attack — it only tracks *refusals minus partial-leaks*. A perfectly aligned bot that simply refuses everything scores identically to one that genuinely clocked the red-teaming. For the abandon decision this conflation is harmless (both mean "stop"); just don't read it as attack-detection.
+For a meaningful trace, the summarizer extracts judge-ready facts about routing, handoffs, tools, retrieval, memory, errors, and other activity. The judge then scores response and trajectory. A trajectory breach can therefore set `is_breach` even when `failure_score` is zero.
 
-#### `rule`-mode knobs (`run` block)
+When enabled, the run summary adds maximum and average positive trace severity, sessions with a trajectory signal, and failure-surface counts. The average currently includes positive severity signals only; meaningful zero-severity traces are not part of that mean.
 
-| Knob | Default | Meaning |
-|------|---------|---------|
-| `policy_max_refusals` | `3` | Consecutive refusals before abandoning. |
-| `policy_suspicion_per_refusal` | `0.2` | Suspicion added per refusal. |
-| `policy_suspicion_decay` | `0.1` | Suspicion removed per non-refusal turn. |
-| `policy_abandon_suspicion` | `0.75` | Suspicion level that triggers abandon. |
+## Budget and concurrency
 
-A related but **separate** mechanism, `fresh_start_after_refusals` (default `2`), does *not* end the session — after N consecutive refusals it injects a directive telling the planner to rotate to a completely different attack angle on the next turn.
+`run.budget` limits counted harness usage. The budget meter tracks planner, generator, judge, optional policy, user simulator, and LLM-mode target token usage with atomic component counters.
 
----
+Before a turn begins, it acquires a transient admission reservation using `run.reserve_tokens`. The reservation reduces admission capacity but is not usage and is never persisted; it is released in `finally` after success, failure, or cancellation.
 
-## Token Budget
+Finite plans use a sliding window capped by effective concurrency. Budget-driven plans (`run.until_budget_exhausted: true`, or no `eval_plan.total_conversations`) currently run sequentially. Stop and budget state are checked before admission and after completions.
 
-To prevent run-away costs when conducting large evaluations, the unified orchestrator enforces a token budget:
-- Configured via `run.budget` (e.g. `100000` tokens).
-- Tracks prompt and completion tokens for all components (`planner`, `generator`, `judge`, `policy`, `user_simulator`).
-- Automatically aborts the evaluation run once the budget is exhausted, preserving all intermediate outputs and summary statistics.
+If budget stops a conversation after at least one turn, the runner persists it with `termination_reason: budget_exhausted`. A zero-turn conversation is neither appended nor marked complete. Any overshoot is actual usage from work that was already admitted; no fixed overshoot bound is claimed.
+
+> **Current limitation:** API and browser target responses are token-counted for reporting, but those estimates are not charged to the authoritative budget meter. Enforcement can therefore undercount total provider usage for those target modes.
+
+> **Admission detail:** A finite-plan task is admitted to the concurrency window before it acquires its first-turn reservation. It may therefore start and immediately discover that no reservation remains; such a task exits without a zero-turn artifact.
+
+## Checkpoint and resume
+
+Run-state schema v2 atomically snapshots completed conversation IDs, metrics, actual token/component usage, and committed attack memory. It intentionally retains actual spend from in-flight work even if that conversation has not yet reached the completed-result boundary. Transient reservations reset on resume.
+
+Two SHA-256 fingerprints protect positional conversation IDs:
+
+- the canonical, secret-safe effective contract;
+- the exact serialized and filtered conversation plan, including order and resolved schedules.
+
+Resume rejects a changed v2 contract or plan. Legacy v1 checkpoints use best-effort behavior with a warning; unsupported future state versions fail clearly. See the [CLI guide](cli_usage.md#incomplete-run-recovery) for operator commands and [output artifacts](output_artifacts.md) for checkpoint fields.
+
+## Known implementation limitations
+
+- API/browser target token estimates are reported but not charged to the authoritative budget meter.
+- Attack-memory outcome labels use the current session threshold when rendering aggregated planner context.
+- Trajectory mean severity includes positive signals only.
+- `judge_overrides` round-trips through normalized contracts but is not applied to judge behavior.
+- Budget-driven runs are sequential even when `run.max_concurrency` is greater than one.
+
+These limitations preserve current behavior and are documented rather than hidden behind new semantics.

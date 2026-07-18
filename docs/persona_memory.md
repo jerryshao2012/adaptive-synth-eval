@@ -1,21 +1,22 @@
-# Persistent Persona Memory System
+# Persona Memory
 
-The `adaptive-synth-eval` tool features a persistent, isolated persona memory system. This allows personas to retain context across conversations and runs, mimicking how a real human remembers demographics, preferences, settings, and prior interactions.
+Persona memory gives each simulated user a persistent profile and bounded conversation history within one evaluation run. Synth and unified modes use the same `PersonaMarkdownMemory` implementation.
 
----
+This is distinct from adversarial attack memory: persona memory shapes the simulated user's continuity, while attack memory teaches the adversarial planner which strategies produced useful outcomes.
 
-## Core Architecture
+## Location and isolation
 
-Each persona's memory is encapsulated in a dedicated markdown file.
-- **Path**: `outputs/runs/<run_id>/personas/<persona_id>_memory.md`
-- **Isolation**: Each test run maintains its own isolated directories to prevent cross-contamination.
-- **Lifecycle**: The memory is loaded at the start of a conversation, updated dynamically during conversation turns, and written atomically back to the markdown file.
+Each persona has a Markdown file:
 
----
+```text
+outputs/runs/<run_id>/personas/<persona_id>_memory.md
+```
 
-## Memory Markdown Structure
+The actual base directory follows `output.base_dir`. Files are isolated by run and persona, preventing one run's profile from becoming another run's context.
 
-The markdown memory file contains six key sections:
+At the start of a conversation, the simulator loads the persona file, initializes missing baseline demographics from the contract, and clears any stale recent window. Long-term profile fields and prior conversation recall remain available.
+
+## File structure
 
 ```markdown
 # Persona Memory: <persona_id>
@@ -27,68 +28,70 @@ The markdown memory file contains six key sections:
 - style: <value>
 - hr_familiarity: <value>
 - privacy_sensitivity: <value>
-- email: <extracted_value>
 
 ## Preferences
-- stated_preference: <extracted_value>
+- stated_preference: <value>
 
 ## Settings
-- language: <extracted_value>
+- language: <value>
 
 ## Summary Notes
-- User: <evicted turn message>
-- Assistant: <evicted turn response>
+- User: <evicted message excerpt>
 
 ## Long Term Recall
-- Interacted regarding <intent> to <topic>. Key message: '<summary>'
+- Interacted regarding <domain> to <intent>. Key message: '<opening message>'
 
 ## Recent Window
 - User: <message>
 - Assistant: <response>
 ```
 
-### Description of Sections:
+The parser tolerates absent sections and values. If the file is missing or unreadable, the simulator starts from an empty memory object and repopulates contract baseline fields.
 
-1. **Demographics**: Tracks user profile demographics. Initial values are populated from the persona's contract baseline configuration, and can be updated dynamically if new information is mentioned (e.g., name, email).
-2. **Preferences**: Stored custom preference properties updated dynamically during conversation (e.g., dental coverage choices).
-3. **Settings**: Stored configuration/technical properties (e.g., preferred language).
-4. **Summary Notes**: If the `Recent Window` exceeds 10 turns, less important turns are evicted and appended here as bullet points to keep the LLM context size bounded.
-5. **Long Term Recall**: When a conversation is completed, the simulator generates a high-level summary of the interaction and appends it here.
-6. **Recent Window**: The active sliding window of the current conversation. **Note**: This section is cleared at the end of each session/conversation, ensuring that a new conversation starts with a clean slate, but still benefits from the `Long Term Recall` and updated profile attributes.
+## Lifecycle
 
----
+### During a conversation
 
-## Profile Delta Extraction
+The simulator appends user and assistant messages to `Recent Window`. When in-memory history exceeds ten messages, it keeps the most recent pair and evicts a lower-importance older message. That excerpt is appended to `Summary Notes`, which is capped at ten entries.
 
-During conversation turns, the simulator uses regular expressions to detect user and assistant updates and dynamically populates/overwrites properties under `Demographics`, `Preferences`, and `Settings`:
+Regex-based profile extraction can update:
 
-- **Preferred Language**: Matches patterns like `\b(?:speak|use) ([a-zA-Z]{2,20})\b` (e.g., "speak French" extracts `language: french`).
-- **Emails**: Matches standard email addresses and updates `email` in demographics.
-- **Preferences**: Matches phrases like `prefer ([a-zA-Z0-9_\s]{2,40})` to update `stated_preference` under `Preferences`.
-- **Names**: Matches patterns like `my name is ([a-zA-Z]{2,20})` to update `name` in demographics.
+- demographics: name, age, location, email, and phone;
+- preferences: favorites and a stated preference;
+- settings: language.
 
----
+These updates are heuristic. Treat the memory file as generated evaluation context, not as a verified user profile.
 
-## Memory Context Prompt Injection
+### At conversation completion
 
-When generating a turn, the `UserSimulator` automatically compiles the parsed memory state into a clean context block and prepends it to the LLM system prompt:
+The simulator appends a deterministic interaction summary to `Long Term Recall`, capped at twenty entries, then clears `Recent Window`. A later conversation for the same persona starts as a fresh contact while retaining profile fields, summary notes, and long-term recall.
 
-```text
-[PERSONA CONTEXT]
-Demographics: {'role': 'tester', 'location': 'Canada', ...}
-Preferences: {'stated_preference': 'standard dental coverage'}
-Settings: {'language': 'french'}
-Summary Notes:
-- Assistant: ...
-Long Term Recall:
-- Interacted regarding spouse_benefits ...
-```
+### Prompt injection
 
----
+Before an LLM-backed synth turn, the simulator renders non-empty demographics, preferences, settings, summary notes, and long-term recall into a persona-context block. The block is prepended to ordinary conversation history; it does not replace the contract persona or scenario.
 
-## Thread Safety & Robustness
+## Concurrency and writes
 
-To support high-concurrency evaluation runs, the memory system employs multiple layers of safety:
-- **Thread Locks**: A global lock registry maintains a threading lock (`threading.Lock`) per memory file path to prevent concurrent read/write corruptions across parallel simulation threads.
-- **Atomic Replacement**: Saves are done by writing to a temporary file (`<filename>.md.tmp`) first and performing an atomic rename/replace.
-- **Graceful Error Handling**: If a memory file is corrupted or unreadable, the simulator defaults to a blank state rather than crashing the run.
+A process-wide registry supplies one `threading.Lock` per absolute memory-file path. Reads and writes use that lock. Saves write to a thread-specific temporary file and atomically replace the destination, retrying transient Windows `PermissionError` failures.
+
+This prevents torn/corrupt individual in-process reads and writes, but the lock does not
+cover an entire load-modify-save lifecycle and does not merge independently loaded
+states. Two simulators writing the same persona file can still use stale snapshots,
+overwrite one another, and lose updates (last writer wins).
+
+The synth runner serializes its conversations per persona with an `asyncio.Lock`.
+Unified orchestration does not currently provide equivalent per-persona conversation
+serialization. Avoid concurrent same-persona writers in unified runs, or externally
+serialize them when logical memory continuity matters. The file lock is also not a
+cross-process lock, so do not point multiple ASE processes at the same run directory.
+
+## Privacy considerations
+
+Persona memory may contain synthetic names, email addresses, phone numbers, preferences, and conversation excerpts. Apply the same retention and access controls used for the rest of the run artifacts, especially when a target echoes real-looking identifiers.
+
+## Related documentation
+
+- [User simulation LLM](user_simulation_llm.md) — how memory enters simulator prompts.
+- [Contract reference](contracts.md) — persona and output configuration.
+- [Output artifacts](output_artifacts.md) — run directory and chat-history schemas.
+- [Environment setup](environment_setup.md) — local filesystem and platform considerations.

@@ -17,7 +17,7 @@ graphify-out/
 .codex/
 .superpowers/
 .workspace/
-docs/superpowers/plans/
+docs/superpowers/
 next-env.d.ts
 yarn.lock
 unified_evaluation_demo_local.yaml

@@ -1,137 +1,221 @@
-# Simulation Contracts
+# Contract Reference
 
-Contracts are JSON or YAML and are the source of truth for simulation behavior.
+ASE contracts are YAML or JSON files that define the target, simulated users, scenarios, traffic, scoring, and outputs. The loader selects the evaluation mode from the top-level key: `simulation_suite` selects synth mode, while `suite` selects unified mode.
 
-Required sections:
+Use [`ase validate-contract`](cli_usage.md) before a run. For runtime behavior, see the [unified evaluation guide](unified_evaluation.md); for generated files and field definitions, see the [artifact reference](output_artifacts.md).
 
-- `simulation_suite`
-- `target`
-- `time_window`
-- `persona_pool`
-- `scenario_catalog`
-- `traffic_orchestration`
-- `output`
+## Environment substitution
 
-Optional sections:
+Any contract value may use `${NAME}` or `${NAME:-default}`. Secrets should be referenced by environment-variable name rather than embedded as literal values. See [environment setup](environment_setup.md) for credentials, TLS, proxy, and provider prerequisites.
 
-- `llm` (harness-side simulated chat client for synthetic conversations)
+## Synth contracts
 
-Tool-call expectations are not active scope. If a legacy contract includes `tool_expectations`, validation warns and ignores the field.
+Synth contracts generate persona-driven conversations without adversarial turns.
 
-Conversation turn ranges must be within 3-8 turns.
+### Required blocks
 
-## Environment Variable Substitution
+| Block | Purpose |
+| :--- | :--- |
+| `simulation_suite` | Suite ID, target application, run mode, and synthetic flag |
+| `target` | Target client and retry settings |
+| `time_window` | Start date, synthetic days, and compressed runtime |
+| `persona_pool` | Personas available to the traffic mix |
+| `scenario_catalog` | Benign tasks and optional failure injection |
+| `traffic_orchestration` | Conversation count, turn range, weighted mix, bursts, and concurrency |
 
-Contract files support environment variable substitution using `${VAR_NAME}` syntax:
+`output` is optional and defaults to `outputs`; `llm` is optional and configures the user simulator. If no simulator provider is configured or detected, synth mode uses deterministic templates.
 
-- `${CHATBOT_ENDPOINT}` - replaced with the value of the `CHATBOT_ENDPOINT` environment variable
-- `${CHATBOT_ENDPOINT:-https://default.example.com}` - uses the env var if set, otherwise falls back to the default value
+```yaml
+simulation_suite:
+  suite_id: example_synth
+  target_application: example_bot
+  run_mode: synth
+  synthetic_flag: true
 
-The same substitution pattern can also be used for target LLM payload knobs:
+target:
+  enabled: true
+  mode: api
+  endpoint: "${CHATBOT_ENDPOINT}"
 
-- `${CHATBOT_MODEL:-}`
-- `${CHATBOT_TEMPERATURE:-}`
-- `${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}`
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  api_key_env: OPENAI_API_KEY
 
-For harness-side persona simulation (`UserSimulator`), you can also configure an optional `llm` block:
+time_window:
+  start_day: 2026-01-01
+  num_synthetic_days: 1
+  compressed_runtime_minutes: 5
+
+persona_pool: []
+scenario_catalog: []
+
+traffic_orchestration:
+  total_conversations: 10
+  conversation_turns: {min: 3, max: 5}
+  mix: []
+  max_concurrency: 5
+
+output:
+  base_dir: outputs
+```
+
+Synth validation requires conversation turns in the inclusive range 3–8, `min <= max`, and every `traffic_orchestration.mix` persona/scenario reference to exist. A legacy scenario `tool_expectations` field is accepted with a warning and ignored.
+
+## Unified contracts
+
+Unified contracts interleave synth and adversarial turns within one conversation.
+
+### Required blocks
+
+| Block | Purpose |
+| :--- | :--- |
+| `suite` | Suite metadata; `run_mode` defaults to `unified` |
+| `llm` | Default harness LLM specification |
+| `target` | Target client configuration |
+| `time_window` | Synthetic dates and compressed runtime |
+| `persona_pool` | Personas available to plan entries |
+| `scenario_catalog` | Synth scenarios; may also contain inline adversarial scenarios |
+| `eval_plan` | Turn range, weighted conversation recipes, schedules, and attack-memory mode |
+
+Optional blocks are `schema_version`, `run`, `components`, `adversarial_scenario_catalog`, `scoring`, `trajectory`, and `output`. Unified source contracts may omit `schema_version`; the normalized artifact is always canonical schema version 2. Versions 1 and 2 are accepted, and future versions are rejected.
+
+```yaml
+schema_version: 2
+suite:
+  suite_id: example_unified
+  target_application: example_bot
+  run_mode: unified
+
+run:
+  random_seed: 42
+  max_concurrency: 5
+  budget: 200000
+  session_policy: rule
+
+llm:
+  provider: bedrock
+  model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  max_tokens: 1024
+  bedrock:
+    region: us-east-1
+
+components:
+  judge:
+    provider: bedrock
+    model: anthropic.claude-3-5-sonnet-20241022-v2:0
+    bedrock: {region: us-east-1}
+
+target:
+  enabled: true
+  mode: api
+  endpoint: "${CHATBOT_ENDPOINT}"
+
+time_window:
+  start_day: 2026-01-01
+  num_synthetic_days: 1
+  compressed_runtime_minutes: 5
+
+persona_pool: []
+scenario_catalog: []
+adversarial_scenario_catalog: []
+
+eval_plan:
+  total_conversations: 10
+  conversation_turns: {min: 3, max: 8}
+  attack_memory: shared
+  entries: []
+
+scoring:
+  adversarial: {failure_threshold: 3}
+
+trajectory:
+  enabled: false
+  trace_field: trace
+
+output:
+  base_dir: outputs
+```
+
+Unified validation requires conversation turns in the inclusive range 1–20, `min <= max`, valid plan references, a target LLM block when `target.mode: llm`, and a supported schedule and memory mode.
+
+### LLM specifications
+
+The top-level `llm` is the default for planner, generator, judge, policy, and user simulator. `components.planner`, `components.generator`, `components.judge`, `components.policy`, and `components.user_simulator` may override it. An LLM target uses `target.chatbot_llm` plus optional `target.system_prompt`.
+
+Unified contracts require an explicit `llm` specification. The unified factory accepts
+`mock`, `claude`, `openai`, `azure-openai`, `bedrock`, and `ollama`. These names are not
+interchangeable with every synth/legacy simulator alias: for example, unified uses
+`claude` and `azure-openai`, while the synth client uses `anthropic` and normalized
+`azure_openai`.
+
+> **Unified Ollama limitation:** the unified factory uses real Ollama only for the user
+> simulator interface. ARE planner, generator, and judge interfaces fall back to the mock
+> backend. A unified run configured with `provider: ollama` is therefore not a real
+> Ollama-backed adversarial evaluation, and its adversarial scores must not be interpreted
+> as such.
+
+Canonical schema-v2 provider settings are nested. For Azure OpenAI:
 
 ```yaml
 llm:
-  provider: "${SIMULATOR_LLM_PROVIDER:-}"
-  model: "${SIMULATOR_MODEL_NAME:-}"
-  max_tokens: "${SIMULATOR_MODEL_MAX_TOKENS:-1024}"
-  temperature: "${SIMULATOR_MODEL_TEMPERATURE:-0.7}"
-  api_key_env: "${SIMULATOR_API_KEY_ENV:-}"
+  provider: azure-openai
+  model: gpt-4o-mini
+  max_tokens: 1024
+  temperature: 0.7
+  api_key_env: AZURE_OPENAI_API_KEY
   azure:
-    endpoint: "${SIMULATOR_AZURE_OPENAI_ENDPOINT:-}"
-    deployment: "${SIMULATOR_AZURE_OPENAI_DEPLOYMENT:-}"
-    api_version: "${SIMULATOR_AZURE_OPENAI_API_VERSION:-}"
-  bedrock:
-    region: "${SIMULATOR_AWS_REGION:-}"
-    endpoint: "${SIMULATOR_AWS_BEDROCK_ENDPOINT:-}"
-  ollama:
-    base_url: "${SIMULATOR_OLLAMA_BASE_URL:-}"
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    api_version: "${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}"
 ```
 
-If `llm.provider` is omitted/empty, the simulator continues to auto-detect provider from environment variables.
-
-This is particularly useful for the `target.endpoint` field to avoid hardcoding endpoints:
+For native AWS Bedrock:
 
 ```yaml
-target:
-  enabled: true
-  endpoint: "${CHATBOT_ENDPOINT:-https://api.example.com/v1/chat}"
-  chatbot_model: "${CHATBOT_MODEL:-}"
-  chatbot_temperature: "${CHATBOT_TEMPERATURE:-}"
-  source_doc_ref: "${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}"
-  retry_max_retries: 2
-  retry_initial_backoff_seconds: 1.0
-  retry_max_backoff_seconds: 20.0
-  retry_backoff_multiplier: 2.0
-  retry_jitter: true
-  retry_on_timeout: true
-  retry_on_http_5xx: false
-  auth:
-    type: bearer
-    env_var: CHATBOT_API_TOKEN
+llm:
+  provider: bedrock
+  model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  max_tokens: 1024
+  bedrock:
+    region: us-east-1
 ```
 
-When `CHATBOT_ENDPOINT` is set in your environment, it will override the default. Otherwise, the fallback value is used.
+The unified Bedrock backend uses the standard `boto3` AWS credential chain. Its region
+resolution is `bedrock.region`, then `AWS_DEFAULT_REGION`, then `us-east-1`. This differs
+from the synth/legacy client's bearer-token, OpenAI-compatible Bedrock path. See
+[environment setup](environment_setup.md) for credential prerequisites.
 
-For target LLM fields in the `target` block:
+Legacy flat names (`azure_endpoint`, `azure_deployment`, `azure_api_version`, `bedrock_region`, `bedrock_endpoint`, and `ollama_base_url`) remain accepted at top-level, component, and target LLM locations. When a nested and flat value conflict, the nested value wins and validation emits a warning. Although `bedrock.endpoint`/`bedrock_endpoint` round-trip for compatibility, the current unified native Bedrock backend does not use a custom endpoint.
 
-- `chatbot_model`: optional model allow-list forwarded in the chatbot request payload.
-- `chatbot_temperature`: optional generation temperature forwarded in the chatbot request payload.
-- `source_doc_ref`: optional source document reference forwarded in the chatbot request payload.
+## Target modes
 
-Precedence rules:
+All modes reuse the same target schema.
 
-- If `target.chatbot_model`, `target.chatbot_temperature`, or `target.source_doc_ref` is provided in YAML, those values are used.
-- If not provided in YAML, the runtime falls back to `CHATBOT_MODEL`, `CHATBOT_TEMPERATURE`, and `CHATBOT_SOURCE_DOCUMENT_REFERENCE`.
-- `chatbot_model` supports either a YAML list (for example `['model-a', 'model-b']`) or a comma-separated string (for example from env substitution).
+### API target
 
-Retry fields are optional and control how API chatbot requests handle transient failures before the simulation marks the chatbot as unavailable:
+`mode: api` is the default. Configure `endpoint`, `auth`, `timeout_seconds`, and optional retry fields. `chatbot_model`, `chatbot_temperature`, and `source_doc_ref` are forwarded in the request payload; contract values take precedence over `CHATBOT_MODEL`, `CHATBOT_TEMPERATURE`, and `CHATBOT_SOURCE_DOCUMENT_REFERENCE`.
 
-- `retry_max_retries`: number of retry attempts after the first failed attempt.
-- `retry_initial_backoff_seconds`: base delay before the first retry.
-- `retry_max_backoff_seconds`: upper bound for exponential backoff.
-- `retry_backoff_multiplier`: multiplier for each retry delay.
-- `retry_jitter`: randomize delays to reduce synchronized bursts.
-- `retry_on_timeout`: retry transport-level timeout/connection errors.
-- `retry_on_http_5xx`: retry HTTP `429/500/502/503/504` responses.
-
-## Browser Chatbot Mode
-
-The chatbot can also be driven through a generic browser UI instead of an HTTP API. This is useful when the target chatbot only exposes a web chat surface.
+### Browser target
 
 ```yaml
 target:
   enabled: true
   mode: browser
   browser:
-    browser_type: edge
-    url: "https://chat.example.com"
-    input_selector: "textarea"
+    browser_type: chromium # or edge
+    url: https://chat.example.com
+    input_selector: textarea
     submit_selector: "button[type='submit']"
-    response_selector: ".bot-message"
-    ready_selector: "textarea"
+    response_selector: .bot-message
+    ready_selector: textarea
     response_timeout_seconds: 60
     headless: false
 ```
 
-Browser mode uses the following fields:
+A single browser chat page processes target calls sequentially.
 
-- `browser_type`: browser engine to launch. Options: `chromium` (default) or `edge` (which launches Microsoft Edge using Playwright's `msedge` channel).
-- `input_selector`: element that receives the user message.
-- `submit_selector`: element clicked to send the message.
-- `response_selector`: bot message elements; the newest matching element is captured.
-- `ready_selector`: optional element to wait for after page load. Defaults to `input_selector`.
-
-Browser mode runs chatbot calls sequentially, even if `traffic_orchestration.max_concurrency` is higher, because a single browser chat page cannot safely process concurrent turns.
-
-## AWS AgentCore Target Mode
-
-When your chatbot is deployed to AWS Bedrock AgentCore runtime, configure the target in `agentcore` mode.
+### AgentCore target
 
 ```yaml
 target:
@@ -140,135 +224,85 @@ target:
   timeout_seconds: 60
   agentcore:
     region: "${AWS_REGION:-us-east-1}"
-    agent_runtime_arn: "${TFSA_AGENT_RUNTIME_ARN}"
-    qualifier: "${TFSA_AGENTCORE_QUALIFIER:-DEFAULT}"
+    agent_runtime_arn: "${AGENT_RUNTIME_ARN}"
+    qualifier: "${AGENTCORE_QUALIFIER:-DEFAULT}"
     payload_prompt_key: prompt
     runtime_session_id_prefix: ase_
 ```
 
-AgentCore mode uses the following fields:
+Authentication comes from the active AWS credentials used by `boto3`.
 
-- `region`: AWS region where the runtime exists.
-- `agent_runtime_arn`: full AgentCore runtime ARN.
-- `qualifier`: optional endpoint qualifier (for example `DEFAULT`).
-- `payload_prompt_key`: payload key used to pass user text (defaults to `prompt`).
-- `runtime_session_id_prefix`: prefix used to derive stable 33+ character runtime session IDs from ASE conversation/session IDs.
+### LLM target
 
-Authentication for AgentCore mode comes from the active AWS credentials/profile used by `boto3`.
-```bash
-aws configure
-aws sts get-caller-identity
+Unified mode also supports `mode: llm` with `target.chatbot_llm`. In non-dry-run mode,
+the current `LLMTargetClient` supports only `provider: claude`; other providers fail when
+the client is built. This evaluates a directly configured Claude model instead of an API,
+browser, or AgentCore application.
+
+```yaml
+target:
+  enabled: true
+  mode: llm
+  system_prompt: You are a helpful assistant.
+  chatbot_llm:
+    provider: claude
+    model: claude-haiku-4-5-20251001
+    api_key_env: ANTHROPIC_API_KEY
 ```
 
-## Unified Contracts
+## Unified schedules
 
-Unified contracts support interleaving synthetic (ASE) and adversarial (ARE) red-teaming turns. A unified contract uses the `suite` block instead of `simulation_suite`, and requires the `eval_plan` block. To define adversarial scenarios, you can either configure them under the main `scenario_catalog` block alongside synthetic parameters, or use a separate optional `adversarial_scenario_catalog` block. For details on unified contract structures, see [Unified Evaluation Guide](unified_evaluation.md).
+Each `eval_plan.entries[]` selects a persona, synth scenario, adversarial scenario, weight, optional `max_turns`, and schedule:
 
-## Available Examples
+| Mode | Fields | Behavior |
+| :--- | :--- | :--- |
+| `bernoulli` | `p_synth` | Independent synth/adversarial choice each turn; default `p_synth` is `0.3` |
+| `phased` | `warmup_turns` | Synth warmup followed by adversarial turns |
+| `min_each` | `min_synth`, `min_adversarial`, `p_synth` | Guarantees each minimum, then fills by Bernoulli choice |
+| `ramp` | `warmup_turns` | Synth warmup, then adversarial probability rises linearly to 1 |
 
-### 1. `chatbot_test_contract.yaml` (Synthetic Only)
-- **Purpose**: Validation and dry-run testing for synthetic-only conversations.
-- **Run Limit**: 5 conversations, 3-5 turns each.
-- **Validation**:
-  ```bash
-  uv run ase validate-contract contracts/examples/chatbot_test_contract.yaml
-  ```
-- **Execution**:
-  ```bash
-  uv run ase run --contract contracts/examples/chatbot_test_contract.yaml --dry-run
-  ```
+`p_synth` must be in `[0, 1]`. The deprecated `synth_to_adversarial_ratio` is converted to a Bernoulli schedule with a warning.
 
-### 2. `unified_evaluation_demo.yaml` (Unified)
-- **Purpose**: A comprehensive unified evaluation contract illustrating multi-persona usage and all four adversarial scenario types (toxicity, prompt-injection, PII leak, and persona-hijack).
-- **Run Limit**: 15 conversations, 3-5 turns each.
-- **Key Features**:
-  - 3 personas: New employee, Manager, and Contractor using domain-neutral schema fields.
-  - 4 scenarios: Benefits enrollment (with inline PII leak checks), Leave policy (with inline persona-hijack checks), Toxicity testing, and Prompt injection.
-  - Interleaving modes: `phased`, `min_each`, and `bernoulli` schedules.
-- **Validation**:
-  ```bash
-  uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
-  ```
-- **Execution**:
-  ```bash
-  uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
-  ```
+## Adversarial scenarios and scoring
 
-### 3. `tfsa_aws_unified_evaluation.yaml` (Unified)
-- **Purpose**: A unified evaluation contract targeting a Tax-Free Savings Account (TFSA) chatbot deployed on AWS.
-- **Run Limit**: 12 conversations, 3-6 turns each.
-- **Key Features**:
-  - AWS Bedrock AgentCore runtime target (`mode: agentcore`) with configurable runtime ARN and qualifier.
-  - TFSA customer personas: Novice saver, Experienced investor, Self-employed contractor.
-  - Scenarios: Eligibility & limits, Withdrawals, PII Leak (protecting SIN), Persona Hijack (certified advisor boundaries), Toxicity, and Prompt injection.
-- **Validation**:
-  ```bash
-  uv run ase validate-contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml
-  ```
-- **Execution**:
-  ```bash
-  uv run ase run --contract contracts/examples/tfsa_aws_unified_evaluation_no_reasoning.yaml --dry-run
-  ```
+Adversarial scenarios may live inline in `scenario_catalog` or in `adversarial_scenario_catalog`. They require `scenario_id`, `scenario_type`, and `scenario_text`. Optional fields include `hijack_target`, `failure_threshold`, `fresh_start_after_refusals`, and `judge_overrides`.
 
-### Additional Examples
+An omitted scenario threshold resolves to `scoring.adversarial.failure_threshold` (default 3). `fresh_start_after_refusals: 0` disables automatic strategy rotation. `judge_overrides` is preserved in normalized contracts but is not currently applied; validation warns when it is present.
 
+## Attack memory
 
-#### 5. `one_week_chat_history.yaml`
-- **Purpose**: A comprehensive 7-day simulation plan simulating realistic HR chatbot usage over a week
-- **Key Features**:
-  - Simulates 5,040 conversations across 7 days (compressed into 60 minutes runtime)
-  - 2 personas: New employee (P001) and Manager (P002) with different communication styles
-  - 2 scenarios: Parental leave policy and benefits enrollment
-  - Includes burst pattern: 3x traffic spike on day 3 for open enrollment
-  - Traffic mix: 45% new employee + parental leave, 20% new employee + benefits, 15% manager + parental leave, 20% manager + benefits
-  - Failure injection includes ambiguity (0.4), missing info (0.3), typos, frustration, and policy boundary pressure
-- **Use Case**: Testing long-term conversation patterns, burst handling, and multi-persona interactions over time
+`eval_plan.attack_memory` accepts:
 
-#### 6. `browser_chatbot_test.yaml`
-- **Purpose**: A focused contract for testing browser-driven chatbot integration (not API-based)
-- **Key Features**:
-  - Uses `mode: browser` instead of HTTP endpoint
-  - Browser configuration: Chromium engine, non-headless mode
-  - CSS selectors defined for input (`#chat-input textarea`), submit button (`#send-button`), and response capture (`.bot-message .message-content`)
-  - Single tester persona (BROWSER_TEST_P1) with direct communication style
-  - Tests browser automation functionality including UI rendering
-  - Small scale: 5 conversations, 3-5 turns each, 3 synthetic days compressed to 15 minutes
-  - Max concurrency limited to 2 (browser mode runs sequentially per page)
-- **Use Case**: Validating chatbots that only expose web UI interfaces, testing Playwright browser automation integration
+- `shared`: one run-wide memory shared across personas.
+- `per_persona`: isolated memory for each persona.
+- `none`: no attack memory is recorded or written.
 
-#### 7. `ten_k_conversations.yaml`
-- **Purpose**: A large-scale stress test contract generating 10,000 conversations for performance validation
-- **Key Features**:
-  - Massive scale: 10,000 conversations across 30 synthetic days (compressed to 60 minutes)
-  - Same 2 personas as one_week but scaled up significantly
-  - Higher concurrency: max_concurrency=10, batch_size=250
-  - Burst pattern: 4x traffic spike on day 12 for open enrollment (benefits, leave, payroll scenarios)
-  - Traffic distribution: 35% P001+S001, 25% P001+S002, 15% P002+S001, 25% P002+S002
-  - Random seed 314 for reproducibility at scale
-  - Target chatbot enabled when `CHATBOT_ENDPOINT` is configured; supports forwarding `chatbot_model`, `chatbot_temperature`, and `source_doc_ref`
-- **Use Case**: Performance benchmarking, scalability testing, load testing the generation pipeline, validating system behavior under high-volume conditions
+`attack_memory_max_entries` caps retained entries. `seed_attack_memory_path` accepts one path, a list, or a glob, but seeding is honored only in `shared` mode. On resume, restored run-state memory supersedes seed files.
 
-#### 8. `unified_evaluation_demo.yaml`
-- **Purpose**: Demonstrates unified adversarial and synthetic capabilities with 3 distinct user types interacting with 2 different scenarios
-- **Key Features**:
-  - 3 diverse personas:
-    - DEMO_P1: New employee from Toronto (junior, confused_but_polite, low HR familiarity)
-    - DEMO_P2: Manager from Vancouver (senior, direct_under_time_pressure, high HR familiarity, high privacy sensitivity)
-    - DEMO_P3: Remote contractor (mid-level, casual_and_brief, medium HR familiarity, low privacy sensitivity)
-  - 2 scenarios: Benefits enrollment and leave policy requests
-  - 15 total conversations showing weighted distribution across all persona-scenario combinations
-  - Most common: New employee asking about benefits (35% weight)
-  - Least common: Contractor asking about leave (5% weight)
-  - Real-time chat enabled with target chatbot
-  - Max concurrency: 3, batch size: 15
-- **Use Case**: Showcasing how different user types (roles, seniority, locations, communication styles) interact with the same chatbot, demonstrating persona diversity and realistic traffic mixing
+## Trajectory configuration
 
-#### 9. `tfsa_aws_unified_evaluation.yaml`
-- **Purpose**: Demonstrates unified synthetic and adversarial capabilities on a Tax-Free Savings Account (TFSA) chatbot.
-- **Key Features**:
-  - Simulates 12 conversations with lengths between 3 and 6 turns.
-  - Endpoint configuration includes API key authentication via `type: api_key`, protecting an AWS-deployed service.
-  - 3 custom personas targeting different demographics: novice savers, experienced investors, and contractors.
-  - Scenarios cover Canadian TFSA rules (eligibility, limits, withdrawal timing) alongside security/safety guardrails (PII leakage, professional persona hijacking, toxicity, and prompt injections).
-- **Use Case**: Testing safety boundary compliance, content filtering, and specific regulatory rules on tax-advantaged account domains.
+Trajectory evaluation is opt-in:
 
+```yaml
+trajectory:
+  enabled: true
+  trace_field: trace
+```
+
+The target response may place its structured activity trace at `trace_field`. Empty or non-meaningful traces remain response-only and do not invoke the trace summarizer. See [unified evaluation](unified_evaluation.md#trajectory-evaluation) for behavior and [output artifacts](output_artifacts.md#unified-adversarial-score-fields) for persisted fields.
+
+## Checked-in examples
+
+The current examples are under `contracts/examples/`:
+
+- `chatbot_test_contract.yaml` and `ten_k_conversations.yaml`: synth contracts.
+- `unified_evaluation_demo.yaml`, `unified_evaluation_demo_local.yaml`, `tfsa_assistant.yaml`, `tfsa_one_week_traffic.yaml`, and `tfsa_testing.yaml`: general unified examples.
+- `tfsa_aws_unified_evaluation_no_reasoning.yaml`, `tfsa_aws_unified_evaluation_reasoning.yaml`, and `wealth_advisory.yaml`: unified AgentCore/model examples.
+- `browser_chatbot_test.yaml`: browser target example.
+- `agent-runtime-logs-export.yaml`: AgentCore runtime-log export configuration used by supporting tooling.
+
+Validate any contract with:
+
+```bash
+uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
+```
