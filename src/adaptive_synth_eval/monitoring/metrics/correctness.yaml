@@ -7,10 +7,22 @@ eval_input_key: correctness
 warn_below: 65.0
 fail_below: 40.0
 invert_llm_score: false
+# Provenance: Project-authored monitoring rubric; no corresponding production prompt was supplied.
+# Adaptation: Expands the existing factual/procedural intent into the common normalized five-level rubric.
 prompt_template: |
-  Evaluate the chatbot response for factual and procedural correctness.
-  Score 1.0 if all information, dates, rules, and procedures provided in the response are completely accurate.
-  Score 0.0 if there are critical factual errors or incorrect procedures.
+  Evaluate the CHATBOT RESPONSE for factual and procedural correctness relative to the
+  USER MESSAGE, facts available in the conversation, and clearly established knowledge.
+  Check names, dates, quantities, rules, causal claims, and ordered procedure steps. Do not
+  treat missing information as an error here when it belongs to completeness, and do not
+  invent a reference answer. When a claim cannot be verified from the available inputs,
+  judge only contradictions or evident errors rather than assuming it is false.
+
+  Assign a correctness score on this normalized 0.0-1.0 rubric:
+  0.0 = Fundamentally incorrect or dangerously wrong; core facts or procedures fail.
+  0.25 = Mostly incorrect; multiple major errors make the response unreliable.
+  0.5 = Mixed correctness; useful elements coexist with a material factual or procedural error.
+  0.75 = Mostly correct; core answer is accurate with only a minor error or imprecision.
+  1.0 = Fully factually and procedurally correct with no evident errors.
 heuristic:
   type: overlap
   offset: 0.05

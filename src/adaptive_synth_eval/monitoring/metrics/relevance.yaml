@@ -7,10 +7,20 @@ eval_input_key: relevance
 warn_below: 85.0
 fail_below: 60.0
 invert_llm_score: false
+# Provenance: Adapted from production prompt relevance/v1.0.0/relevance.prompty.
+# Adaptation: Normalizes the native five-level relevance rubric and delegates output shape to the grouped evaluator.
 prompt_template: |
-  Evaluate the chatbot response for relevance to the user's input.
-  Score 1.0 if the response directly and accurately addresses the user's specific question or request.
-  Score 0.0 if the response is completely off-topic or fails to address the user's intent.
+  Evaluate how well the CHATBOT RESPONSE addresses the USER MESSAGE. Consider whether it
+  directly addresses the query, supplies meaningful and useful information, covers the
+  essential intent, and avoids off-topic or generic material. Relevance concerns what the
+  response addresses; do not use this metric to duplicate detailed factual verification.
+
+  Assign a relevance score on this normalized 0.0-1.0 rubric:
+  0.0 = Irrelevant; unrelated and makes no attempt to address the user.
+  0.25 = Loosely related but unhelpful, superficial, vague, or only an error/non-answer.
+  0.5 = Partially relevant; on-topic but omits essential components or useful detail.
+  0.75 = Fully relevant and sufficient; addresses all core intent with at most minor omissions.
+  1.0 = Comprehensive and insightful; fully answers and adds useful context without drifting off-topic.
 heuristic:
   type: overlap
   offset: 0.0

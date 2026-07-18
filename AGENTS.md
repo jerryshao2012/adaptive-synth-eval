@@ -101,7 +101,6 @@ Two contract schemas exist side-by-side and share some parsed types (`Persona`, 
 - Many tests define contracts as inline JSON strings written to temp files rather than loading from `contracts/examples/`.
 
 ### Environment Variables
-
 Configured via `src/.env` (copy from `src/.env.example`). Key variables include provider-specific API keys/endpoints, retry settings, proxy config, and base URLs for each LLM backend.
 
 ## graphify

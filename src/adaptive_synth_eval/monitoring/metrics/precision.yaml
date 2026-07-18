@@ -1,17 +1,26 @@
 key: precision
 evaluation_group: performance
 label: Precision
-description: "Specificity and low ambiguity."
-detail: "Measures specificity, precision, and avoidance of vague or ambiguous language."
+description: "Coherent, precise presentation."
+detail: "Measures logical organization, clear connections, and precise, unambiguous presentation."
 eval_input_key: precision
 warn_below: 75.0
 fail_below: 50.0
 invert_llm_score: false
+# Provenance: Adapted from production prompt coherence/v1.0.0/coherence.prompty.
+# Adaptation: Maps the production Coherence rubric to the existing precision metric key and normalized scale.
 prompt_template: |
-  Evaluate the chatbot response for precision and clarity.
-  Determine if the response is specific, clear, and avoids vague or ambiguous terminology.
-  Score 1.0 if the response is precise and uses specific numbers or facts.
-  Score 0.0 if the response is overly vague, ambiguous, or lacks specificity.
+  Evaluate the CHATBOT RESPONSE using the production Coherence concept mapped to this
+  precision metric. Coherence is the logical and orderly presentation of ideas: the answer
+  directly addresses the user, connects sentences and paragraphs clearly, uses appropriate
+  transitions, follows a logical sequence, and avoids vague or ambiguous wording.
+
+  Assign a coherence-and-precision score on this normalized 0.0-1.0 rubric:
+  0.0 = Incoherent; disjointed or incomprehensible with no meaningful logical connection.
+  0.25 = Poorly coherent; fragmented, minimally connected, vague, and difficult to follow.
+  0.5 = Partially coherent; relevant ideas exist but organization, transitions, or precision are uneven.
+  0.75 = Coherent and precise; logically organized, clearly connected, and easy to follow.
+  1.0 = Exceptionally coherent; seamless organization and precise connections materially improve understanding.
 heuristic:
   type: length_ratio
   base: 0.5

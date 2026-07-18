@@ -7,10 +7,23 @@ eval_input_key: style
 warn_below: 70.0
 fail_below: 45.0
 invert_llm_score: false
+# Provenance: Adapted from production prompt style/v1.0.0/style.prompty.
+# Adaptation: Combines four production style dimensions into one normalized score with no sub-score output.
 prompt_template: |
-  Evaluate the chatbot response for tone and style appropriateness.
-  Score 1.0 if the response is professional, clear, empathetic, and uses appropriate grammar/clarity.
-  Score 0.0 if the response is rude, unclear, or poorly formatted.
+  Evaluate the CHATBOT RESPONSE against four production style dimensions:
+  Conversational — natural, friendly, sentence case, casual but professional, with smooth flow.
+  Personal — human, empathetic, inclusive, and active rather than transactional.
+  Collaborative — supportive, encouraging, helpful, and clear when explanation is needed.
+  Succinct — concise, easy to scan, simple in language, with short sentences or bullets when helpful.
+  Apply the criteria appropriately to the user's context; do not require forced empathy,
+  contractions, encouragement, or bullets when they would be unnatural.
+
+  Assign one overall style score on this normalized 0.0-1.0 rubric:
+  0.0 = Satisfies none of the dimensions or is unusably rude, unclear, or disorganized.
+  0.25 = Misses most dimensions; tone, clarity, or formatting substantially impedes communication.
+  0.5 = Partially meets the dimensions but has several noticeable style weaknesses.
+  0.75 = Meets most dimensions well, with only minor tone, clarity, or concision issues.
+  1.0 = Fits all applicable dimensions naturally and communicates with excellent clarity and economy.
 heuristic:
   type: style
   default_score: 0.9
