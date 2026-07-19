@@ -92,7 +92,7 @@ Persist `max_windows` with the existing sample size, interval, and strategy in m
 5. Existing polling refreshes run summaries, monitoring state, progress, and score-backed dashboard views.
 6. When the log panel is open, its separate bounded-tail query refreshes according to the selected run's lifecycle state.
 
-The launch lock is first written with a short queued-start expiry, then updated with the spawned `uv` PID. Polling treats the lock as active while that PID exists; a missing/dead PID or failed spawn removes the lock. The short expiry is only a fallback for the pre-spawn race or legacy locks, not the lifetime of a running job. This makes a slow live judge call remain `in_progress` without permitting a duplicate launch, while a crashed or max-window-limited process becomes `incomplete` and eligible for Continue after liveness is checked.
+The launch lock is first written with a short queued-start expiry, then updated with the spawned `uv` PID. The child is not unreferenced until that PID update succeeds. If PID persistence fails after spawn, the server terminates the detached process group, waits for it to exit, escalates to a forced kill after a bounded timeout if necessary, and only then removes the lock and returns an error. The parent log descriptor closes in every success or failure path. Polling treats the lock as active while its PID exists; a missing/dead PID or failed pre-spawn launch removes the lock. The short expiry is only a fallback for the pre-spawn race or legacy locks, not the lifetime of a running job. This makes a slow live judge call remain `in_progress` without permitting a duplicate launch, while a crashed or max-window-limited process becomes `incomplete` and eligible for Continue after liveness is checked.
 
 Action availability follows this table:
 
@@ -121,7 +121,7 @@ Invalid configuration or unsafe run identifiers return `400`; missing runs retur
 - Request validation accepts all supported strategies/actions and rejects invalid integers, unknown actions, unsafe run IDs, and dashboard dry-run input.
 - CLI argument construction includes sampling strategy, size where applicable, interval, optional max windows, `resume`/`restart`, and `--rescan` only for Re-evaluate; it never enables `--dry-run`.
 - Settings normalization uses new-run defaults and existing-state values correctly.
-- PID-backed lock tests cover queued-before-spawn, live process, dead process cleanup, spawn failure cleanup, and legacy lock expiry.
+- PID-backed lock tests cover queued-before-spawn, live process, dead process cleanup, spawn failure cleanup, PID-persistence failure termination/reaping, and legacy lock expiry.
 - Action availability follows the lifecycle table: Start for untouched runs, Continue for inactive incomplete runs, and Re-evaluate for inactive completed runs, while queued/running launches remain disabled.
 - Dialog submission sends the normalized configuration and presents server errors without closing.
 - Launch tests verify stdout/stderr share the append-only run log descriptor, launch boundaries are written, descriptors and locks are cleaned up on every failure path, and no command is executed through a shell.
