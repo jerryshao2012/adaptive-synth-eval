@@ -68,7 +68,9 @@ function request(overrides: Partial<MonitoringStartRequest> = {}): MonitoringSta
 describe("resolveRunDirectory", () => {
   it("trims and resolves one safe run segment below outputs/runs", async () => {
     const { repoRoot, runDir } = await makeRepo();
-    await expect(resolveRunDirectory("  run-1  ", repoRoot)).resolves.toBe(runDir);
+    await expect(resolveRunDirectory("  run-1  ", repoRoot)).resolves.toBe(
+      await fs.realpath(runDir)
+    );
   });
 
   it.each(["", " ", ".", "..", "../run-1", "nested/run", "nested\\run", "run\0id"])(
@@ -96,6 +98,15 @@ describe("resolveRunDirectory", () => {
 
     await expect(resolveRunDirectory("escaped-run", repoRoot)).rejects.toBeInstanceOf(
       RunPathValidationError
+    );
+  });
+
+  it("returns the stable canonical target for a run symlink inside outputs/runs", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    await fs.symlink(runDir, path.join(repoRoot, "outputs", "runs", "run-alias"));
+
+    await expect(resolveRunDirectory("run-alias", repoRoot)).resolves.toBe(
+      await fs.realpath(runDir)
     );
   });
 });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { handleMonitoringLogGet } from "@/app/api/evaluations/monitoring/log/route";
 import {
@@ -34,6 +34,7 @@ function logRequest(runId?: string): NextRequest {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
       fs.rm(directory, { recursive: true, force: true })
@@ -86,14 +87,15 @@ describe("readMonitoringLogTail", () => {
 
   it("drops the partial first line from an oversized tail", async () => {
     const { repoRoot, runDirectory } = await createRepository();
+    const discardedLine = Buffer.from("0123456789partial-line-fragment\n");
     const completeSuffix = Buffer.from("complete-line\nremaining output\n");
-    const partialPrefix = Buffer.from("partial-line-fragment\n");
+    const cutoff = 5;
     const padding = Buffer.alloc(
-      MONITORING_LOG_TAIL_MAX_BYTES - partialPrefix.length - completeSuffix.length,
+      MONITORING_LOG_TAIL_MAX_BYTES + cutoff - discardedLine.length - completeSuffix.length,
       "z"
     );
-    const tail = Buffer.concat([partialPrefix, completeSuffix, padding]);
-    const fullLog = Buffer.concat([Buffer.from("outside-tail"), tail]);
+    const fullLog = Buffer.concat([discardedLine, completeSuffix, padding]);
+    expect(fullLog.length - MONITORING_LOG_TAIL_MAX_BYTES).toBe(cutoff);
     await fs.writeFile(path.join(runDirectory, MONITORING_LOG_FILE), fullLog);
 
     const result = await readMonitoringLogTail("run-1", repoRoot);
@@ -114,18 +116,16 @@ describe("readMonitoringLogTail", () => {
   it("decodes multibyte UTF-8 only after the discarded newline", async () => {
     const { repoRoot, runDirectory } = await createRepository();
     const expectedStart = "complete-line 😀 café 漢字\n";
-    const prefix = Buffer.from("fragment-that-may-start-mid-character\n");
+    const discardedLine = Buffer.from("😀fragment-before-newline\n");
     const expected = Buffer.from(expectedStart);
+    const cutoff = 2;
     const padding = Buffer.alloc(
-      MONITORING_LOG_TAIL_MAX_BYTES - prefix.length - expected.length,
+      MONITORING_LOG_TAIL_MAX_BYTES + cutoff - discardedLine.length - expected.length,
       "q"
     );
-    const fullLog = Buffer.concat([
-      Buffer.from("😀outside"),
-      prefix,
-      expected,
-      padding,
-    ]);
+    const fullLog = Buffer.concat([discardedLine, expected, padding]);
+    expect(fullLog.length - MONITORING_LOG_TAIL_MAX_BYTES).toBe(cutoff);
+    expect(discardedLine.subarray(cutoff, cutoff + 1)[0] & 0xc0).toBe(0x80);
     await fs.writeFile(path.join(runDirectory, MONITORING_LOG_FILE), fullLog);
 
     const result = await readMonitoringLogTail("run-1", repoRoot);
@@ -147,6 +147,78 @@ describe("readMonitoringLogTail", () => {
       truncated: true,
       content: "",
     });
+  });
+
+  it("rejects a monitoring log symlink without reading its outside target", async () => {
+    const { repoRoot, runDirectory } = await createRepository();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "monitoring-log-outside-"));
+    temporaryDirectories.push(outside);
+    const secret = "outside secret must not be exposed";
+    const outsideLog = path.join(outside, "outside.log");
+    await fs.writeFile(outsideLog, secret);
+    await fs.symlink(outsideLog, path.join(runDirectory, MONITORING_LOG_FILE));
+
+    const response = await handleMonitoringLogGet(
+      logRequest("run-1"),
+      (runId) => readMonitoringLogTail(runId, repoRoot)
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({
+      error: "monitoring.log must be a regular file inside the selected run.",
+    });
+    expect(JSON.stringify(body)).not.toContain(secret);
+  });
+
+  it("rejects a non-regular monitoring log", async () => {
+    const { repoRoot, runDirectory } = await createRepository();
+    await fs.mkdir(path.join(runDirectory, MONITORING_LOG_FILE));
+
+    const response = await handleMonitoringLogGet(
+      logRequest("run-1"),
+      (runId) => readMonitoringLogTail(runId, repoRoot)
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "monitoring.log must be a regular file inside the selected run.",
+    });
+  });
+
+  it("rejects an intermediate run-directory swap before exposing log content", async () => {
+    const { repoRoot, runDirectory } = await createRepository();
+    const runsDirectory = path.dirname(runDirectory);
+    const parkedRunDirectory = path.join(runsDirectory, "parked-run-1");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "monitoring-log-swap-"));
+    temporaryDirectories.push(outside);
+    const secret = "outside swap secret must not be exposed";
+    await fs.writeFile(path.join(runDirectory, MONITORING_LOG_FILE), "safe\n");
+    await fs.writeFile(path.join(outside, MONITORING_LOG_FILE), secret);
+    const canonicalLogPath = path.join(
+      await fs.realpath(runDirectory),
+      MONITORING_LOG_FILE
+    );
+
+    const originalOpen = fs.open.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+      if (!swapped && path.resolve(String(target)) === canonicalLogPath) {
+        swapped = true;
+        await fs.rename(runDirectory, parkedRunDirectory);
+        await fs.symlink(outside, runDirectory);
+      }
+      return originalOpen(target, flags, mode);
+    });
+
+    const response = await handleMonitoringLogGet(
+      logRequest("run-1"),
+      (runId) => readMonitoringLogTail(runId, repoRoot)
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(JSON.stringify(body)).not.toContain(secret);
   });
 });
 

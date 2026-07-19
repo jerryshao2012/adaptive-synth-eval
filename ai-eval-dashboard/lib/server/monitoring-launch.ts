@@ -1,10 +1,13 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
 
 import { buildMonitoringArgs } from "@/lib/monitoring-config";
-import { resolveRunDirectory } from "@/lib/server/run-paths";
+import {
+  RunPathValidationError,
+  resolveRunDirectory,
+} from "@/lib/server/run-paths";
 import type {
   MonitoringAction,
   MonitoringLogResponse,
@@ -16,6 +19,8 @@ import type {
 export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
 export const MONITORING_LOG_TAIL_MAX_BYTES = 256 * 1024;
+const MONITORING_LOG_PATH_ERROR =
+  "monitoring.log must be a regular file inside the selected run.";
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
 const LOCK_GUARD_TIMEOUT_MS = 5_000;
@@ -121,68 +126,164 @@ function defaultRepoRoot(): string {
   return path.resolve(process.cwd(), "..");
 }
 
+function monitoringLogPathError(): RunPathValidationError {
+  return new RunPathValidationError(MONITORING_LOG_PATH_ERROR);
+}
+
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function assertBoundRunDirectory(
+  runDirectory: string,
+  boundDirectoryStat: Stats
+): Promise<void> {
+  try {
+    const [currentRealDirectory, currentDirectoryStat] = await Promise.all([
+      fs.realpath(runDirectory),
+      fs.stat(runDirectory),
+    ]);
+    if (
+      currentRealDirectory !== runDirectory ||
+      !currentDirectoryStat.isDirectory() ||
+      !sameFileIdentity(boundDirectoryStat, currentDirectoryStat)
+    ) {
+      throw monitoringLogPathError();
+    }
+  } catch (error) {
+    if (error instanceof RunPathValidationError) {
+      throw error;
+    }
+    throw monitoringLogPathError();
+  }
+}
+
+async function assertOpenedLogMatchesPath(
+  logPath: string,
+  openedLogStat: Stats
+): Promise<void> {
+  try {
+    const currentLogStat = await fs.lstat(logPath);
+    if (
+      !currentLogStat.isFile() ||
+      !sameFileIdentity(openedLogStat, currentLogStat)
+    ) {
+      throw monitoringLogPathError();
+    }
+  } catch (error) {
+    if (error instanceof RunPathValidationError) {
+      throw error;
+    }
+    throw monitoringLogPathError();
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isUnsafeFinalPathError(error: unknown): boolean {
+  return ["ELOOP", "ENOTDIR", "EISDIR"].includes(
+    (error as NodeJS.ErrnoException).code ?? ""
+  );
+}
+
 export async function readMonitoringLogTail(
   runId: string,
   repoRoot = defaultRepoRoot()
 ): Promise<MonitoringLogResponse> {
   const runDirectory = await resolveRunDirectory(runId, repoRoot);
   const logPath = path.join(runDirectory, MONITORING_LOG_FILE);
+  const directoryFlags =
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+  const logFlags =
+    fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW;
 
-  let log: Awaited<ReturnType<typeof fs.open>>;
+  let runDirectoryHandle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    log = await fs.open(logPath, "r");
+    runDirectoryHandle = await fs.open(runDirectory, directoryFlags);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {
-        runId: runId.trim(),
-        content: "",
-        size: 0,
-        truncated: false,
-      };
+    if (isMissingPathError(error) || isUnsafeFinalPathError(error)) {
+      throw monitoringLogPathError();
     }
     throw error;
   }
 
   try {
-    const stat = await log.stat();
-    const size = stat.size;
-    const truncated = size > MONITORING_LOG_TAIL_MAX_BYTES;
-    const start = truncated ? size - MONITORING_LOG_TAIL_MAX_BYTES : 0;
-    const bytesToRead = Math.min(size, MONITORING_LOG_TAIL_MAX_BYTES);
-    const buffer = Buffer.alloc(bytesToRead);
-    let bytesRead = 0;
+    const boundDirectoryStat = await runDirectoryHandle.stat();
+    if (!boundDirectoryStat.isDirectory()) {
+      throw monitoringLogPathError();
+    }
+    await assertBoundRunDirectory(runDirectory, boundDirectoryStat);
 
-    while (bytesRead < bytesToRead) {
-      const result = await log.read(
-        buffer,
-        bytesRead,
-        bytesToRead - bytesRead,
-        start + bytesRead
-      );
-      if (result.bytesRead === 0) {
-        break;
+    let log: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      log = await fs.open(logPath, logFlags);
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        await assertBoundRunDirectory(runDirectory, boundDirectoryStat);
+        return {
+          runId: runId.trim(),
+          content: "",
+          size: 0,
+          truncated: false,
+        };
       }
-      bytesRead += result.bytesRead;
+      if (isUnsafeFinalPathError(error)) {
+        throw monitoringLogPathError();
+      }
+      throw error;
     }
 
-    let contentBuffer = buffer.subarray(0, bytesRead);
-    if (truncated) {
-      const firstNewline = contentBuffer.indexOf(0x0a);
-      contentBuffer =
-        firstNewline === -1
-          ? Buffer.alloc(0)
-          : contentBuffer.subarray(firstNewline + 1);
-    }
+    try {
+      const stat = await log.stat();
+      if (!stat.isFile()) {
+        throw monitoringLogPathError();
+      }
+      await assertBoundRunDirectory(runDirectory, boundDirectoryStat);
+      await assertOpenedLogMatchesPath(logPath, stat);
 
-    return {
-      runId: runId.trim(),
-      content: contentBuffer.toString("utf8"),
-      size,
-      truncated,
-      updatedAt: stat.mtime.toISOString(),
-    };
+      const size = stat.size;
+      const truncated = size > MONITORING_LOG_TAIL_MAX_BYTES;
+      const start = truncated ? size - MONITORING_LOG_TAIL_MAX_BYTES : 0;
+      const bytesToRead = Math.min(size, MONITORING_LOG_TAIL_MAX_BYTES);
+      const buffer = Buffer.alloc(bytesToRead);
+      let bytesRead = 0;
+
+      while (bytesRead < bytesToRead) {
+        const result = await log.read(
+          buffer,
+          bytesRead,
+          bytesToRead - bytesRead,
+          start + bytesRead
+        );
+        if (result.bytesRead === 0) {
+          break;
+        }
+        bytesRead += result.bytesRead;
+      }
+
+      let contentBuffer = buffer.subarray(0, bytesRead);
+      if (truncated) {
+        const firstNewline = contentBuffer.indexOf(0x0a);
+        contentBuffer =
+          firstNewline === -1
+            ? Buffer.alloc(0)
+            : contentBuffer.subarray(firstNewline + 1);
+      }
+
+      return {
+        runId: runId.trim(),
+        content: contentBuffer.toString("utf8"),
+        size,
+        truncated,
+        updatedAt: stat.mtime.toISOString(),
+      };
+    } finally {
+      await log.close();
+    }
   } finally {
-    await log.close();
+    await runDirectoryHandle.close();
   }
 }
 
@@ -608,9 +709,18 @@ export async function getActiveMonitoringLaunch(
   runDirectory: string,
   dependencies: LivenessDependencies = {}
 ): Promise<MonitoringLaunchLock | null> {
-  const lockPath = lockPathFor(runDirectory);
+  let canonicalRunDirectory: string;
+  try {
+    canonicalRunDirectory = await fs.realpath(runDirectory);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  const lockPath = lockPathFor(canonicalRunDirectory);
   return withMonitoringLockGuard(lockPath, () =>
-    getActiveMonitoringLaunchUnlocked(runDirectory, dependencies)
+    getActiveMonitoringLaunchUnlocked(canonicalRunDirectory, dependencies)
   );
 }
 
@@ -836,9 +946,10 @@ export function createMonitoringLauncher(
     ((error: unknown) => console.error("Failed to close monitoring log descriptor.", error));
 
   return async (request) => {
-    const runDirectory = await resolveRunDirectory(request.runId, repoRoot);
+    const canonicalRepoRoot = await fs.realpath(repoRoot);
+    const runDirectory = await resolveRunDirectory(request.runId, canonicalRepoRoot);
     const runId = request.runId.trim();
-    const relativeRunFolder = path.relative(repoRoot, runDirectory);
+    const relativeRunFolder = path.relative(canonicalRepoRoot, runDirectory);
     const args = buildMonitoringArgs(request, relativeRunFolder);
     const command = ["uv", ...args].map(displayQuote).join(" ");
     const createdAt = now();

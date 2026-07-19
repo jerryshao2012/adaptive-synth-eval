@@ -67,7 +67,7 @@ export async function resolveRunDirectory(
         "runId must resolve below the repository runs directory."
       );
     }
-    return runDirectory;
+    return realRunDirectory;
   } catch (error) {
     if (error instanceof RunNotFoundError || error instanceof RunPathValidationError) {
       throw error;
