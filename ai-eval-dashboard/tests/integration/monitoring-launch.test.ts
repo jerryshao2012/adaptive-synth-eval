@@ -302,6 +302,113 @@ describe("monitoring launch transaction", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("does not write through a swapped run directory during lock acquisition", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const parkedRunDirectory = path.join(
+      path.dirname(runDir),
+      "parked-run-1"
+    );
+    const outsideDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "monitoring-launch-lock-swap-")
+    );
+    tempRoots.push(outsideDirectory);
+    let swapped = false;
+    const readLockFile = async (lockPath: string) => {
+      if (!swapped) {
+        swapped = true;
+        await fs.rename(runDir, parkedRunDirectory);
+        await fs.symlink(outsideDirectory, runDir);
+      }
+      return fs.readFile(lockPath, "utf8");
+    };
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(
+      createMonitoringLauncher({ repoRoot, readLockFile, spawn })(request())
+    ).rejects.toBeTruthy();
+    await expect(
+      fs.access(path.join(outsideDirectory, MONITORING_LAUNCH_LOCK_FILE))
+    ).rejects.toBeTruthy();
+    await expect(
+      fs.access(path.join(outsideDirectory, "monitoring.log"))
+    ).rejects.toBeTruthy();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the bound run directory after opening the log and before spawn", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const parkedRunDirectory = path.join(
+      path.dirname(runDir),
+      "parked-run-1"
+    );
+    const outsideDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "monitoring-launch-spawn-swap-")
+    );
+    tempRoots.push(outsideDirectory);
+    const outsideLog = path.join(outsideDirectory, "monitoring.log");
+    const outsideContent = "outside log must remain unchanged\n";
+    await fs.writeFile(outsideLog, outsideContent);
+    const appendFile = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const openLog = vi.fn(async () => {
+      await fs.rename(runDir, parkedRunDirectory);
+      await fs.symlink(outsideDirectory, runDir);
+      return { fd: 99, appendFile, close };
+    });
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(
+      createMonitoringLauncher({ repoRoot, openLog, spawn })(request())
+    ).rejects.toBeTruthy();
+    expect(appendFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.readFile(outsideLog, "utf8")).resolves.toBe(
+      outsideContent
+    );
+    await expect(
+      fs.access(path.join(outsideDirectory, MONITORING_LAUNCH_LOCK_FILE))
+    ).rejects.toBeTruthy();
+  });
+
+  it("revalidates the bound run directory immediately before spawning", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const parkedRunDirectory = path.join(
+      path.dirname(runDir),
+      "parked-run-1"
+    );
+    const outsideDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "monitoring-launch-argv-swap-")
+    );
+    tempRoots.push(outsideDirectory);
+    const outsideLog = path.join(outsideDirectory, "monitoring.log");
+    const outsideContent = "outside argv log must remain unchanged\n";
+    await fs.writeFile(outsideLog, outsideContent);
+    const appendFile = vi.fn(async () => {
+      await fs.rename(runDir, parkedRunDirectory);
+      await fs.symlink(outsideDirectory, runDir);
+    });
+    const close = vi.fn(async () => undefined);
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(
+      createMonitoringLauncher({
+        repoRoot,
+        openLog: async () => ({ fd: 99, appendFile, close }),
+        spawn,
+      })(request())
+    ).rejects.toBeTruthy();
+    expect(appendFile).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.readFile(outsideLog, "utf8")).resolves.toBe(
+      outsideContent
+    );
+    await expect(
+      fs.access(path.join(outsideDirectory, MONITORING_LAUNCH_LOCK_FILE))
+    ).rejects.toBeTruthy();
+  });
+
   it("persists the PID before unref and promotes the exclusive queued lock", async () => {
     const { repoRoot, runDir } = await makeRepo();
     const child = new FakeChild();

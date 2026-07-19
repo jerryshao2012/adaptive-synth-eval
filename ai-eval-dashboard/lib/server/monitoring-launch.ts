@@ -43,6 +43,8 @@ interface RollbackFailureMarker {
   closeConfirmed: boolean;
 }
 
+type RunDirectoryValidator = () => Promise<void>;
+
 const inProcessRollbackFailures = new Map<string, RollbackFailureMarker>();
 
 export interface LaunchChild {
@@ -96,7 +98,7 @@ export interface MonitoringLaunchDependencies {
 type LivenessDependencies = Pick<
   MonitoringLaunchDependencies,
   "kill" | "now" | "readLockFile" | "removeMatchingLock"
->;
+> & { validateRunDirectory?: RunDirectoryValidator };
 
 export class MonitoringLaunchRollbackError extends Error {
   readonly launchError: unknown;
@@ -130,13 +132,20 @@ function monitoringLogPathError(): RunPathValidationError {
   return new RunPathValidationError(MONITORING_LOG_PATH_ERROR);
 }
 
+function runDirectoryIdentityError(): RunPathValidationError {
+  return new RunPathValidationError(
+    "Run directory changed during monitoring launch."
+  );
+}
+
 function sameFileIdentity(left: Stats, right: Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
 async function assertBoundRunDirectory(
   runDirectory: string,
-  boundDirectoryStat: Stats
+  boundDirectoryStat: Stats,
+  validationError: () => RunPathValidationError = monitoringLogPathError
 ): Promise<void> {
   try {
     const [currentRealDirectory, currentDirectoryStat] = await Promise.all([
@@ -148,13 +157,43 @@ async function assertBoundRunDirectory(
       !currentDirectoryStat.isDirectory() ||
       !sameFileIdentity(boundDirectoryStat, currentDirectoryStat)
     ) {
-      throw monitoringLogPathError();
+      throw validationError();
     }
   } catch (error) {
     if (error instanceof RunPathValidationError) {
       throw error;
     }
-    throw monitoringLogPathError();
+    throw validationError();
+  }
+}
+
+async function bindLaunchRunDirectory(runDirectory: string): Promise<{
+  handle: Awaited<ReturnType<typeof fs.open>>;
+  stat: Stats;
+}> {
+  const flags =
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(runDirectory, flags);
+  } catch {
+    throw runDirectoryIdentityError();
+  }
+
+  try {
+    const stat = await handle.stat();
+    if (!stat.isDirectory()) {
+      throw runDirectoryIdentityError();
+    }
+    await assertBoundRunDirectory(
+      runDirectory,
+      stat,
+      runDirectoryIdentityError
+    );
+    return { handle, stat };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
   }
 }
 
@@ -189,7 +228,8 @@ function isUnsafeFinalPathError(error: unknown): boolean {
 }
 
 async function openMonitoringLogForLaunch(
-  logPath: string
+  logPath: string,
+  validateRunDirectory?: RunDirectoryValidator
 ): Promise<LaunchLogHandle> {
   const flags =
     fsConstants.O_WRONLY |
@@ -200,6 +240,7 @@ async function openMonitoringLogForLaunch(
 
   let log: Awaited<ReturnType<typeof fs.open>>;
   try {
+    await validateBeforeMutation(validateRunDirectory);
     log = await fs.open(logPath, flags, 0o666);
   } catch (error) {
     if (isUnsafeFinalPathError(error)) {
@@ -376,9 +417,16 @@ async function pauseForGuard(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, LOCK_GUARD_POLL_MS));
 }
 
+async function validateBeforeMutation(
+  validateRunDirectory?: RunDirectoryValidator
+): Promise<void> {
+  await validateRunDirectory?.();
+}
+
 async function withMonitoringLockGuard<T>(
   lockPath: string,
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  validateRunDirectory?: RunDirectoryValidator
 ): Promise<T> {
   const token = randomUUID();
   const intentFile = `${path.basename(lockPath)}.guard.${process.pid}.${token}.intent`;
@@ -391,6 +439,7 @@ async function withMonitoringLockGuard<T>(
     intentFile,
   };
   const serializedOwner = JSON.stringify(owner);
+  await validateBeforeMutation(validateRunDirectory);
   await fs.writeFile(intentPath, serializedOwner, { encoding: "utf8", flag: "wx" });
 
   const deadline = Date.now() + LOCK_GUARD_TIMEOUT_MS;
@@ -399,6 +448,7 @@ async function withMonitoringLockGuard<T>(
   try {
     while (!acquired) {
       try {
+        await validateBeforeMutation(validateRunDirectory);
         await fs.link(intentPath, guardPath);
         acquired = true;
         break;
@@ -421,6 +471,7 @@ async function withMonitoringLockGuard<T>(
       if (currentOwner && !guardOwnerIsAlive(currentOwner.pid)) {
         const staleIntentPath = path.join(path.dirname(lockPath), currentOwner.intentFile);
         try {
+          await validateBeforeMutation(validateRunDirectory);
           await fs.unlink(staleIntentPath);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -430,10 +481,12 @@ async function withMonitoringLockGuard<T>(
         }
         if (currentOwner) {
           try {
+            await validateBeforeMutation(validateRunDirectory);
             await fs.unlink(guardPath);
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
               try {
+                await validateBeforeMutation(validateRunDirectory);
                 await fs.writeFile(staleIntentPath, JSON.stringify(currentOwner), {
                   encoding: "utf8",
                   flag: "wx",
@@ -466,6 +519,7 @@ async function withMonitoringLockGuard<T>(
         if (!currentOwner || currentOwner.token !== token) {
           throw new Error("Monitoring launch lock guard ownership changed before release.");
         }
+        await validateBeforeMutation(validateRunDirectory);
         await fs.unlink(guardPath);
         released = true;
       } catch (releaseError) {
@@ -481,6 +535,7 @@ async function withMonitoringLockGuard<T>(
   } finally {
     if (!acquired || released) {
       try {
+        await validateBeforeMutation(validateRunDirectory);
         await fs.unlink(intentPath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -579,7 +634,8 @@ async function readLock(
 async function removeLockSnapshotUnlocked(
   lockPath: string,
   snapshot: MonitoringLaunchLock,
-  readLockFile?: (lockPath: string) => Promise<string>
+  readLockFile?: (lockPath: string) => Promise<string>,
+  validateRunDirectory?: RunDirectoryValidator
 ): Promise<void> {
   const current = await readLock(lockPath, readLockFile);
   if (
@@ -597,6 +653,7 @@ async function removeLockSnapshotUnlocked(
     return;
   }
   try {
+    await validateBeforeMutation(validateRunDirectory);
     await fs.unlink(lockPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -617,12 +674,18 @@ export async function removeMatchingMonitoringLock(
 
 async function removeMatchingMonitoringLockUnlocked(
   lockPath: string,
-  launchId: string
+  launchId: string,
+  validateRunDirectory?: RunDirectoryValidator
 ): Promise<void> {
   if (!launchId) return;
   const current = await readLock(lockPath);
   if (!current || current.launchId !== launchId) return;
-  await removeLockSnapshotUnlocked(lockPath, current);
+  await removeLockSnapshotUnlocked(
+    lockPath,
+    current,
+    undefined,
+    validateRunDirectory
+  );
 }
 
 export async function promoteMonitoringLock(
@@ -634,7 +697,8 @@ export async function promoteMonitoringLock(
 
 async function promoteMonitoringLockUnlocked(
   lockPath: string,
-  lock: MonitoringLaunchLock
+  lock: MonitoringLaunchLock,
+  validateRunDirectory?: RunDirectoryValidator
 ): Promise<void> {
   const current = await readLock(lockPath);
   if (!current || current.launchId !== lock.launchId) {
@@ -643,13 +707,16 @@ async function promoteMonitoringLockUnlocked(
 
   const temporaryPath = `${lockPath}.${lock.launchId}.tmp`;
   try {
+    await validateBeforeMutation(validateRunDirectory);
     await fs.writeFile(temporaryPath, JSON.stringify(lock, null, 2), {
       encoding: "utf8",
       flag: "wx",
     });
+    await validateBeforeMutation(validateRunDirectory);
     await fs.rename(temporaryPath, lockPath);
   } catch (error) {
     try {
+      await validateBeforeMutation(validateRunDirectory);
       await fs.unlink(temporaryPath);
     } catch {
       // The temporary file may not have been created.
@@ -670,6 +737,7 @@ async function retryRollbackFailureCleanupUnlocked(
   ) {
     const removeMatchingLock =
       dependencies.removeMatchingLock ?? removeMatchingMonitoringLockUnlocked;
+    await validateBeforeMutation(dependencies.validateRunDirectory);
     await removeMatchingLock(lockPath, marker.lock.launchId);
   }
   if (inProcessRollbackFailures.get(lockPath) === marker) {
@@ -682,8 +750,10 @@ async function retryRollbackFailureCleanup(
   marker: RollbackFailureMarker,
   dependencies: LivenessDependencies
 ): Promise<void> {
-  await withMonitoringLockGuard(lockPath, () =>
-    retryRollbackFailureCleanupUnlocked(lockPath, marker, dependencies)
+  await withMonitoringLockGuard(
+    lockPath,
+    () => retryRollbackFailureCleanupUnlocked(lockPath, marker, dependencies),
+    dependencies.validateRunDirectory
   );
 }
 
@@ -741,7 +811,12 @@ async function getActiveMonitoringLaunchUnlocked(
     return lock;
   }
 
-  await removeLockSnapshotUnlocked(lockPath, lock, dependencies.readLockFile);
+  await removeLockSnapshotUnlocked(
+    lockPath,
+    lock,
+    dependencies.readLockFile,
+    dependencies.validateRunDirectory
+  );
   return null;
 }
 
@@ -759,8 +834,10 @@ export async function getActiveMonitoringLaunch(
     throw error;
   }
   const lockPath = lockPathFor(canonicalRunDirectory);
-  return withMonitoringLockGuard(lockPath, () =>
-    getActiveMonitoringLaunchUnlocked(canonicalRunDirectory, dependencies)
+  return withMonitoringLockGuard(
+    lockPath,
+    () => getActiveMonitoringLaunchUnlocked(canonicalRunDirectory, dependencies),
+    dependencies.validateRunDirectory
   );
 }
 
@@ -926,6 +1003,7 @@ async function acquireLaunchLock(
   const lockPath = lockPathFor(runDirectory);
   return withMonitoringLockGuard(lockPath, async () => {
     const write = async () => {
+      await validateBeforeMutation(dependencies.validateRunDirectory);
       await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), {
         encoding: "utf8",
         flag: "wx",
@@ -961,7 +1039,7 @@ async function acquireLaunchLock(
       }
       throw error;
     }
-  });
+  }, dependencies.validateRunDirectory);
 }
 
 export function createMonitoringLauncher(
@@ -971,14 +1049,6 @@ export function createMonitoringLauncher(
   const now = dependencies.now ?? (() => new Date());
   const makeLaunchId = dependencies.launchId ?? randomUUID;
   const kill = dependencies.kill ?? process.kill.bind(process);
-  const openLog =
-    dependencies.openLog ??
-    openMonitoringLogForLaunch;
-  const promoteLock = dependencies.promoteLock ?? promoteMonitoringLockUnlocked;
-  const persistRollbackFailedLock =
-    dependencies.persistRollbackFailedLock ?? promoteMonitoringLockUnlocked;
-  const removeMatchingLock =
-    dependencies.removeMatchingLock ?? removeMatchingMonitoringLockUnlocked;
   const readLockFile =
     dependencies.readLockFile ?? ((lockPath: string) => fs.readFile(lockPath, "utf8"));
   const reportLogCloseError =
@@ -988,196 +1058,274 @@ export function createMonitoringLauncher(
   return async (request) => {
     const canonicalRepoRoot = await fs.realpath(repoRoot);
     const runDirectory = await resolveRunDirectory(request.runId, canonicalRepoRoot);
-    const runId = request.runId.trim();
-    const relativeRunFolder = path.relative(canonicalRepoRoot, runDirectory);
-    const args = buildMonitoringArgs(request, relativeRunFolder);
-    const command = ["uv", ...args].map(displayQuote).join(" ");
-    const createdAt = now();
-    const lock: MonitoringLaunchLock = {
-      launchId: makeLaunchId(),
-      action: request.action,
-      phase: "queued",
-      createdAt: createdAt.toISOString(),
-      expiresAt: createdAt.getTime() + QUEUED_LOCK_TTL_MS,
+    const runDirectoryBinding = await bindLaunchRunDirectory(runDirectory);
+    // Node does not expose openat-style path mutations. Keep the directory fd
+    // open as identity evidence and revalidate dev/ino + canonical path at each
+    // mutation boundary so a renamed/replaced run directory fails closed.
+    const validateRunDirectory = () =>
+      assertBoundRunDirectory(
+        runDirectory,
+        runDirectoryBinding.stat,
+        runDirectoryIdentityError
+      );
+    const promoteLock = async (
+      lockPath: string,
+      nextLock: MonitoringLaunchLock
+    ) => {
+      await validateRunDirectory();
+      if (dependencies.promoteLock) {
+        await dependencies.promoteLock(lockPath, nextLock);
+      } else {
+        await promoteMonitoringLockUnlocked(
+          lockPath,
+          nextLock,
+          validateRunDirectory
+        );
+      }
+    };
+    const persistRollbackFailedLock = async (
+      lockPath: string,
+      nextLock: MonitoringLaunchLock
+    ) => {
+      await validateRunDirectory();
+      if (dependencies.persistRollbackFailedLock) {
+        await dependencies.persistRollbackFailedLock(lockPath, nextLock);
+      } else {
+        await promoteMonitoringLockUnlocked(
+          lockPath,
+          nextLock,
+          validateRunDirectory
+        );
+      }
+    };
+    const removeMatchingLock = async (lockPath: string, launchId: string) => {
+      await validateRunDirectory();
+      if (dependencies.removeMatchingLock) {
+        await dependencies.removeMatchingLock(lockPath, launchId);
+      } else {
+        await removeMatchingMonitoringLockUnlocked(
+          lockPath,
+          launchId,
+          validateRunDirectory
+        );
+      }
     };
 
-    const lockResult = await acquireLaunchLock(runDirectory, lock, {
-      kill,
-      now,
-      readLockFile,
-      removeMatchingLock,
-    });
-    if (!lockResult.acquired) {
-      let state: Record<string, unknown> | null = null;
-      try {
-        state = JSON.parse(
-          await fs.readFile(path.join(runDirectory, "monitoring_state.json"), "utf8")
-        ) as Record<string, unknown>;
-      } catch {
-        // The runner may not have created state yet.
-      }
-      const projected = projectMonitoringRun(state, lockResult.active);
-      return {
-        runId,
-        started: false,
-        command,
-        monitoringStatus:
-          projected.monitoringStatus === "in_progress" ? "in_progress" : "queued",
-      };
-    }
-
-    const lockPath = lockPathFor(runDirectory);
-    let log: LaunchLogHandle | null = null;
-    let child: LaunchChild | null = null;
-    let spawned = false;
     try {
-      log = await openLog(path.join(runDirectory, MONITORING_LOG_FILE));
-      await log.appendFile(
-        `[${lock.createdAt}] monitoring launch action=${request.action} command=${command}\n`
-      );
-      child = dependencies.spawn("uv", args, {
-        cwd: repoRoot,
-        detached: true,
-        shell: false,
-        stdio: ["ignore", log.fd, log.fd],
+      const runId = request.runId.trim();
+      const relativeRunFolder = path.relative(canonicalRepoRoot, runDirectory);
+      const args = buildMonitoringArgs(request, relativeRunFolder);
+      const command = ["uv", ...args].map(displayQuote).join(" ");
+      const createdAt = now();
+      const lock: MonitoringLaunchLock = {
+        launchId: makeLaunchId(),
+        action: request.action,
+        phase: "queued",
+        createdAt: createdAt.toISOString(),
+        expiresAt: createdAt.getTime() + QUEUED_LOCK_TTL_MS,
+      };
+
+      const lockResult = await acquireLaunchLock(runDirectory, lock, {
+        kill,
+        now,
+        readLockFile,
+        removeMatchingLock,
+        validateRunDirectory,
       });
-      await waitForSpawn(child);
-      spawned = true;
-      if (!child.pid) {
-        throw new Error("Monitoring process spawned without a PID.");
+      if (!lockResult.acquired) {
+        let state: Record<string, unknown> | null = null;
+        await validateRunDirectory();
+        try {
+          state = JSON.parse(
+            await fs.readFile(path.join(runDirectory, "monitoring_state.json"), "utf8")
+          ) as Record<string, unknown>;
+        } catch {
+          // The runner may not have created state yet.
+        }
+        await validateRunDirectory();
+        const projected = projectMonitoringRun(state, lockResult.active);
+        return {
+          runId,
+          started: false,
+          command,
+          monitoringStatus:
+            projected.monitoringStatus === "in_progress" ? "in_progress" : "queued",
+        };
       }
-      const childPid = child.pid;
-      await withMonitoringLockGuard(lockPath, () =>
-        promoteLock(lockPath, { ...lock, phase: "running", pid: childPid })
-      );
-      child.unref();
-      return {
-        runId,
-        started: true,
-        command,
-        monitoringStatus: "queued",
-      };
-    } catch (error) {
-      const retainFailedLock = async (
-        reason: string,
-        rollbackError?: unknown
-      ): Promise<never> => {
-        const failedLock: MonitoringLaunchLock = {
-          ...lock,
-          phase: "rollback_failed",
-          ...(child?.pid ? { pid: child.pid } : {}),
-        };
-        let persistenceSettled = false;
-        let closeObserved = false;
-        const failureMarker: RollbackFailureMarker = {
-          lock: failedLock,
-          closeConfirmed: false,
-        };
-        inProcessRollbackFailures.set(lockPath, failureMarker);
 
-        const finishLateCloseCleanup = async () => {
-          await retryRollbackFailureCleanup(lockPath, failureMarker, {
-            kill,
-            now,
-            readLockFile,
-            removeMatchingLock,
-          });
-        };
-        const onLateClose = () => {
-          closeObserved = true;
-          failureMarker.closeConfirmed = true;
-          if (persistenceSettled) {
-            void finishLateCloseCleanup().catch(() => {
-              // Keep the in-process fail-closed marker when late cleanup fails.
-            });
-          }
-        };
-        child?.once("close", onLateClose);
-        if (
-          (child?.exitCode !== null && child?.exitCode !== undefined) ||
-          (child?.signalCode !== null && child?.signalCode !== undefined)
-        ) {
-          child.removeListener("close", onLateClose);
-          onLateClose();
-        }
-
-        let persistenceFailed = false;
-        let persistenceError: unknown;
-        try {
-          await withMonitoringLockGuard(lockPath, () =>
-            persistRollbackFailedLock(lockPath, failedLock)
-          );
-        } catch (errorDuringPersistence) {
-          persistenceFailed = true;
-          persistenceError = errorDuringPersistence;
-        } finally {
-          persistenceSettled = true;
-          if (closeObserved) {
-            void finishLateCloseCleanup().catch(() => {
-              // Keep the in-process fail-closed marker when late cleanup fails.
-            });
-          }
-        }
-        if (persistenceFailed) {
-          throw new MonitoringLaunchRollbackError(
-            `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock persistence failed (${errorMessage(persistenceError)}). The original launch lock was retained in its best available state.`,
-            error,
-            rollbackError ?? persistenceError
-          );
-        }
-
-        throw new MonitoringLaunchRollbackError(
-          `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock retained.`,
-          error,
-          rollbackError
+      const lockPath = lockPathFor(runDirectory);
+      let log: LaunchLogHandle | null = null;
+      let child: LaunchChild | null = null;
+      let spawned = false;
+      try {
+        await validateRunDirectory();
+        const logPath = path.join(runDirectory, MONITORING_LOG_FILE);
+        log = dependencies.openLog
+          ? await dependencies.openLog(logPath)
+          : await openMonitoringLogForLaunch(logPath, validateRunDirectory);
+        await validateRunDirectory();
+        await log.appendFile(
+          `[${lock.createdAt}] monitoring launch action=${request.action} command=${command}\n`
         );
-      };
+        await validateRunDirectory();
+        child = dependencies.spawn("uv", args, {
+          cwd: repoRoot,
+          detached: true,
+          shell: false,
+          stdio: ["ignore", log.fd, log.fd],
+        });
+        await waitForSpawn(child);
+        spawned = true;
+        if (!child.pid) {
+          throw new Error("Monitoring process spawned without a PID.");
+        }
+        const childPid = child.pid;
+        await withMonitoringLockGuard(
+          lockPath,
+          () =>
+            promoteLock(lockPath, {
+              ...lock,
+              phase: "running",
+              pid: childPid,
+            }),
+          validateRunDirectory
+        );
+        child.unref();
+        return {
+          runId,
+          started: true,
+          command,
+          monitoringStatus: "queued",
+        };
+      } catch (error) {
+        const retainFailedLock = async (
+          reason: string,
+          rollbackError?: unknown
+        ): Promise<never> => {
+          const failedLock: MonitoringLaunchLock = {
+            ...lock,
+            phase: "rollback_failed",
+            ...(child?.pid ? { pid: child.pid } : {}),
+          };
+          let persistenceSettled = false;
+          let closeObserved = false;
+          const failureMarker: RollbackFailureMarker = {
+            lock: failedLock,
+            closeConfirmed: false,
+          };
+          inProcessRollbackFailures.set(lockPath, failureMarker);
 
-      if (spawned && child) {
-        let terminated = false;
+          const finishLateCloseCleanup = async () => {
+            await retryRollbackFailureCleanup(lockPath, failureMarker, {
+              kill,
+              now,
+              readLockFile,
+              removeMatchingLock,
+              validateRunDirectory,
+            });
+          };
+          const onLateClose = () => {
+            closeObserved = true;
+            failureMarker.closeConfirmed = true;
+            if (persistenceSettled) {
+              void finishLateCloseCleanup().catch(() => {
+                // Keep the in-process fail-closed marker when late cleanup fails.
+              });
+            }
+          };
+          child?.once("close", onLateClose);
+          if (
+            (child?.exitCode !== null && child?.exitCode !== undefined) ||
+            (child?.signalCode !== null && child?.signalCode !== undefined)
+          ) {
+            child.removeListener("close", onLateClose);
+            onLateClose();
+          }
+
+          let persistenceFailed = false;
+          let persistenceError: unknown;
+          try {
+            await withMonitoringLockGuard(
+              lockPath,
+              () => persistRollbackFailedLock(lockPath, failedLock),
+              validateRunDirectory
+            );
+          } catch (errorDuringPersistence) {
+            persistenceFailed = true;
+            persistenceError = errorDuringPersistence;
+          } finally {
+            persistenceSettled = true;
+            if (closeObserved) {
+              void finishLateCloseCleanup().catch(() => {
+                // Keep the in-process fail-closed marker when late cleanup fails.
+              });
+            }
+          }
+          if (persistenceFailed) {
+            throw new MonitoringLaunchRollbackError(
+              `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock persistence failed (${errorMessage(persistenceError)}). The original launch lock was retained in its best available state.`,
+              error,
+              rollbackError ?? persistenceError
+            );
+          }
+
+          throw new MonitoringLaunchRollbackError(
+            `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock retained.`,
+            error,
+            rollbackError
+          );
+        };
+
+        if (spawned && child) {
+          let terminated = false;
+          try {
+            terminated = await terminateAndReap(
+              child,
+              child.pid,
+              kill,
+              dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
+            );
+          } catch (rollbackError) {
+            return await retainFailedLock(
+              `rollback could not confirm child termination (${errorMessage(rollbackError)})`,
+              rollbackError
+            );
+          }
+          if (!terminated) {
+            return await retainFailedLock(
+              "rollback timed out before child termination was confirmed"
+            );
+          }
+        }
         try {
-          terminated = await terminateAndReap(
-            child,
-            child.pid,
-            kill,
-            dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
+          await withMonitoringLockGuard(
+            lockPath,
+            () => removeMatchingLock(lockPath, lock.launchId),
+            validateRunDirectory
           );
         } catch (rollbackError) {
-          return await retainFailedLock(
-            `rollback could not confirm child termination (${errorMessage(rollbackError)})`,
+          throw new MonitoringLaunchRollbackError(
+            `Monitoring launch failed (${errorMessage(error)}); lock cleanup failed (${errorMessage(rollbackError)}); launch lock retained.`,
+            error,
             rollbackError
           );
         }
-        if (!terminated) {
-          return await retainFailedLock(
-            "rollback timed out before child termination was confirmed"
-          );
-        }
-      }
-      try {
-        await withMonitoringLockGuard(lockPath, () =>
-          removeMatchingLock(lockPath, lock.launchId)
-        );
-      } catch (rollbackError) {
-        throw new MonitoringLaunchRollbackError(
-          `Monitoring launch failed (${errorMessage(error)}); lock cleanup failed (${errorMessage(rollbackError)}); launch lock retained.`,
-          error,
-          rollbackError
-        );
-      }
-      throw error;
-    } finally {
-      if (log) {
-        try {
-          await log.close();
-        } catch (closeError) {
+        throw error;
+      } finally {
+        if (log) {
           try {
-            reportLogCloseError(closeError);
-          } catch {
-            // Diagnostics must never replace the launch outcome.
+            await log.close();
+          } catch (closeError) {
+            try {
+              reportLogCloseError(closeError);
+            } catch {
+              // Diagnostics must never replace the launch outcome.
+            }
           }
         }
       }
+    } finally {
+      await runDirectoryBinding.handle.close();
     }
   };
 }
