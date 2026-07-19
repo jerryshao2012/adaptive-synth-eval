@@ -123,7 +123,7 @@ export function useMonitoringStatus(runId?: string) {
       await queryClient.cancelQueries({ queryKey, exact: true });
       return {
         baseline: queryClient.getQueryData<MonitoringRunStatus>(queryKey),
-        result: query.refetch({ cancelRefetch: true }),
+        result: query.refetch({ cancelRefetch: true, throwOnError: true }),
       };
     },
   };

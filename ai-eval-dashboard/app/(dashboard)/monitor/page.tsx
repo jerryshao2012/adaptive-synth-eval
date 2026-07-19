@@ -321,6 +321,7 @@ export default function DashboardPage() {
                 if (
                   !overlay ||
                   overlay.key !== launchKey ||
+                  refreshedStatus.isSuccess !== true ||
                   refreshedStatus.data?.runId !== launchIntent.runId
                 ) {
                   return current;

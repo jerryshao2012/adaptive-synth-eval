@@ -118,7 +118,10 @@ beforeEach(() => {
     .mockImplementation((runId) =>
       Promise.resolve({
         baseline: runId ? hookState.statuses[runId] : undefined,
-        result: Promise.resolve({}),
+        result: Promise.resolve({
+          data: runId ? hookState.statuses[runId] : undefined,
+          isSuccess: true,
+        }),
       })
     );
   hookState.refetchEvaluations.mockReset().mockResolvedValue({});
@@ -308,6 +311,7 @@ describe("Monitor page evaluation configuration", () => {
     }>();
     const postAcceptanceStatus = deferred<{
       data: MonitoringRunStatus;
+      isSuccess: true;
     }>();
     hookState.mutateAsync.mockReturnValue(launch.promise);
     hookState.prepareStatusRefreshAfterLaunch.mockImplementation((runId) =>
@@ -347,7 +351,10 @@ describe("Monitor page evaluation configuration", () => {
       screen.queryByRole("button", { name: "Re-evaluate" })
     ).toBeNull();
     await act(async () => {
-      postAcceptanceStatus.resolve({ data: { ...completedStatus } });
+      postAcceptanceStatus.resolve({
+        data: { ...completedStatus },
+        isSuccess: true,
+      });
       await postAcceptanceStatus.promise;
     });
     expect(
@@ -369,6 +376,7 @@ describe("Monitor page evaluation configuration", () => {
     };
     const postAcceptanceStatus = deferred<{
       data: MonitoringRunStatus;
+      isSuccess: true;
     }>();
     hookState.statuses["run-1"] = legacyStatus;
     hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
@@ -390,13 +398,44 @@ describe("Monitor page evaluation configuration", () => {
     ).toBeNull();
 
     await act(async () => {
-      postAcceptanceStatus.resolve({ data: { ...legacyStatus } });
+      postAcceptanceStatus.resolve({
+        data: { ...legacyStatus },
+        isSuccess: true,
+      });
       await postAcceptanceStatus.promise;
     });
 
     expect(
       await screen.findByRole("button", { name: "Re-evaluate" })
     ).toBeTruthy();
+  });
+
+  it("retains the overlay when a resolved refetch error carries cached matching data", async () => {
+    const user = userEvent.setup();
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: completedStatus,
+      result: Promise.resolve({
+        data: completedStatus,
+        error: new Error("status unavailable"),
+        isError: true,
+        isRefetchError: true,
+        isSuccess: false,
+      }),
+    });
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
   });
 
   it("retains independent run overlays until each post-acceptance completion arrives", async () => {
@@ -413,8 +452,14 @@ describe("Monitor page evaluation configuration", () => {
         sample_size: 48,
       },
     };
-    const runOneConfirmation = deferred<{ data: MonitoringRunStatus }>();
-    const runTwoConfirmation = deferred<{ data: MonitoringRunStatus }>();
+    const runOneConfirmation = deferred<{
+      data: MonitoringRunStatus;
+      isSuccess: true;
+    }>();
+    const runTwoConfirmation = deferred<{
+      data: MonitoringRunStatus;
+      isSuccess: true;
+    }>();
     hookState.runs = [completedRun, runTwo];
     hookState.statuses = {
       "run-1": completedStatus,
@@ -472,7 +517,10 @@ describe("Monitor page evaluation configuration", () => {
       updatedAt: "2026-07-19T12:00:00Z",
     };
     await act(async () => {
-      runOneConfirmation.resolve({ data: hookState.statuses["run-1"]! });
+      runOneConfirmation.resolve({
+        data: hookState.statuses["run-1"]!,
+        isSuccess: true,
+      });
       await runOneConfirmation.promise;
     });
     await user.selectOptions(
@@ -496,7 +544,10 @@ describe("Monitor page evaluation configuration", () => {
       updatedAt: "2026-07-19T12:00:01Z",
     };
     await act(async () => {
-      runTwoConfirmation.resolve({ data: hookState.statuses["run-2"]! });
+      runTwoConfirmation.resolve({
+        data: hookState.statuses["run-2"]!,
+        isSuccess: true,
+      });
       await runTwoConfirmation.promise;
     });
     rerender(<DashboardPage />);
