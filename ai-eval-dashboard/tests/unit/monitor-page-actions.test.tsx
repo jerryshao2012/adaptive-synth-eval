@@ -15,6 +15,8 @@ const hookState = vi.hoisted(() => ({
   refetchRuns: vi.fn(),
   refetchStatus: vi.fn(),
   refetchEvaluations: vi.fn(),
+  monitoringStatus: undefined as MonitoringRunStatus | undefined,
+  statusUpdatedAt: 0,
 }));
 
 const completedRun: RunSummary = {
@@ -50,7 +52,8 @@ vi.mock("@/hooks/use-evaluations", () => ({
     refetch: hookState.refetchRuns,
   }),
   useMonitoringStatus: () => ({
-    data: completedStatus,
+    data: hookState.monitoringStatus,
+    dataUpdatedAt: hookState.statusUpdatedAt,
     refetch: hookState.refetchStatus,
   }),
   useStartMonitoring: () => ({
@@ -83,6 +86,8 @@ vi.mock("@/components/dashboard/trace-drawer", () => ({
 import DashboardPage from "@/app/(dashboard)/monitor/page";
 
 beforeEach(() => {
+  hookState.monitoringStatus = completedStatus;
+  hookState.statusUpdatedAt = 1;
   hookState.mutateAsync.mockReset();
   hookState.mutateAsync.mockResolvedValue({
     runId: "run-1",
@@ -98,6 +103,43 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Monitor page evaluation configuration", () => {
+  it("waits for matching saved state and freezes it when Re-evaluate opens", async () => {
+    const user = userEvent.setup();
+    hookState.monitoringStatus = undefined;
+    hookState.statusUpdatedAt = 0;
+    const { rerender } = render(<DashboardPage />);
+
+    const actionBeforeState = screen.getByRole("button", {
+      name: "Re-evaluate",
+    }) as HTMLButtonElement;
+    expect(actionBeforeState.disabled).toBe(true);
+    await user.click(actionBeforeState);
+    expect(
+      screen.queryByRole("heading", { name: "Re-evaluate run" })
+    ).toBeNull();
+
+    hookState.monitoringStatus = completedStatus;
+    hookState.statusUpdatedAt = 1;
+    rerender(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+
+    expect(
+      (screen.getByLabelText("Interval minutes") as HTMLInputElement).value
+    ).toBe("15");
+    hookState.monitoringStatus = {
+      ...completedStatus,
+      state: {
+        ...completedStatus.state,
+        interval_minutes: 99,
+      },
+    };
+    hookState.statusUpdatedAt = 2;
+    rerender(<DashboardPage />);
+    expect(
+      (screen.getByLabelText("Interval minutes") as HTMLInputElement).value
+    ).toBe("15");
+  });
+
   it("opens Re-evaluate with normalized selected-run settings", async () => {
     const user = userEvent.setup();
     render(<DashboardPage />);
@@ -178,5 +220,46 @@ describe("Monitor page evaluation configuration", () => {
     expect(hookState.refetchRuns).not.toHaveBeenCalled();
     expect(hookState.refetchStatus).not.toHaveBeenCalled();
     expect(hookState.refetchEvaluations).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accepted launch queued when refresh fails, then yields to canonical completion", async () => {
+    const user = userEvent.setup();
+    hookState.refetchRuns.mockRejectedValue(new Error("runs unavailable"));
+    hookState.refetchStatus.mockRejectedValue(new Error("status unavailable"));
+    hookState.refetchEvaluations.mockRejectedValue(
+      new Error("evaluations unavailable")
+    );
+    const { rerender } = render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+
+    await waitFor(() =>
+      expect(hookState.mutateAsync).toHaveBeenCalledTimes(1)
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    expect(
+      screen.queryByText("status unavailable")
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+
+    hookState.monitoringStatus = {
+      ...completedStatus,
+      state: { ...completedStatus.state, updated_at: "2026-07-19T12:00:00Z" },
+    };
+    hookState.statusUpdatedAt = 2;
+    rerender(<DashboardPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
   });
 });

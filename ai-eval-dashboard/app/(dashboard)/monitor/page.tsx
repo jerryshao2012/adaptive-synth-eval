@@ -15,6 +15,7 @@ import type {
   FailureGroup,
   MetricPointIdentity,
   MonitoringAction,
+  MonitoringRunStatus,
   TimePeriodPreset,
 } from "@/types/evaluation";
 import { normalizeMonitoringParameters } from "@/lib/monitoring-config";
@@ -98,6 +99,12 @@ export default function DashboardPage() {
   const [launchIntent, setLaunchIntent] = useState<{
     action: MonitoringAction;
     runId: string;
+    initialValues: EvalRunParameters;
+  } | null>(null);
+  const [acceptedLaunch, setAcceptedLaunch] = useState<{
+    key: string;
+    runId: string;
+    statusUpdatedAt: number;
   } | null>(null);
   const pendingLaunchRef = useRef<string | null>(null);
   const [pendingLaunchKey, setPendingLaunchKey] = useState<string | null>(null);
@@ -123,6 +130,7 @@ export default function DashboardPage() {
 
   const {
     data: monitoringStatus,
+    dataUpdatedAt: monitoringStatusUpdatedAt,
     refetch: refetchMonitoringStatus,
   } = useMonitoringStatus(activeRunId || undefined);
 
@@ -155,14 +163,68 @@ export default function DashboardPage() {
     );
 
   // ---- Actions ----
-  const launchInitialValues = useMemo(
-    () =>
-      normalizeMonitoringParameters(
-        launchIntent && monitoringStatus?.runId === launchIntent.runId
-          ? monitoringStatus.state
-          : null
-      ),
-    [launchIntent, monitoringStatus]
+  const retainedAcceptedLaunch =
+    acceptedLaunch &&
+    !(
+      monitoringStatus?.runId === acceptedLaunch.runId &&
+      monitoringStatusUpdatedAt > acceptedLaunch.statusUpdatedAt
+    )
+      ? acceptedLaunch
+      : null;
+
+  const displayedMonitoringStatus = useMemo<
+    MonitoringRunStatus | undefined
+  >(() => {
+    if (
+      !retainedAcceptedLaunch ||
+      retainedAcceptedLaunch.runId !== activeRunId
+    ) {
+      return monitoringStatus;
+    }
+
+    return {
+      runId: retainedAcceptedLaunch.runId,
+      monitoringStatus: "queued",
+      progress:
+        monitoringStatus?.progress ??
+        selectedRun?.progress ?? { completed: 0, total: 0, percent: 0 },
+      evaluationFingerprint: monitoringStatus?.evaluationFingerprint,
+      progressMarkdown: monitoringStatus?.progressMarkdown ?? null,
+      state: monitoringStatus?.state ?? null,
+      hasMonitoringScores:
+        monitoringStatus?.hasMonitoringScores ??
+        selectedRun?.hasMonitoringScores ??
+        false,
+      updatedAt: monitoringStatus?.updatedAt,
+    };
+  }, [activeRunId, monitoringStatus, retainedAcceptedLaunch, selectedRun]);
+
+  const handleLaunchIntent = useCallback(
+    (intent: { action: MonitoringAction; runId: string }) => {
+      const needsSavedParameters = intent.action !== "start";
+      const requiredStatus =
+        intent.action === "continue"
+          ? "incomplete"
+          : intent.action === "reevaluate"
+            ? "completed"
+            : "not_started";
+      const hasMatchingSavedParameters =
+        monitoringStatus?.runId === intent.runId &&
+        monitoringStatus.monitoringStatus === requiredStatus &&
+        monitoringStatus.state !== null;
+
+      if (needsSavedParameters && !hasMatchingSavedParameters) {
+        return;
+      }
+
+      setLaunchIntent({
+        ...intent,
+        initialValues: normalizeMonitoringParameters(
+          needsSavedParameters ? monitoringStatus?.state : null
+        ),
+      });
+    },
+    [monitoringStatus]
   );
 
   const submitMonitoringLaunch = useCallback(
@@ -185,8 +247,13 @@ export default function DashboardPage() {
           action: launchIntent.action,
           ...parameters,
         });
+        setAcceptedLaunch({
+          key: launchKey,
+          runId: launchIntent.runId,
+          statusUpdatedAt: monitoringStatusUpdatedAt,
+        });
         setLaunchIntent(null);
-        await Promise.all([
+        void Promise.allSettled([
           refetchRuns(),
           refetchMonitoringStatus(),
           refetch(),
@@ -202,6 +269,7 @@ export default function DashboardPage() {
     },
     [
       launchIntent,
+      monitoringStatusUpdatedAt,
       refetch,
       refetchMonitoringStatus,
       refetchRuns,
@@ -270,7 +338,9 @@ export default function DashboardPage() {
   }
 
   const hasData = Boolean(evaluations && evaluations.length > 0);
-  const runStatus = monitoringStatus?.monitoringStatus ?? selectedRun?.monitoringStatus;
+  const runStatus =
+    displayedMonitoringStatus?.monitoringStatus ??
+    selectedRun?.monitoringStatus;
 
   // ---- Chart render helpers (kept from original) ----
   function renderSafetyCharts() {
@@ -510,11 +580,16 @@ export default function DashboardPage() {
           {runSummaries.length > 0 && (
             <RunSelectorHeader
               selectedRun={selectedRun}
-              monitoringStatus={monitoringStatus ?? null}
+              monitoringStatus={displayedMonitoringStatus ?? null}
               runs={runSummaries}
               onSelectRun={setSelectedRunId}
-              onLaunchIntent={setLaunchIntent}
-              pendingLaunchKey={pendingLaunchKey}
+              onLaunchIntent={handleLaunchIntent}
+              pendingLaunchKey={
+                pendingLaunchKey ??
+                (retainedAcceptedLaunch?.runId === activeRunId
+                  ? retainedAcceptedLaunch.key
+                  : null)
+              }
               onRefresh={refreshAll}
             />
           )}
@@ -704,7 +779,7 @@ export default function DashboardPage() {
         <EvaluationConfigDialog
           open
           action={launchIntent.action}
-          initialValues={launchInitialValues}
+          initialValues={launchIntent.initialValues}
           onOpenChange={(open) => {
             if (!open && pendingLaunchKey === null) {
               setLaunchIntent(null);

@@ -66,8 +66,12 @@ export function RunSelectorHeader({
   onRefresh,
 }: RunSelectorHeaderProps) {
   const [elapsedMs, setElapsedMs] = useState<number>(0);
-  const status = monitoringStatus?.monitoringStatus ?? selectedRun?.monitoringStatus;
-  const startedAt = (monitoringStatus?.state?.started_at as string) || selectedRun?.startedAt;
+  const matchingStatus =
+    monitoringStatus?.runId === selectedRun?.runId ? monitoringStatus : null;
+  const status =
+    matchingStatus?.monitoringStatus ?? selectedRun?.monitoringStatus;
+  const startedAt =
+    (matchingStatus?.state?.started_at as string) || selectedRun?.startedAt;
 
   const isRunning = status === "in_progress";
   const launchAction: MonitoringAction | null =
@@ -78,7 +82,13 @@ export function RunSelectorHeader({
         : status === "completed"
           ? "reevaluate"
           : null;
-  const isActionDisabled = pendingLaunchKey !== null;
+  const needsSavedParameters =
+    launchAction === "continue" || launchAction === "reevaluate";
+  const hasLoadedSavedParameters =
+    matchingStatus !== null && matchingStatus.state !== null;
+  const isActionDisabled =
+    pendingLaunchKey !== null ||
+    (needsSavedParameters && !hasLoadedSavedParameters);
 
   useEffect(() => {
     if (!isRunning) return;

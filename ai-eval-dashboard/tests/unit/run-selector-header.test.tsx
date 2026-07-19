@@ -34,7 +34,7 @@ function makeStatus(
     monitoringStatus,
     progress: { completed: 0, total: 10, percent: 0 },
     progressMarkdown: null,
-    state: null,
+    state: monitoringStatus === "not_started" ? null : {},
     hasMonitoringScores: monitoringStatus === "completed",
   };
 }
