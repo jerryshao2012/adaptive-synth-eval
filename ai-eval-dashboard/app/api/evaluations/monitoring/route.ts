@@ -8,6 +8,10 @@ import {
   MonitoringRequestValidationError,
   parseMonitoringStartRequest,
 } from "@/lib/monitoring-config";
+import {
+  RunNotFoundError,
+  RunPathValidationError,
+} from "@/lib/server/run-paths";
 import type {
   MonitoringStartRequest,
   MonitoringStartResponse,
@@ -72,6 +76,12 @@ export async function handleMonitoringPost(
     const response = await startFn(payload);
     return NextResponse.json(response, { status: 202 });
   } catch (error) {
+    if (error instanceof RunPathValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof RunNotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
     const message = error instanceof Error ? error.message : "Failed to start monitoring run.";
     return NextResponse.json({ error: message }, { status: 500 });
   }

@@ -24,7 +24,7 @@ export interface MetricValue {
     policy_version?: string;
     value_object_version?: string;
     value_object_type?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 
@@ -110,6 +110,7 @@ export interface RunSummary {
   hasMonitoringScores: boolean;
   canStart: boolean;
   canContinue: boolean;
+  canReevaluate: boolean;
 }
 
 export interface MonitoringRunStatus {

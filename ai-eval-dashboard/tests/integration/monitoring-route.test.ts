@@ -2,6 +2,10 @@ import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { handleMonitoringPost } from "@/app/api/evaluations/monitoring/route";
+import {
+  RunNotFoundError,
+  RunPathValidationError,
+} from "@/lib/server/run-paths";
 import type {
   MonitoringStartRequest,
   MonitoringStartResponse,
@@ -101,5 +105,32 @@ describe("handleMonitoringPost", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "launcher failed" });
+  });
+
+  it("maps typed run path validation failures to 400", async () => {
+    const startFn = vi.fn<StartFn>().mockRejectedValue(
+      new RunPathValidationError("runId must be one safe path segment.")
+    );
+
+    const response = await handleMonitoringPost(
+      jsonRequest({ runId: "run-1", action: "start" }),
+      startFn
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("maps a missing valid run to 404", async () => {
+    const startFn = vi.fn<StartFn>().mockRejectedValue(
+      new RunNotFoundError("missing-run")
+    );
+
+    const response = await handleMonitoringPost(
+      jsonRequest({ runId: "missing-run", action: "start" }),
+      startFn
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Run 'missing-run' was not found." });
   });
 });

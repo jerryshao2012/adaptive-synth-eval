@@ -1,0 +1,445 @@
+import { spawn as nodeSpawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+import { buildMonitoringArgs } from "@/lib/monitoring-config";
+import { resolveRunDirectory } from "@/lib/server/run-paths";
+import type {
+  MonitoringAction,
+  MonitoringStartRequest,
+  MonitoringStartResponse,
+  RunSummary,
+} from "@/types/evaluation";
+
+export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
+export const MONITORING_LOG_FILE = "monitoring.log";
+const QUEUED_LOCK_TTL_MS = 30_000;
+const TERMINATION_GRACE_MS = 5_000;
+
+export interface MonitoringLaunchLock {
+  launchId: string;
+  action: MonitoringAction;
+  createdAt: string;
+  expiresAt: number;
+  pid?: number;
+}
+
+export interface LaunchChild {
+  pid?: number;
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
+  once(event: "spawn", listener: () => void): this;
+  once(event: "error", listener: (error: Error) => void): this;
+  once(event: "close", listener: (...args: unknown[]) => void): this;
+  removeListener(event: "spawn", listener: () => void): this;
+  removeListener(event: "error", listener: (error: Error) => void): this;
+  removeListener(event: "close", listener: (...args: unknown[]) => void): this;
+  unref(): void;
+}
+
+export interface LaunchLogHandle {
+  fd: number;
+  appendFile(data: string): Promise<unknown>;
+  close(): Promise<unknown>;
+}
+
+export interface LaunchOptions {
+  cwd: string;
+  detached: true;
+  shell: false;
+  stdio: ["ignore", number, number];
+}
+
+export interface MonitoringLaunchDependencies {
+  repoRoot?: string;
+  spawn: (file: string, args: string[], options: LaunchOptions) => LaunchChild;
+  kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
+  now?: () => Date;
+  launchId?: () => string;
+  openLog?: (logPath: string) => Promise<LaunchLogHandle>;
+  promoteLock?: (
+    lockPath: string,
+    lock: MonitoringLaunchLock
+  ) => Promise<void>;
+  removeMatchingLock?: (lockPath: string, launchId: string) => Promise<void>;
+  terminationGraceMs?: number;
+}
+
+type LivenessDependencies = Pick<MonitoringLaunchDependencies, "kill" | "now">;
+
+function defaultRepoRoot(): string {
+  return path.resolve(process.cwd(), "..");
+}
+
+function lockPathFor(runDirectory: string): string {
+  return path.join(runDirectory, MONITORING_LAUNCH_LOCK_FILE);
+}
+
+async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> {
+  try {
+    const value = JSON.parse(await fs.readFile(lockPath, "utf8")) as Record<string, unknown>;
+    const action = value.action;
+    if (action !== "start" && action !== "continue" && action !== "reevaluate") {
+      return null;
+    }
+    const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
+    return {
+      launchId: typeof value.launchId === "string" ? value.launchId : "",
+      action,
+      createdAt,
+      expiresAt:
+        typeof value.expiresAt === "number"
+          ? value.expiresAt
+          : Date.parse(createdAt) + QUEUED_LOCK_TTL_MS,
+      pid:
+        typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0
+          ? value.pid
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function removeLockSnapshot(
+  lockPath: string,
+  snapshot: MonitoringLaunchLock
+): Promise<void> {
+  const current = await readLock(lockPath);
+  if (
+    !current ||
+    (snapshot.launchId
+      ? current.launchId !== snapshot.launchId
+      : current.createdAt !== snapshot.createdAt || current.pid !== snapshot.pid)
+  ) {
+    return;
+  }
+  try {
+    await fs.unlink(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+export async function removeMatchingMonitoringLock(
+  lockPath: string,
+  launchId: string
+): Promise<void> {
+  const current = await readLock(lockPath);
+  if (!current || current.launchId !== launchId) {
+    return;
+  }
+  await removeLockSnapshot(lockPath, current);
+}
+
+export async function promoteMonitoringLock(
+  lockPath: string,
+  lock: MonitoringLaunchLock
+): Promise<void> {
+  const current = await readLock(lockPath);
+  if (!current || current.launchId !== lock.launchId) {
+    throw new Error("Monitoring launch lock ownership changed before PID persistence.");
+  }
+
+  const temporaryPath = `${lockPath}.${lock.launchId}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, JSON.stringify(lock, null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    await fs.rename(temporaryPath, lockPath);
+  } catch (error) {
+    try {
+      await fs.unlink(temporaryPath);
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error;
+  }
+}
+
+function pidIsAlive(pid: number, kill: NonNullable<MonitoringLaunchDependencies["kill"]>): boolean {
+  try {
+    kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") {
+      return true;
+    }
+    if (code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function getActiveMonitoringLaunch(
+  runDirectory: string,
+  dependencies: LivenessDependencies = {}
+): Promise<MonitoringLaunchLock | null> {
+  const lockPath = lockPathFor(runDirectory);
+  const lock = await readLock(lockPath);
+  if (!lock) {
+    return null;
+  }
+
+  const kill = dependencies.kill ?? process.kill.bind(process);
+  const now = dependencies.now ?? (() => new Date());
+  const active = lock.pid ? pidIsAlive(lock.pid, kill) : lock.expiresAt > now().getTime();
+  if (active) {
+    return lock;
+  }
+
+  await removeLockSnapshot(lockPath, lock);
+  return null;
+}
+
+export function projectMonitoringRun(
+  state: Record<string, unknown> | null,
+  activeLaunch: MonitoringLaunchLock | null
+): Pick<RunSummary, "monitoringStatus" | "canStart" | "canContinue" | "canReevaluate"> {
+  let monitoringStatus: RunSummary["monitoringStatus"];
+  if (activeLaunch) {
+    const stateStatus = typeof state?.status === "string" ? state.status.toLowerCase() : "";
+    const updatedAtValue = state?.updated_at ?? state?.updatedAt;
+    const stateUpdatedAt = typeof updatedAtValue === "string" ? Date.parse(updatedAtValue) : NaN;
+    const launchCreatedAt = Date.parse(activeLaunch.createdAt);
+    monitoringStatus =
+      stateStatus === "in_progress" &&
+      Number.isFinite(stateUpdatedAt) &&
+      Number.isFinite(launchCreatedAt) &&
+      stateUpdatedAt > launchCreatedAt
+        ? "in_progress"
+        : "queued";
+  } else if (!state) {
+    monitoringStatus = "not_started";
+  } else if (
+    typeof state.status === "string" &&
+    state.status.toLowerCase() === "completed"
+  ) {
+    monitoringStatus = "completed";
+  } else {
+    monitoringStatus = "incomplete";
+  }
+
+  return {
+    monitoringStatus,
+    canStart: monitoringStatus === "not_started",
+    canContinue: monitoringStatus === "incomplete",
+    canReevaluate: monitoringStatus === "completed",
+  };
+}
+
+function waitForSpawn(child: LaunchChild): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onSpawn = () => {
+      child.removeListener("error", onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      child.removeListener("spawn", onSpawn);
+      reject(error);
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+  });
+}
+
+function waitForClose(child: LaunchChild, timeoutMs?: number): Promise<boolean> {
+  if (child.exitCode !== null && child.exitCode !== undefined) {
+    return Promise.resolve(true);
+  }
+  if (child.signalCode !== null && child.signalCode !== undefined) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const onClose = () => {
+      if (timeout) clearTimeout(timeout);
+      resolve(true);
+    };
+    child.once("close", onClose);
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        child.removeListener("close", onClose);
+        resolve(false);
+      }, timeoutMs);
+    }
+  });
+}
+
+async function terminateAndReap(
+  child: LaunchChild,
+  pid: number,
+  kill: NonNullable<MonitoringLaunchDependencies["kill"]>,
+  graceMs: number
+): Promise<void> {
+  const closedAfterTerm = waitForClose(child, graceMs);
+  try {
+    kill(-pid, "SIGTERM");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  if (await closedAfterTerm) {
+    return;
+  }
+
+  const closedAfterKill = waitForClose(child);
+  try {
+    kill(-pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  await closedAfterKill;
+}
+
+function displayQuote(argument: string): string {
+  return /^[A-Za-z0-9_./:=+-]+$/.test(argument)
+    ? argument
+    : `'${argument.replaceAll("'", `'\\''`)}'`;
+}
+
+async function acquireLaunchLock(
+  runDirectory: string,
+  lock: MonitoringLaunchLock,
+  dependencies: LivenessDependencies
+): Promise<{ acquired: boolean; active: MonitoringLaunchLock | null }> {
+  const lockPath = lockPathFor(runDirectory);
+  const write = async () => {
+    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  };
+
+  try {
+    await write();
+    return { acquired: true, active: lock };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+
+  const active = await getActiveMonitoringLaunch(runDirectory, dependencies);
+  if (active) {
+    return { acquired: false, active };
+  }
+
+  try {
+    await write();
+    return { acquired: true, active: lock };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return {
+        acquired: false,
+        active: await getActiveMonitoringLaunch(runDirectory, dependencies),
+      };
+    }
+    throw error;
+  }
+}
+
+export function createMonitoringLauncher(
+  dependencies: MonitoringLaunchDependencies
+): (request: MonitoringStartRequest) => Promise<MonitoringStartResponse> {
+  const repoRoot = dependencies.repoRoot ?? defaultRepoRoot();
+  const now = dependencies.now ?? (() => new Date());
+  const makeLaunchId = dependencies.launchId ?? randomUUID;
+  const kill = dependencies.kill ?? process.kill.bind(process);
+  const openLog =
+    dependencies.openLog ??
+    (async (logPath: string) => (await fs.open(logPath, "a")) as LaunchLogHandle);
+  const promoteLock = dependencies.promoteLock ?? promoteMonitoringLock;
+  const removeMatchingLock = dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
+
+  return async (request) => {
+    const runDirectory = await resolveRunDirectory(request.runId, repoRoot);
+    const runId = request.runId.trim();
+    const relativeRunFolder = path.relative(repoRoot, runDirectory);
+    const args = buildMonitoringArgs(request, relativeRunFolder);
+    const command = ["uv", ...args].map(displayQuote).join(" ");
+    const createdAt = now();
+    const lock: MonitoringLaunchLock = {
+      launchId: makeLaunchId(),
+      action: request.action,
+      createdAt: createdAt.toISOString(),
+      expiresAt: createdAt.getTime() + QUEUED_LOCK_TTL_MS,
+    };
+
+    const lockResult = await acquireLaunchLock(runDirectory, lock, { kill, now });
+    if (!lockResult.acquired) {
+      let state: Record<string, unknown> | null = null;
+      try {
+        state = JSON.parse(
+          await fs.readFile(path.join(runDirectory, "monitoring_state.json"), "utf8")
+        ) as Record<string, unknown>;
+      } catch {
+        // The runner may not have created state yet.
+      }
+      const projected = projectMonitoringRun(state, lockResult.active);
+      return {
+        runId,
+        started: false,
+        command,
+        monitoringStatus:
+          projected.monitoringStatus === "in_progress" ? "in_progress" : "queued",
+      };
+    }
+
+    const lockPath = lockPathFor(runDirectory);
+    let log: LaunchLogHandle | null = null;
+    let child: LaunchChild | null = null;
+    let spawned = false;
+    try {
+      log = await openLog(path.join(runDirectory, MONITORING_LOG_FILE));
+      await log.appendFile(
+        `[${lock.createdAt}] monitoring launch action=${request.action} command=${command}\n`
+      );
+      child = dependencies.spawn("uv", args, {
+        cwd: repoRoot,
+        detached: true,
+        shell: false,
+        stdio: ["ignore", log.fd, log.fd],
+      });
+      await waitForSpawn(child);
+      spawned = true;
+      if (!child.pid) {
+        throw new Error("Monitoring process spawned without a PID.");
+      }
+      await promoteLock(lockPath, { ...lock, pid: child.pid });
+      child.unref();
+      return {
+        runId,
+        started: true,
+        command,
+        monitoringStatus: "queued",
+      };
+    } catch (error) {
+      if (spawned && child?.pid) {
+        try {
+          await terminateAndReap(
+            child,
+            child.pid,
+            kill,
+            dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
+          );
+        } catch {
+          // Preserve the launch/persistence error while still releasing our lock.
+        }
+      }
+      await removeMatchingLock(lockPath, lock.launchId);
+      throw error;
+    } finally {
+      if (log) {
+        await log.close();
+      }
+    }
+  };
+}
+
+export const startMonitoringRun = createMonitoringLauncher({
+  spawn: (file, args, options) => nodeSpawn(file, args, options) as LaunchChild,
+});
