@@ -1,0 +1,182 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  MonitoringRunStatus,
+  MonitoringStartRequest,
+  RunSummary,
+} from "@/types/evaluation";
+
+const hookState = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  refetchRuns: vi.fn(),
+  refetchStatus: vi.fn(),
+  refetchEvaluations: vi.fn(),
+}));
+
+const completedRun: RunSummary = {
+  runId: "run-1",
+  mode: "unified",
+  monitoringStatus: "completed",
+  progress: { completed: 10, total: 10, percent: 100 },
+  hasMonitoringState: true,
+  hasMonitoringScores: true,
+  canStart: false,
+  canContinue: false,
+  canReevaluate: true,
+};
+
+const completedStatus: MonitoringRunStatus = {
+  runId: "run-1",
+  monitoringStatus: "completed",
+  progress: { completed: 10, total: 10, percent: 100 },
+  progressMarkdown: null,
+  state: {
+    sampling_strategy: "systematic",
+    sample_size: 24,
+    interval_minutes: 15,
+    max_windows: 6,
+  },
+  hasMonitoringScores: true,
+};
+
+vi.mock("@/hooks/use-evaluations", () => ({
+  useRunList: () => ({
+    data: [completedRun],
+    isLoading: false,
+    refetch: hookState.refetchRuns,
+  }),
+  useMonitoringStatus: () => ({
+    data: completedStatus,
+    refetch: hookState.refetchStatus,
+  }),
+  useStartMonitoring: () => ({
+    mutateAsync: hookState.mutateAsync,
+    isPending: false,
+  }),
+  useEvaluations: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: hookState.refetchEvaluations,
+  }),
+  usePreviousPeriodEvaluations: () => ({ data: [] }),
+  useTraceDetails: () => ({
+    data: null,
+    isLoading: false,
+    isFetching: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/components/dashboard/investigation-summary", () => ({
+  InvestigationSummaryCard: () => null,
+}));
+vi.mock("@/components/dashboard/trace-drawer", () => ({
+  TraceDrawer: () => null,
+}));
+
+import DashboardPage from "@/app/(dashboard)/monitor/page";
+
+beforeEach(() => {
+  hookState.mutateAsync.mockReset();
+  hookState.mutateAsync.mockResolvedValue({
+    runId: "run-1",
+    started: true,
+    command: "uv run ase monitor run",
+    monitoringStatus: "queued",
+  });
+  hookState.refetchRuns.mockReset().mockResolvedValue({});
+  hookState.refetchStatus.mockReset().mockResolvedValue({});
+  hookState.refetchEvaluations.mockReset().mockResolvedValue({});
+});
+
+afterEach(cleanup);
+
+describe("Monitor page evaluation configuration", () => {
+  it("opens Re-evaluate with normalized selected-run settings", async () => {
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Re-evaluate run" })
+    ).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Sampling strategy") as HTMLSelectElement).value
+    ).toBe("systematic");
+    expect(
+      (screen.getByLabelText("Sample size") as HTMLInputElement).value
+    ).toBe("24");
+    expect(
+      (screen.getByLabelText("Interval minutes") as HTMLInputElement).value
+    ).toBe("15");
+    expect(
+      (screen.getByLabelText("Max windows") as HTMLInputElement).value
+    ).toBe("6");
+    expect(hookState.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("submits one typed live launch and refetches all run views after acceptance", async () => {
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.clear(screen.getByLabelText("Interval minutes"));
+    await user.type(screen.getByLabelText("Interval minutes"), "30");
+
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+
+    const expectedRequest: MonitoringStartRequest = {
+      runId: "run-1",
+      action: "reevaluate",
+      samplingStrategy: "systematic",
+      sampleSize: 24,
+      intervalMinutes: 30,
+      maxWindows: 6,
+    };
+    await waitFor(() =>
+      expect(hookState.mutateAsync).toHaveBeenCalledWith(expectedRequest)
+    );
+    expect(hookState.mutateAsync).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(hookState.refetchRuns).toHaveBeenCalledTimes(1);
+      expect(hookState.refetchStatus).toHaveBeenCalledTimes(1);
+      expect(hookState.refetchEvaluations).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+  });
+
+  it("keeps the dialog open with the launch error and skips refetching", async () => {
+    const user = userEvent.setup();
+    hookState.mutateAsync.mockRejectedValue(
+      new Error("The evaluation launch is already active.")
+    );
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+
+    expect(
+      await screen.findByText("The evaluation launch is already active.")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Re-evaluate run" })
+    ).toBeTruthy();
+    expect(hookState.refetchRuns).not.toHaveBeenCalled();
+    expect(hookState.refetchStatus).not.toHaveBeenCalled();
+    expect(hookState.refetchEvaluations).not.toHaveBeenCalled();
+  });
+});

@@ -12,10 +12,12 @@ import {
 import type {
   EvalRunParameters,
   EvaluationRecord,
-  TimePeriodPreset,
-  MetricPointIdentity,
   FailureGroup,
+  MetricPointIdentity,
+  MonitoringAction,
+  TimePeriodPreset,
 } from "@/types/evaluation";
+import { normalizeMonitoringParameters } from "@/lib/monitoring-config";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS, LATENCY_DESCRIPTIONS, AVAILABILITY_DESCRIPTION } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 import { getTimePeriod } from "@/lib/time-periods";
@@ -40,6 +42,7 @@ import {
 
 // New investigation workbench components
 import { RunSelectorHeader } from "@/components/dashboard/run-selector-header";
+import { EvaluationConfigDialog } from "@/components/dashboard/evaluation-config-dialog";
 import { InvestigationSummaryCard } from "@/components/dashboard/investigation-summary";
 import { FailureAnalysis } from "@/components/dashboard/failure-analysis";
 import { ConversationQueue } from "@/components/dashboard/conversation-queue";
@@ -68,13 +71,6 @@ const LATENCY_METRICS = [
   { key: "guardrail_latency_ms" as const, label: "Guardrail Latency", fullWidth: false },
 ];
 
-const DEFAULT_MONITORING_CONFIG: EvalRunParameters = {
-  samplingStrategy: "all",
-  sampleSize: 1000,
-  intervalMinutes: 60,
-  maxWindows: null,
-};
-
 function filterEvaluationsByPeriod(
   rows: EvaluationRecord[],
   preset: TimePeriodPreset
@@ -99,8 +95,10 @@ export default function DashboardPage() {
   const [activeGroupFilter, setActiveGroupFilter] = useState<FailureGroup["groupType"] | null>(null);
   const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
 
-  // Eval config (kept for Start/Continue actions)
-  const [globalEvalDefaults] = useState<EvalRunParameters>(DEFAULT_MONITORING_CONFIG);
+  const [launchIntent, setLaunchIntent] = useState<{
+    action: MonitoringAction;
+    runId: string;
+  } | null>(null);
   const pendingLaunchRef = useRef<string | null>(null);
   const [pendingLaunchKey, setPendingLaunchKey] = useState<string | null>(null);
 
@@ -157,11 +155,25 @@ export default function DashboardPage() {
     );
 
   // ---- Actions ----
-  const runMonitoringAction = useCallback(
-    async (runId: string, action: "start" | "continue") => {
-      const launchKey = `${action}:${runId}`;
-      if (pendingLaunchRef.current === launchKey) {
-        return;
+  const launchInitialValues = useMemo(
+    () =>
+      normalizeMonitoringParameters(
+        launchIntent && monitoringStatus?.runId === launchIntent.runId
+          ? monitoringStatus.state
+          : null
+      ),
+    [launchIntent, monitoringStatus]
+  );
+
+  const submitMonitoringLaunch = useCallback(
+    async (parameters: EvalRunParameters) => {
+      if (!launchIntent) {
+        throw new Error("No evaluation launch is selected.");
+      }
+
+      const launchKey = `${launchIntent.action}:${launchIntent.runId}`;
+      if (pendingLaunchRef.current !== null) {
+        throw new Error("An evaluation launch is already being submitted.");
       }
 
       pendingLaunchRef.current = launchKey;
@@ -169,16 +181,16 @@ export default function DashboardPage() {
 
       try {
         await startMonitoring.mutateAsync({
-          runId,
-          action,
-          samplingStrategy: globalEvalDefaults.samplingStrategy,
-          sampleSize: globalEvalDefaults.sampleSize,
-          intervalMinutes: globalEvalDefaults.intervalMinutes,
-          maxWindows: globalEvalDefaults.maxWindows,
+          runId: launchIntent.runId,
+          action: launchIntent.action,
+          ...parameters,
         });
-        await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
-      } catch {
-        // Error handled by mutation state
+        setLaunchIntent(null);
+        await Promise.all([
+          refetchRuns(),
+          refetchMonitoringStatus(),
+          refetch(),
+        ]);
       } finally {
         if (pendingLaunchRef.current === launchKey) {
           pendingLaunchRef.current = null;
@@ -188,21 +200,13 @@ export default function DashboardPage() {
         );
       }
     },
-    [startMonitoring, globalEvalDefaults, refetchRuns, refetchMonitoringStatus]
-  );
-
-  const handleStartRun = useCallback(
-    async (runId: string) => {
-      await runMonitoringAction(runId, "start");
-    },
-    [runMonitoringAction]
-  );
-
-  const handleContinueRun = useCallback(
-    async (runId: string) => {
-      await runMonitoringAction(runId, "continue");
-    },
-    [runMonitoringAction]
+    [
+      launchIntent,
+      refetch,
+      refetchMonitoringStatus,
+      refetchRuns,
+      startMonitoring,
+    ]
   );
 
   function refreshAll() {
@@ -509,9 +513,8 @@ export default function DashboardPage() {
               monitoringStatus={monitoringStatus ?? null}
               runs={runSummaries}
               onSelectRun={setSelectedRunId}
-              onStartRun={handleStartRun}
-              onContinueRun={handleContinueRun}
-              isStarting={startMonitoring.isPending || pendingLaunchKey !== null}
+              onLaunchIntent={setLaunchIntent}
+              pendingLaunchKey={pendingLaunchKey}
               onRefresh={refreshAll}
             />
           )}
@@ -696,6 +699,20 @@ export default function DashboardPage() {
         errorMessage={traceError instanceof Error ? traceError.message : undefined}
         onClose={() => setSelectedPoint(null)}
       />
+
+      {launchIntent && (
+        <EvaluationConfigDialog
+          open
+          action={launchIntent.action}
+          initialValues={launchInitialValues}
+          onOpenChange={(open) => {
+            if (!open && pendingLaunchKey === null) {
+              setLaunchIntent(null);
+            }
+          }}
+          onSubmit={submitMonitoringLaunch}
+        />
+      )}
     </div>
   );
 }

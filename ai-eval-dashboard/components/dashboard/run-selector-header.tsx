@@ -14,7 +14,12 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import type { RunSummary, MonitoringRunStatus, ArtifactValidation } from "@/types/evaluation";
+import type {
+  ArtifactValidation,
+  MonitoringAction,
+  MonitoringRunStatus,
+  RunSummary,
+} from "@/types/evaluation";
 import { cn } from "@/lib/utils";
 
 // ---- Verdict color and icon maps ----
@@ -41,9 +46,11 @@ interface RunSelectorHeaderProps {
   monitoringStatus: MonitoringRunStatus | null;
   runs: RunSummary[];
   onSelectRun: (runId: string) => void;
-  onStartRun: (runId: string) => void;
-  onContinueRun: (runId: string) => void;
-  isStarting: boolean;
+  onLaunchIntent: (intent: {
+    action: MonitoringAction;
+    runId: string;
+  }) => void;
+  pendingLaunchKey: string | null;
   validation?: ArtifactValidation | null;
   onRefresh: () => void;
 }
@@ -53,9 +60,8 @@ export function RunSelectorHeader({
   monitoringStatus,
   runs,
   onSelectRun,
-  onStartRun,
-  onContinueRun,
-  isStarting,
+  onLaunchIntent,
+  pendingLaunchKey,
   validation,
   onRefresh,
 }: RunSelectorHeaderProps) {
@@ -64,8 +70,15 @@ export function RunSelectorHeader({
   const startedAt = (monitoringStatus?.state?.started_at as string) || selectedRun?.startedAt;
 
   const isRunning = status === "in_progress";
-  const isQueued = status === "queued";
-  const isActionDisabled = isStarting || isRunning || isQueued;
+  const launchAction: MonitoringAction | null =
+    status === "not_started"
+      ? "start"
+      : status === "incomplete"
+        ? "continue"
+        : status === "completed"
+          ? "reevaluate"
+          : null;
+  const isActionDisabled = pendingLaunchKey !== null;
 
   useEffect(() => {
     if (!isRunning) return;
@@ -231,30 +244,32 @@ export function RunSelectorHeader({
               <span className="hidden sm:inline ml-1.5">Refresh</span>
             </Button>
 
-            {selectedRun.canStart && (
+            {launchAction && (
               <Button
                 size="sm"
-                onClick={() => onStartRun(selectedRun.runId)}
+                variant={launchAction === "start" ? "default" : "outline"}
+                onClick={() =>
+                  onLaunchIntent({
+                    action: launchAction,
+                    runId: selectedRun.runId,
+                  })
+                }
                 disabled={isActionDisabled}
               >
-                {isStarting ? (
+                {isActionDisabled ? (
                   <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
+                ) : launchAction === "start" ? (
                   <Play className="h-4 w-4" />
+                ) : (
+                  <RotateCcw className="h-4 w-4" />
                 )}
-                <span className="ml-1.5">Start</span>
-              </Button>
-            )}
-
-            {selectedRun.canContinue && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onContinueRun(selectedRun.runId)}
-                disabled={isActionDisabled}
-              >
-                <RotateCcw className="h-4 w-4" />
-                <span className="ml-1.5">Continue</span>
+                <span className="ml-1.5">
+                  {launchAction === "start"
+                    ? "Start"
+                    : launchAction === "continue"
+                      ? "Continue"
+                      : "Re-evaluate"}
+                </span>
               </Button>
             )}
           </div>
