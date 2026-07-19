@@ -10,6 +10,7 @@ import {
   createMonitoringLauncher,
   getActiveMonitoringLaunch,
   projectMonitoringRun,
+  removeMatchingMonitoringLock,
   type LaunchChild,
   type MonitoringLaunchDependencies,
 } from "@/lib/server/monitoring-launch";
@@ -241,6 +242,78 @@ describe("monitoring launch transaction", () => {
 
     firstChild.emit("spawn");
     await first;
+  });
+
+  it("treats the exact active legacy lock shape as queued through its TTL", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    await fs.writeFile(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE), JSON.stringify({
+      runId: "run-1",
+      action: "start",
+      createdAt: "2026-07-19T12:00:00Z",
+      expiresAt: Date.parse("2026-07-19T12:00:30Z"),
+    }));
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      now: () => new Date("2026-07-19T12:00:10Z"),
+    })(request())).resolves.toMatchObject({
+      started: false,
+      monitoringStatus: "queued",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("clears an expired exact legacy lock and allows a new launch", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    await fs.writeFile(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE), JSON.stringify({
+      runId: "run-1",
+      action: "continue",
+      createdAt: "2026-07-19T12:00:00Z",
+      expiresAt: Date.parse("2026-07-19T12:00:30Z"),
+    }));
+    const child = new FakeChild();
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(spawnSuccessfully(child));
+
+    await expect(createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      now: () => new Date("2026-07-19T12:01:00Z"),
+    })(request())).resolves.toMatchObject({ started: true });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("does not let owner-based cleanup target an ownerless legacy lock", async () => {
+    const { runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const legacyLock = {
+      runId: "run-1",
+      action: "start",
+      createdAt: "2026-07-19T12:00:00Z",
+      expiresAt: Date.parse("2026-07-19T12:00:30Z"),
+    };
+    await fs.writeFile(lockPath, JSON.stringify(legacyLock));
+
+    await removeMatchingMonitoringLock(lockPath, "");
+
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(legacyLock);
+  });
+
+  it("rejects a near-legacy ownerless lock with additional fields", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    await fs.writeFile(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE), JSON.stringify({
+      runId: "run-1",
+      action: "start",
+      createdAt: "2026-07-19T12:00:00Z",
+      expiresAt: Date.parse("2026-07-19T12:00:30Z"),
+      unexpected: true,
+    }));
+
+    await expect(createMonitoringLauncher({
+      repoRoot,
+      spawn: vi.fn<MonitoringLaunchDependencies["spawn"]>(),
+    })(request())).rejects.toMatchObject({ name: "MonitoringLaunchLockReadError" });
   });
 
   it("fails closed with an explicit error for a corrupt existing lock", async () => {
@@ -713,7 +786,7 @@ describe("monitoring launch transaction", () => {
       promoteLock: async () => { throw new Error("promotion failed"); },
       removeMatchingLock,
       kill,
-      terminationGraceMs: 5,
+      terminationGraceMs: 100,
     })(request())).rejects.toThrow("promotion failed");
 
     expect(events.indexOf("child-close")).toBeLessThan(events.indexOf("lock-remove"));

@@ -141,6 +141,35 @@ async function readLock(
     if (action !== "start" && action !== "continue" && action !== "reevaluate") {
       throw new Error("lock action is invalid");
     }
+    if (value.launchId === undefined) {
+      const keys = Object.keys(value).sort();
+      const legacyKeys = ["action", "createdAt", "expiresAt", "runId"];
+      const runId = value.runId;
+      if (
+        keys.length !== legacyKeys.length ||
+        !keys.every((key, index) => key === legacyKeys[index]) ||
+        typeof runId !== "string" ||
+        !runId ||
+        runId === "." ||
+        runId === ".." ||
+        runId.includes("/") ||
+        runId.includes("\\") ||
+        runId.includes("\0") ||
+        typeof value.createdAt !== "string" ||
+        !Number.isFinite(Date.parse(value.createdAt)) ||
+        typeof value.expiresAt !== "number" ||
+        !Number.isFinite(value.expiresAt)
+      ) {
+        throw new Error("ownerless lock does not match the legacy launch-lock shape");
+      }
+      return {
+        launchId: "",
+        action,
+        phase: "queued",
+        createdAt: value.createdAt,
+        expiresAt: value.expiresAt,
+      };
+    }
     if (typeof value.launchId !== "string" || !value.launchId) {
       throw new Error("lock launchId is invalid");
     }
@@ -204,6 +233,9 @@ export async function removeMatchingMonitoringLock(
   lockPath: string,
   launchId: string
 ): Promise<void> {
+  if (!launchId) {
+    return;
+  }
   const current = await readLock(lockPath);
   if (!current || current.launchId !== launchId) {
     return;
