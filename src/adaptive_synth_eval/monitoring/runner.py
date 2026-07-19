@@ -467,6 +467,7 @@ def run_monitoring(
         dry_run: bool,
         max_windows: int | None,
         metrics_config_path: Path | None = None,
+        rescan: bool = False,
 ) -> dict[str, Any]:
     if sample_size <= 0:
         raise ContractError("--sample-size must be greater than 0")
@@ -567,7 +568,8 @@ def run_monitoring(
         state and state.get("retryable_fallbacks")
     ) or _has_retryable_fallbacks(existing_scores)
     reconciliation_needed = (
-            not same_eval_fingerprint
+            rescan
+            or not same_eval_fingerprint
             or not same_policy_fingerprints
             or source_relation in {"unknown", "rewritten"}
             or retryable_fallbacks
@@ -588,6 +590,7 @@ def run_monitoring(
         sample_size=sample_size,
         interval_minutes=interval_minutes,
         sampling_strategy=sampling_strategy,
+        max_windows=max_windows,
         next_line_index=next_line_index,
         total_lines=total_lines,
         evaluated_rows=base_evaluated,
@@ -680,6 +683,7 @@ def run_monitoring(
                     sample_size=sample_size,
                     interval_minutes=interval_minutes,
                     sampling_strategy=sampling_strategy,
+                    max_windows=max_windows,
                     next_line_index=line_idx + 1,
                     total_lines=total_lines,
                     evaluated_rows=base_evaluated + evaluated_rows_this_run,
@@ -706,6 +710,7 @@ def run_monitoring(
             sample_size=sample_size,
             interval_minutes=interval_minutes,
             sampling_strategy=sampling_strategy,
+            max_windows=max_windows,
             next_line_index=next_line_index,
             total_lines=total_lines,
             evaluated_rows=base_evaluated + evaluated_rows_this_run,
@@ -730,6 +735,7 @@ def run_monitoring(
         sample_size=sample_size,
         interval_minutes=interval_minutes,
         sampling_strategy=sampling_strategy,
+        max_windows=max_windows,
         next_line_index=next_line_index,
         total_lines=total_lines,
         evaluated_rows=base_evaluated + evaluated_rows_this_run,
@@ -754,6 +760,8 @@ def run_monitoring(
         "sample_size": sample_size,
         "interval_minutes": interval_minutes,
         "sampling_strategy": sampling_strategy,
+        "max_windows": max_windows,
+        "rescan": rescan,
         "windows_processed": windows_processed_this_run,
         "next_line_index": next_line_index,
         "total_lines": total_lines,
@@ -1538,6 +1546,8 @@ def _write_progress_markdown(run_dir: Path, state: dict[str, Any]) -> Path:
     skipped_rows = int(state.get("skipped_rows") or 0)
     next_line_index = int(state.get("next_line_index") or 0)
     windows_completed = int(state.get("windows_completed") or 0)
+    max_windows = state.get("max_windows")
+    max_windows_display = "unlimited" if max_windows is None else str(max_windows)
     percent_complete = 0.0
     if total_lines > 0:
         percent_complete = round((next_line_index / total_lines) * 100.0, 2)
@@ -1555,6 +1565,7 @@ def _write_progress_markdown(run_dir: Path, state: dict[str, Any]) -> Path:
         f"- Sampling Window Size: {state.get('sample_size') or 0}",
         f"- Sampling Interval Minutes: {state.get('interval_minutes') or 0}",
         f"- Sampling Strategy: {state.get('sampling_strategy') or 'all'}",
+        f"- Max Windows: {max_windows_display}",
         f"- Windows Completed: {windows_completed}",
         f"- Next Line Index: {next_line_index}",
         f"- Total Lines: {total_lines}",
@@ -1612,6 +1623,7 @@ def _build_state(
         sample_size: int,
         interval_minutes: int,
         sampling_strategy: str = "all",
+        max_windows: int | None,
         next_line_index: int,
         total_lines: int,
         evaluated_rows: int,
@@ -1629,6 +1641,7 @@ def _build_state(
         "sample_size": sample_size,
         "interval_minutes": interval_minutes,
         "sampling_strategy": sampling_strategy,
+        "max_windows": max_windows,
         "next_line_index": next_line_index,
         "total_lines": total_lines,
         "evaluated_rows": evaluated_rows,

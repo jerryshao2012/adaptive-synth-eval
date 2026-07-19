@@ -51,6 +51,11 @@ def _monitor_args(run_dir: str | Path, **overrides) -> list[str]:
     ]
     for key, value in overrides.items():
         flag = "--" + key.replace("_", "-")
+        if value is True:
+            base.append(flag)
+            continue
+        if value is False or value is None:
+            continue
         base.extend([flag, str(value)])
     return base
 
@@ -203,6 +208,47 @@ def test_retryable_fallback_rescans_and_refreshes_only_stale_batch(tmp_path):
     )
     final_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert final_state["retryable_fallbacks"] is False
+
+
+def test_explicit_rescan_refreshes_only_stale_judge_batch(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_stale_batch_rescan"
+    _write_chat_history(run_dir, total_rows=1)
+    args = _monitor_args(run_dir, sample_size=1000)
+    assert main(args) == 0
+
+    scores_path = run_dir / "monitoring_scores.jsonl"
+    score = _read_jsonl(scores_path)[0]
+    safety_id = next(
+        key for key, value in score["value_versions"]["judge_batches"].items()
+        if value["evaluation_group"] == "safety"
+    )
+    performance_id = next(
+        key for key, value in score["value_versions"]["judge_batches"].items()
+        if value["evaluation_group"] == "performance"
+    )
+    safety_batch_before = dict(
+        score["value_versions"]["judge_batches"][safety_id]
+    )
+    safety_metrics_before = json.loads(json.dumps(score["safety_metrics"]))
+    score["value_versions"]["judge_batches"][performance_id][
+        "refresh_quality"
+    ] = "heuristic_fallback"
+    score["performance_metrics"]["relevance"]["percent"] = -1.0
+    scores_path.write_text(json.dumps(score) + "\n", encoding="utf-8")
+
+    assert main([*args, "--rescan"]) == 0
+
+    refreshed = _read_jsonl(scores_path)[0]
+    assert refreshed["value_versions"]["judge_batches"][safety_id] == safety_batch_before
+    assert refreshed["safety_metrics"] == safety_metrics_before
+    assert refreshed["value_versions"]["judge_batches"][performance_id][
+        "refresh_quality"
+    ] == "dry_run"
+    assert refreshed["performance_metrics"]["relevance"]["percent"] != -1.0
+    state = json.loads(
+        (run_dir / "monitoring_state.json").read_text(encoding="utf-8")
+    )
+    assert state["evaluated_rows"] == 1
 
 
 def test_resume_after_crash_preserves_scores(tmp_path):

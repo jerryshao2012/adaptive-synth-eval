@@ -44,15 +44,20 @@ def _monitor_args(run_dir: str | Path, **overrides) -> list[str]:
     ]
     for key, value in overrides.items():
         flag = "--" + key.replace("_", "-")
+        if value is True:
+            base.append(flag)
+            continue
+        if value is False or value is None:
+            continue
         base.extend([flag, str(value)])
     return base
 
 
-def test_monitoring_cli_dry_run_writes_scores_and_state(tmp_path):
+def test_monitoring_cli_dry_run_writes_scores_and_state(tmp_path, capsys):
     run_dir = tmp_path / "outputs" / "runs" / "run_a"
     _write_chat_history(run_dir, total_rows=3)
 
-    exit_code = main(_monitor_args(run_dir, sample_size=2))
+    exit_code = main(_monitor_args(run_dir, sample_size=2, max_windows=3))
 
     assert exit_code == 0
 
@@ -66,12 +71,18 @@ def test_monitoring_cli_dry_run_writes_scores_and_state(tmp_path):
     state = json.loads((run_dir / "monitoring_state.json").read_text(encoding="utf-8"))
     assert state["status"] == "completed"
     assert state["next_line_index"] == 3
+    assert state["max_windows"] == 3
     assert "evaluation_fingerprint" in state
 
     progress_text = (run_dir / "eval_progress.md").read_text(encoding="utf-8")
     assert "# Eval Progress" in progress_text
     assert "- Status: completed" in progress_text
     assert "Evaluation Fingerprint" in progress_text
+    assert "- Max Windows: 3" in progress_text
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["max_windows"] == 3
+    assert summary["rescan"] is False
 
 
 def test_monitoring_cli_skips_duplicate_same_fingerprint(tmp_path):
@@ -149,3 +160,47 @@ def test_monitoring_cli_systematic_sampling(tmp_path):
     # Index 0 (conv-1) and Index 5 (conv-6) should be selected.
     conv_ids = {row["conversation_id"] for row in scores}
     assert conv_ids == {"conv-1", "conv-6"}
+
+
+def test_monitoring_cli_completed_unchanged_rescan_reuses_scores(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_systematic_rescan"
+    _write_chat_history(run_dir, total_rows=10)
+    first_args = _monitor_args(
+        run_dir, sample_size=2, sampling_strategy="systematic"
+    )
+
+    assert main(first_args) == 0
+    scores_path = run_dir / "monitoring_scores.jsonl"
+    scores_before = scores_path.read_bytes()
+    rows_before = _read_jsonl(scores_path)
+
+    assert main([*first_args, "--rescan"]) == 0
+
+    assert scores_path.read_bytes() == scores_before
+    assert _read_jsonl(scores_path) == rows_before
+    state = json.loads((run_dir / "monitoring_state.json").read_text(encoding="utf-8"))
+    assert state["status"] == "completed"
+    assert state["next_line_index"] == 10
+    assert state["evaluated_rows"] == 0
+
+
+def test_monitoring_cli_rescan_with_broader_systematic_sample_adds_rows(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_broader_rescan"
+    _write_chat_history(run_dir, total_rows=10)
+
+    assert main(_monitor_args(
+        run_dir, sample_size=2, sampling_strategy="systematic"
+    )) == 0
+    assert len(_read_jsonl(run_dir / "monitoring_scores.jsonl")) == 2
+
+    assert main(_monitor_args(
+        run_dir,
+        sample_size=4,
+        sampling_strategy="systematic",
+        rescan=True,
+    )) == 0
+
+    scores = _read_jsonl(run_dir / "monitoring_scores.jsonl")
+    assert len(scores) == 4
+    state = json.loads((run_dir / "monitoring_state.json").read_text(encoding="utf-8"))
+    assert state["evaluated_rows"] == 2

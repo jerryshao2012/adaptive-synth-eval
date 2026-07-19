@@ -443,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=args.dry_run,
                     max_windows=args.max_windows,
                     metrics_config_path=metrics_config_path,
+                    rescan=args.rescan,
                 )
                 print(json.dumps(summary, indent=2, default=str))
                 return 0
@@ -603,6 +604,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional cap on windows processed in a single invocation.",
+    )
+    monitor_run.add_argument(
+        "--rescan",
+        action="store_true",
+        help="Rescan source history from the beginning while reusing fingerprint-valid scores.",
     )
     monitor_run.add_argument(
         "--metrics-config",
