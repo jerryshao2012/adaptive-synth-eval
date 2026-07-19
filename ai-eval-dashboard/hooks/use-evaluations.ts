@@ -152,6 +152,8 @@ export function useMonitoringLog(
     },
     enabled: open && Boolean(runId),
     refetchInterval: open && active ? 2_000 : false,
+    refetchOnWindowFocus: active,
+    refetchOnReconnect: active,
   });
 }
 

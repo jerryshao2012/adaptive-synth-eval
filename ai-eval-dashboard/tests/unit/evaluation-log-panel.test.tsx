@@ -83,8 +83,18 @@ function renderPanel(
 
 function queryOptions(client: QueryClient, key: QueryKey) {
   return client.getQueryCache().find({ queryKey: key })?.options as
-    | { refetchInterval?: unknown }
+    | {
+        refetchInterval?: unknown;
+        refetchOnReconnect?: unknown;
+        refetchOnWindowFocus?: unknown;
+      }
     | undefined;
+}
+
+async function flushTimers(ms = 0) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
 }
 
 beforeEach(() => {
@@ -120,27 +130,88 @@ describe("useMonitoringLog", () => {
     );
   });
 
-  it("configures two-second polling only for an open active run", () => {
+  it("configures terminal log reads to ignore focus and reconnect refreshes", () => {
     fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
-
-    const activeClient = createClient();
-    renderHook(() => useMonitoringLog("run-1", true, true), {
-      wrapper: wrapper(activeClient),
-    });
-    expect(
-      queryOptions(activeClient, ["monitoring-log", "run-1"])
-        ?.refetchInterval
-    ).toBe(2_000);
-
-    cleanup();
     const inactiveClient = createClient();
     renderHook(() => useMonitoringLog("run-1", true, false), {
       wrapper: wrapper(inactiveClient),
     });
-    expect(
-      queryOptions(inactiveClient, ["monitoring-log", "run-1"])
-        ?.refetchInterval
-    ).toBe(false);
+    const options = queryOptions(inactiveClient, ["monitoring-log", "run-1"]);
+    expect(options?.refetchInterval).toBe(false);
+    expect(options?.refetchOnWindowFocus).toBe(false);
+    expect(options?.refetchOnReconnect).toBe(false);
+  });
+
+  it("starts two-second requests while active and stops them when collapsed", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(() => jsonFetch(logResponse("active\n")));
+    const client = createClient();
+    const { rerender } = renderHook(
+      ({ open }) => useMonitoringLog("run-1", open, true),
+      {
+        initialProps: { open: true },
+        wrapper: wrapper(client),
+      }
+    );
+
+    await flushTimers();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushTimers(1_999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushTimers(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    rerender({ open: false });
+    await flushTimers(4_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops two-second requests when an active run becomes terminal", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(() => jsonFetch(logResponse("done\n")));
+    const client = createClient();
+    const { rerender } = renderHook(
+      ({ active }) => useMonitoringLog("run-1", true, active),
+      {
+        initialProps: { active: true },
+        wrapper: wrapper(client),
+      }
+    );
+
+    await flushTimers();
+    await flushTimers(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    rerender({ active: false });
+    await flushTimers(4_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the old poller on a run switch until the new panel is opened", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(() => jsonFetch(logResponse("output\n")));
+    const client = createClient();
+    const { rerender } = renderHook(
+      ({ runId, open }) => useMonitoringLog(runId, open, true),
+      {
+        initialProps: { runId: "run-1", open: true },
+        wrapper: wrapper(client),
+      }
+    );
+
+    await flushTimers();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender({ runId: "run-2", open: false });
+    await flushTimers(4_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender({ runId: "run-2", open: true });
+    await flushTimers();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/evaluations/monitoring/log?runId=run-2"
+    );
   });
 });
 
@@ -211,6 +282,7 @@ describe("EvaluationLogPanel", () => {
     const output = screen.getByText("judge batch complete");
     expect(output.tagName).toBe("PRE");
     expect(output.className).toContain("font-mono");
+    expect(output.getAttribute("tabindex")).toBe("0");
   });
 
   it("announces an error and keeps manual refresh available", async () => {
@@ -323,6 +395,36 @@ describe("EvaluationLogPanel", () => {
       name: "Show evaluation log",
     });
     expect(nextShow.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("log")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a previously opened run closed after switching away and back", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(() => jsonFetch(logResponse("run output\n")));
+    const { rerender, client } = renderPanel();
+
+    await user.click(
+      screen.getByRole("button", { name: "Show evaluation log" })
+    );
+    await screen.findByText("run output");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <EvaluationLogPanel runId="run-2" monitoringStatus="in_progress" />
+      </QueryClientProvider>
+    );
+    rerender(
+      <QueryClientProvider client={client}>
+        <EvaluationLogPanel runId="run-1" monitoringStatus="completed" />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show evaluation log" })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
     expect(screen.queryByRole("log")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

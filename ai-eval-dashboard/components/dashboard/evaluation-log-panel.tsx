@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, FileText, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,16 +20,23 @@ export function EvaluationLogPanel({
   runId,
   monitoringStatus,
 }: EvaluationLogPanelProps) {
+  return (
+    <EvaluationLogPanelSession
+      key={runId}
+      runId={runId}
+      monitoringStatus={monitoringStatus}
+    />
+  );
+}
+
+function EvaluationLogPanelSession({
+  runId,
+  monitoringStatus,
+}: EvaluationLogPanelProps) {
   const panelId = useId();
   const viewportRef = useRef<HTMLPreElement>(null);
   const wasAtBottomRef = useRef(true);
-  const [openRunId, setOpenRunId] = useState<string | null>(null);
-  const open = openRunId === runId;
-
-  useEffect(() => {
-    wasAtBottomRef.current = true;
-    if (viewportRef.current) viewportRef.current.scrollTop = 0;
-  }, [runId]);
+  const [open, setOpen] = useState(false);
   const active =
     monitoringStatus === "queued" || monitoringStatus === "in_progress";
   const canRefresh =
@@ -67,7 +68,7 @@ export function EvaluationLogPanel({
             aria-expanded={open}
             aria-controls={panelId}
             aria-label={open ? "Hide evaluation log" : "Show evaluation log"}
-            onClick={() => setOpenRunId(open ? null : runId)}
+            onClick={() => setOpen((current) => !current)}
           >
             <FileText aria-hidden="true" />
             <span>Evaluation log</span>
@@ -125,6 +126,7 @@ export function EvaluationLogPanel({
                   ref={viewportRef}
                   role="log"
                   aria-label={`Evaluation log for ${runId}`}
+                  tabIndex={0}
                   onScroll={updateScrollPosition}
                   className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed text-foreground"
                 >
