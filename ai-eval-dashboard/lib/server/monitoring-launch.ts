@@ -16,11 +16,14 @@ export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
+const LOCK_GUARD_TIMEOUT_MS = 5_000;
+const LOCK_GUARD_POLL_MS = 10;
 
 export type MonitoringLaunchPhase = "queued" | "running" | "rollback_failed";
 
 export interface MonitoringLaunchLock {
   launchId: string;
+  legacyRunId?: string;
   action: MonitoringAction;
   phase?: MonitoringLaunchPhase;
   createdAt: string;
@@ -120,6 +123,164 @@ function lockPathFor(runDirectory: string): string {
   return path.join(runDirectory, MONITORING_LAUNCH_LOCK_FILE);
 }
 
+interface LockGuardOwner {
+  token: string;
+  pid: number;
+  createdAt: string;
+  intentFile: string;
+}
+
+function guardOwnerIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function parseGuardOwner(content: string, lockPath: string): LockGuardOwner | null {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    if (
+      typeof value.token !== "string" ||
+      !/^[0-9a-f-]{36}$/i.test(value.token) ||
+      typeof value.pid !== "number" ||
+      !Number.isInteger(value.pid) ||
+      value.pid <= 0 ||
+      typeof value.createdAt !== "string" ||
+      !Number.isFinite(Date.parse(value.createdAt)) ||
+      typeof value.intentFile !== "string"
+    ) {
+      return null;
+    }
+    const expectedIntentFile = `${path.basename(lockPath)}.guard.${value.pid}.${value.token}.intent`;
+    if (value.intentFile !== expectedIntentFile) {
+      return null;
+    }
+    return value as unknown as LockGuardOwner;
+  } catch {
+    return null;
+  }
+}
+
+async function pauseForGuard(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, LOCK_GUARD_POLL_MS));
+}
+
+async function withMonitoringLockGuard<T>(
+  lockPath: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const token = randomUUID();
+  const intentFile = `${path.basename(lockPath)}.guard.${process.pid}.${token}.intent`;
+  const intentPath = path.join(path.dirname(lockPath), intentFile);
+  const guardPath = `${lockPath}.guard`;
+  const owner: LockGuardOwner = {
+    token,
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    intentFile,
+  };
+  const serializedOwner = JSON.stringify(owner);
+  await fs.writeFile(intentPath, serializedOwner, { encoding: "utf8", flag: "wx" });
+
+  const deadline = Date.now() + LOCK_GUARD_TIMEOUT_MS;
+  let acquired = false;
+  let released = false;
+  try {
+    while (!acquired) {
+      try {
+        await fs.link(intentPath, guardPath);
+        acquired = true;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+      }
+
+      let currentOwner: LockGuardOwner | null = null;
+      try {
+        currentOwner = parseGuardOwner(await fs.readFile(guardPath, "utf8"), lockPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+
+      if (currentOwner && !guardOwnerIsAlive(currentOwner.pid)) {
+        const staleIntentPath = path.join(path.dirname(lockPath), currentOwner.intentFile);
+        try {
+          await fs.unlink(staleIntentPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+          currentOwner = null;
+        }
+        if (currentOwner) {
+          try {
+            await fs.unlink(guardPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+              try {
+                await fs.writeFile(staleIntentPath, JSON.stringify(currentOwner), {
+                  encoding: "utf8",
+                  flag: "wx",
+                });
+              } catch {
+                // Leave the unverifiable guard fail-closed.
+              }
+              throw error;
+            }
+          }
+          continue;
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for monitoring launch lock guard '${guardPath}'.`);
+      }
+      await pauseForGuard();
+    }
+
+    let operationError: unknown;
+    try {
+      return await operation();
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      try {
+        const currentOwner = parseGuardOwner(await fs.readFile(guardPath, "utf8"), lockPath);
+        if (!currentOwner || currentOwner.token !== token) {
+          throw new Error("Monitoring launch lock guard ownership changed before release.");
+        }
+        await fs.unlink(guardPath);
+        released = true;
+      } catch (releaseError) {
+        if (operationError) {
+          throw new AggregateError(
+            [operationError, releaseError],
+            "Monitoring lock operation and guard release both failed."
+          );
+        }
+        throw releaseError;
+      }
+    }
+  } finally {
+    if (!acquired || released) {
+      try {
+        await fs.unlink(intentPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+}
+
 async function readLock(
   lockPath: string,
   readLockFile: (lockPath: string) => Promise<string> = (candidate) =>
@@ -164,6 +325,7 @@ async function readLock(
       }
       return {
         launchId: "",
+        legacyRunId: runId,
         action,
         phase: "queued",
         createdAt: value.createdAt,
@@ -206,7 +368,7 @@ async function readLock(
   }
 }
 
-async function removeLockSnapshot(
+async function removeLockSnapshotUnlocked(
   lockPath: string,
   snapshot: MonitoringLaunchLock,
   readLockFile?: (lockPath: string) => Promise<string>
@@ -216,7 +378,13 @@ async function removeLockSnapshot(
     !current ||
     (snapshot.launchId
       ? current.launchId !== snapshot.launchId
-      : current.createdAt !== snapshot.createdAt || current.pid !== snapshot.pid)
+      : current.launchId !== "" ||
+        current.legacyRunId !== snapshot.legacyRunId ||
+        current.action !== snapshot.action ||
+        current.phase !== snapshot.phase ||
+        current.createdAt !== snapshot.createdAt ||
+        current.expiresAt !== snapshot.expiresAt ||
+        current.pid !== snapshot.pid)
   ) {
     return;
   }
@@ -233,17 +401,30 @@ export async function removeMatchingMonitoringLock(
   lockPath: string,
   launchId: string
 ): Promise<void> {
-  if (!launchId) {
-    return;
-  }
+  if (!launchId) return;
+  await withMonitoringLockGuard(lockPath, () =>
+    removeMatchingMonitoringLockUnlocked(lockPath, launchId)
+  );
+}
+
+async function removeMatchingMonitoringLockUnlocked(
+  lockPath: string,
+  launchId: string
+): Promise<void> {
+  if (!launchId) return;
   const current = await readLock(lockPath);
-  if (!current || current.launchId !== launchId) {
-    return;
-  }
-  await removeLockSnapshot(lockPath, current);
+  if (!current || current.launchId !== launchId) return;
+  await removeLockSnapshotUnlocked(lockPath, current);
 }
 
 export async function promoteMonitoringLock(
+  lockPath: string,
+  lock: MonitoringLaunchLock
+): Promise<void> {
+  await withMonitoringLockGuard(lockPath, () => promoteMonitoringLockUnlocked(lockPath, lock));
+}
+
+async function promoteMonitoringLockUnlocked(
   lockPath: string,
   lock: MonitoringLaunchLock
 ): Promise<void> {
@@ -269,7 +450,7 @@ export async function promoteMonitoringLock(
   }
 }
 
-async function retryRollbackFailureCleanup(
+async function retryRollbackFailureCleanupUnlocked(
   lockPath: string,
   marker: RollbackFailureMarker,
   dependencies: LivenessDependencies
@@ -280,12 +461,22 @@ async function retryRollbackFailureCleanup(
     (current.phase === "rollback_failed" || current.phase === "queued")
   ) {
     const removeMatchingLock =
-      dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
+      dependencies.removeMatchingLock ?? removeMatchingMonitoringLockUnlocked;
     await removeMatchingLock(lockPath, marker.lock.launchId);
   }
   if (inProcessRollbackFailures.get(lockPath) === marker) {
     inProcessRollbackFailures.delete(lockPath);
   }
+}
+
+async function retryRollbackFailureCleanup(
+  lockPath: string,
+  marker: RollbackFailureMarker,
+  dependencies: LivenessDependencies
+): Promise<void> {
+  await withMonitoringLockGuard(lockPath, () =>
+    retryRollbackFailureCleanupUnlocked(lockPath, marker, dependencies)
+  );
 }
 
 function pidIsAlive(pid: number, kill: NonNullable<MonitoringLaunchDependencies["kill"]>): boolean {
@@ -304,7 +495,7 @@ function pidIsAlive(pid: number, kill: NonNullable<MonitoringLaunchDependencies[
   }
 }
 
-export async function getActiveMonitoringLaunch(
+async function getActiveMonitoringLaunchUnlocked(
   runDirectory: string,
   dependencies: LivenessDependencies = {}
 ): Promise<MonitoringLaunchLock | null> {
@@ -315,7 +506,7 @@ export async function getActiveMonitoringLaunch(
       return inProcessFailure.lock;
     }
     try {
-      await retryRollbackFailureCleanup(lockPath, inProcessFailure, dependencies);
+      await retryRollbackFailureCleanupUnlocked(lockPath, inProcessFailure, dependencies);
     } catch {
       return inProcessFailure.lock;
     }
@@ -342,8 +533,18 @@ export async function getActiveMonitoringLaunch(
     return lock;
   }
 
-  await removeLockSnapshot(lockPath, lock, dependencies.readLockFile);
+  await removeLockSnapshotUnlocked(lockPath, lock, dependencies.readLockFile);
   return null;
+}
+
+export async function getActiveMonitoringLaunch(
+  runDirectory: string,
+  dependencies: LivenessDependencies = {}
+): Promise<MonitoringLaunchLock | null> {
+  const lockPath = lockPathFor(runDirectory);
+  return withMonitoringLockGuard(lockPath, () =>
+    getActiveMonitoringLaunchUnlocked(runDirectory, dependencies)
+  );
 }
 
 export function projectMonitoringRun(
@@ -506,42 +707,44 @@ async function acquireLaunchLock(
   dependencies: LivenessDependencies
 ): Promise<{ acquired: boolean; active: MonitoringLaunchLock | null }> {
   const lockPath = lockPathFor(runDirectory);
-  const write = async () => {
-    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), {
-      encoding: "utf8",
-      flag: "wx",
-    });
-  };
+  return withMonitoringLockGuard(lockPath, async () => {
+    const write = async () => {
+      await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), {
+        encoding: "utf8",
+        flag: "wx",
+      });
+    };
 
-  const existingActive = await getActiveMonitoringLaunch(runDirectory, dependencies);
-  if (existingActive) {
-    return { acquired: false, active: existingActive };
-  }
-
-  try {
-    await write();
-    return { acquired: true, active: lock };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-
-  const active = await getActiveMonitoringLaunch(runDirectory, dependencies);
-  if (active) {
-    return { acquired: false, active };
-  }
-
-  try {
-    await write();
-    return { acquired: true, active: lock };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      return {
-        acquired: false,
-        active: await getActiveMonitoringLaunch(runDirectory, dependencies),
-      };
+    const existingActive = await getActiveMonitoringLaunchUnlocked(runDirectory, dependencies);
+    if (existingActive) {
+      return { acquired: false, active: existingActive };
     }
-    throw error;
-  }
+
+    try {
+      await write();
+      return { acquired: true, active: lock };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+
+    const active = await getActiveMonitoringLaunchUnlocked(runDirectory, dependencies);
+    if (active) {
+      return { acquired: false, active };
+    }
+
+    try {
+      await write();
+      return { acquired: true, active: lock };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return {
+          acquired: false,
+          active: await getActiveMonitoringLaunchUnlocked(runDirectory, dependencies),
+        };
+      }
+      throw error;
+    }
+  });
 }
 
 export function createMonitoringLauncher(
@@ -554,10 +757,11 @@ export function createMonitoringLauncher(
   const openLog =
     dependencies.openLog ??
     (async (logPath: string) => (await fs.open(logPath, "a")) as LaunchLogHandle);
-  const promoteLock = dependencies.promoteLock ?? promoteMonitoringLock;
+  const promoteLock = dependencies.promoteLock ?? promoteMonitoringLockUnlocked;
   const persistRollbackFailedLock =
-    dependencies.persistRollbackFailedLock ?? promoteMonitoringLock;
-  const removeMatchingLock = dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
+    dependencies.persistRollbackFailedLock ?? promoteMonitoringLockUnlocked;
+  const removeMatchingLock =
+    dependencies.removeMatchingLock ?? removeMatchingMonitoringLockUnlocked;
   const readLockFile =
     dependencies.readLockFile ?? ((lockPath: string) => fs.readFile(lockPath, "utf8"));
   const reportLogCloseError =
@@ -624,7 +828,10 @@ export function createMonitoringLauncher(
       if (!child.pid) {
         throw new Error("Monitoring process spawned without a PID.");
       }
-      await promoteLock(lockPath, { ...lock, phase: "running", pid: child.pid });
+      const childPid = child.pid;
+      await withMonitoringLockGuard(lockPath, () =>
+        promoteLock(lockPath, { ...lock, phase: "running", pid: childPid })
+      );
       child.unref();
       return {
         runId,
@@ -679,7 +886,9 @@ export function createMonitoringLauncher(
         let persistenceFailed = false;
         let persistenceError: unknown;
         try {
-          await persistRollbackFailedLock(lockPath, failedLock);
+          await withMonitoringLockGuard(lockPath, () =>
+            persistRollbackFailedLock(lockPath, failedLock)
+          );
         } catch (errorDuringPersistence) {
           persistenceFailed = true;
           persistenceError = errorDuringPersistence;
@@ -728,7 +937,9 @@ export function createMonitoringLauncher(
         }
       }
       try {
-        await removeMatchingLock(lockPath, lock.launchId);
+        await withMonitoringLockGuard(lockPath, () =>
+          removeMatchingLock(lockPath, lock.launchId)
+        );
       } catch (rollbackError) {
         throw new MonitoringLaunchRollbackError(
           `Monitoring launch failed (${errorMessage(error)}); lock cleanup failed (${errorMessage(rollbackError)}); launch lock retained.`,

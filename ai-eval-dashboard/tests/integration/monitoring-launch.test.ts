@@ -284,6 +284,105 @@ describe("monitoring launch transaction", () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
+  it("preserves the acquired replacement when expired legacy cleanup races a contender", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const legacyLock = {
+      runId: "run-1",
+      action: "start",
+      createdAt: "2026-07-19T12:01:00Z",
+      expiresAt: Date.parse("2026-07-19T12:00:30Z"),
+    };
+    await fs.writeFile(lockPath, JSON.stringify(legacyLock));
+
+    let releaseLegacyComparison!: () => void;
+    const legacyComparisonReleased = new Promise<void>((resolve) => {
+      releaseLegacyComparison = resolve;
+    });
+    let comparisonRead!: () => void;
+    const comparisonReadStarted = new Promise<void>((resolve) => {
+      comparisonRead = resolve;
+    });
+    let reads = 0;
+    const firstChild = new FakeChild(4101);
+    const secondChild = new FakeChild(4102);
+    const kill = vi.fn(() => true);
+    let spawnCount = 0;
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(() => {
+      spawnCount += 1;
+      const child: FakeChild = spawnCount === 1 ? firstChild : secondChild;
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+    const firstLauncher = createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      launchId: () => "first-owner",
+      now: () => new Date("2026-07-19T12:01:00Z"),
+      kill,
+      readLockFile: async (candidatePath) => {
+        const content = await fs.readFile(candidatePath, "utf8");
+        reads += 1;
+        if (reads === 2) {
+          comparisonRead();
+          await legacyComparisonReleased;
+        }
+        return content;
+      },
+    });
+    const secondLauncher = createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      launchId: () => "second-owner",
+      now: () => new Date("2026-07-19T12:01:00Z"),
+      kill,
+    });
+
+    const first = firstLauncher(request());
+    await comparisonReadStarted;
+    const second = secondLauncher(request({ action: "continue" }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseLegacyComparison();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toMatchObject({ started: true });
+    expect(secondResult).toMatchObject({ started: false, monitoringStatus: "queued" });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+      launchId: "first-owner",
+      phase: "running",
+      pid: 4101,
+    });
+  });
+
+  it("reclaims a crashed guard owner without leaving a deadlock", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const token = "00000000-0000-4000-8000-000000000001";
+    const stalePid = 999_999;
+    const intentFile = `${path.basename(lockPath)}.guard.${stalePid}.${token}.intent`;
+    const intentPath = path.join(runDir, intentFile);
+    const guardPath = `${lockPath}.guard`;
+    await fs.writeFile(intentPath, JSON.stringify({
+      token,
+      pid: stalePid,
+      createdAt: "2026-07-19T12:00:00Z",
+      intentFile,
+    }));
+    await fs.link(intentPath, guardPath);
+    const child = new FakeChild();
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(spawnSuccessfully(child));
+
+    await expect(createMonitoringLauncher({ repoRoot, spawn })(request())).resolves.toMatchObject({
+      started: true,
+    });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    await expect(fs.access(intentPath)).rejects.toBeTruthy();
+    await expect(fs.access(guardPath)).rejects.toBeTruthy();
+  });
+
   it("does not let owner-based cleanup target an ownerless legacy lock", async () => {
     const { runDir } = await makeRepo();
     const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
