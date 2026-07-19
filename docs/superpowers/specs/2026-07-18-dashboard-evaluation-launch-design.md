@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add a shared configuration dialog to the AI evaluation dashboard for starting, continuing, and re-evaluating post-hoc monitoring jobs. Dashboard launches are live-only and expose operational coverage controls without exposing metric prompts, thresholds, judge routing, custom metric files, or dry-run mode.
+Add a shared configuration dialog to the AI evaluation dashboard for starting, continuing, and re-evaluating post-hoc monitoring jobs. Dashboard launches are live-only and expose operational coverage controls without exposing metric prompts, thresholds, judge routing, custom metric files, or dry-run mode. Capture the detached monitoring CLI's stdout and stderr in a run-scoped log artifact and make a bounded live tail available from the Monitor page.
 
 Completed runs gain a **Re-evaluate** action that rescans the source history under the selected sampling policy. Existing score batches whose input, metric, judge, and policy fingerprints remain valid are reused; only missing or stale batches invoke judges. This keeps unchanged re-evaluations fast while allowing changed sampling settings to add coverage.
 
@@ -22,6 +22,9 @@ Completed runs gain a **Re-evaluate** action that rescans the source history und
   - Re-evaluate rescans from the first source row and reuses fingerprint-matching results.
 - Completed runs show **Re-evaluate** whenever no launch is queued or in progress. Duplicate submissions remain disabled by a PID-backed launch lock and client-side pending state.
 - Dashboard launches always use live model evaluation. The CLI retains its existing terminal-only `--dry-run` option.
+- A collapsible **Evaluation Log** panel under the run header shows the selected run's `monitoring.log` in a monospace, scrollable view.
+- Opening the panel fetches the latest log tail. While the panel is open and the launch is queued or active, it refreshes every two seconds; completed or incomplete runs refresh only when opened or when the user clicks Refresh.
+- The panel follows new output when the user is already at the bottom, but does not pull the scroll position away while the user is inspecting older lines. Empty and unavailable logs have explicit messages.
 
 ## Architecture and Interfaces
 
@@ -49,6 +52,20 @@ interface MonitoringStartRequest extends EvalRunParameters {
 
 The monitoring API validates the action, enum values, positive integers, optional max windows, and run identifier. It launches `uv` with an executable plus argument array and `shell: false`; a human-readable command string may still be returned for diagnostics but is never executed. Run paths must resolve beneath `outputs/runs`.
 
+Add `GET /api/evaluations/monitoring/log?runId=<id>`, returning:
+
+```ts
+interface MonitoringLogResponse {
+  runId: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+  updatedAt?: string;
+}
+```
+
+The endpoint applies the same safe run-directory resolution as launch requests and reads at most the final 256 KiB of `monitoring.log`. If the file exceeds the limit, the response starts at the next complete UTF-8 line and sets `truncated: true`; `size` reports the full file size. A missing log returns an empty successful response so runs created before this feature render a normal empty state.
+
 ### Monitoring CLI and runner
 
 Add `ase monitor run --rescan`. The CLI passes `rescan: bool` to `run_monitoring`.
@@ -71,8 +88,9 @@ Persist `max_windows` with the existing sample size, interval, and strategy in m
 1. The run header opens the dialog with normalized defaults from the selected run.
 2. Client validation prevents invalid or duplicate submissions.
 3. `POST /api/evaluations/monitoring` repeats validation at the trust boundary.
-4. The server resolves the run directory, acquires the per-run launch lock, constructs safe CLI arguments, starts the detached process, and records the child PID in the lock.
+4. The server resolves the run directory, acquires the per-run launch lock, constructs safe CLI arguments, opens `monitoring.log` in append mode, writes a timestamped launch boundary containing the action and non-secret operational arguments, redirects the detached process's stdout/stderr to that file descriptor, and records the child PID in the lock.
 5. Existing polling refreshes run summaries, monitoring state, progress, and score-backed dashboard views.
+6. When the log panel is open, its separate bounded-tail query refreshes according to the selected run's lifecycle state.
 
 The launch lock is first written with a short queued-start expiry, then updated with the spawned `uv` PID. Polling treats the lock as active while that PID exists; a missing/dead PID or failed spawn removes the lock. The short expiry is only a fallback for the pre-spawn race or legacy locks, not the lifetime of a running job. This makes a slow live judge call remain `in_progress` without permitting a duplicate launch, while a crashed or max-window-limited process becomes `incomplete` and eligible for Continue after liveness is checked.
 
@@ -86,7 +104,7 @@ Action availability follows this table:
 | State `in_progress` | No | `incomplete` | Continue |
 | State `completed` | No | `completed` | Re-evaluate |
 
-Invalid configuration or unsafe run identifiers return `400`; missing runs return `404`; conflicting active launches retain the existing non-duplicating response behavior. Spawn failures release the launch lock and return a server error. The dialog stays open with the returned message so the user can correct settings or retry. Re-evaluation never deletes monitoring scores or source artifacts.
+Invalid configuration or unsafe run identifiers return `400`; missing runs return `404`; conflicting active launches retain the existing non-duplicating response behavior. Failure to open the log or spawn the process closes any opened descriptor, releases the launch lock, and returns a server error rather than starting an unobservable dashboard job. After a successful spawn, the parent closes its copy of the descriptor while the detached child continues writing. The dialog stays open with the returned message so the user can correct settings or retry. Re-evaluation never deletes monitoring scores, logs, or source artifacts.
 
 ## Testing and Acceptance Criteria
 
@@ -106,8 +124,11 @@ Invalid configuration or unsafe run identifiers return `400`; missing runs retur
 - PID-backed lock tests cover queued-before-spawn, live process, dead process cleanup, spawn failure cleanup, and legacy lock expiry.
 - Action availability follows the lifecycle table: Start for untouched runs, Continue for inactive incomplete runs, and Re-evaluate for inactive completed runs, while queued/running launches remain disabled.
 - Dialog submission sends the normalized configuration and presents server errors without closing.
+- Launch tests verify stdout/stderr share the append-only run log descriptor, launch boundaries are written, descriptors and locks are cleaned up on every failure path, and no command is executed through a shell.
+- Log API tests cover missing, small, oversized, partial-line, multibyte UTF-8, unsafe-run-ID, and missing-run cases while proving no more than 256 KiB is returned.
+- Log panel tests cover open-on-demand loading, active-only polling, manual refresh, empty state, truncation notice, and bottom-aware auto-scroll.
 
-Acceptance is complete when a user can configure and launch all three actions from the Monitor page, an unchanged completed run re-evaluates without judge calls, changed or missing score batches are refreshed, and the documented CLI behavior matches the dashboard behavior.
+Acceptance is complete when a user can configure and launch all three actions from the Monitor page, an unchanged completed run re-evaluates without judge calls, changed or missing score batches are refreshed, the actual dashboard-launched CLI output is visible during and after the run, and the documented CLI behavior matches the dashboard behavior.
 
 ## Non-goals
 
@@ -116,4 +137,5 @@ Acceptance is complete when a user can configure and launch all three actions fr
 - Choosing a provider or model in the dashboard.
 - Dashboard dry-run mode.
 - Deleting old scores to make a smaller sample replace historical coverage.
-- Building a general-purpose job scheduler or persistent job-log service.
+- Structured log search, multi-file launch archives, log download/export, or a remote logging service.
+- Building a general-purpose job scheduler.
