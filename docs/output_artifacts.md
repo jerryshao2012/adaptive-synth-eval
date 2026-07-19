@@ -140,9 +140,12 @@ next monitoring run.
 
 `ase monitor run --rescan` starts source traversal at row zero but does not
 clear this file. Existing rows and metric groups remain reusable when their
-content, judge, and policy fingerprints are valid. Only missing, stale, or
-retryable-fallback groups are refreshed, so an unchanged rescan can report zero
-newly evaluated rows.
+value fingerprints are valid: metric content, evaluator input, and judge
+identity. Only missing groups, stale-value groups, and retryable-fallback groups
+invoke evaluation again. Policy fingerprints govern classification separately;
+a threshold-only policy change reuses the stored numeric score and recalculates
+its pass/warn/fail label without a judge call. An unchanged rescan can therefore
+report zero newly evaluated rows.
 
 ### Monitoring state and dashboard log
 

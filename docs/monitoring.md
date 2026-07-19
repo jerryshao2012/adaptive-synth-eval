@@ -109,11 +109,14 @@ uv run ase monitor run \
 ```
 
 The rescan reconciles each selected row and metric group against its stored
-fingerprints. Fingerprint-matching results are reused without an evaluation-model
-call; only missing, stale, or retryable-fallback groups are evaluated again. A
-completed unchanged run can therefore finish with `evaluated_rows: 0`. Changing
-the sampling settings can select additional rows, while valid scores for rows
-already evaluated remain reusable.
+value fingerprints: metric content, evaluator input, and judge identity.
+Matching numeric results are reused without an evaluation-model call; only
+missing groups, groups with stale value fingerprints, and retryable-fallback
+groups are evaluated again. Policy fingerprints are separate: a threshold-only
+change reuses the numeric score and recalculates its pass/warn/fail label without
+calling the judge. A completed unchanged run can therefore finish with
+`evaluated_rows: 0`. Changing the sampling settings can select additional rows,
+while valid scores for rows already evaluated remain reusable.
 
 ## Dashboard launches and lifecycle
 
@@ -122,8 +125,10 @@ The Monitor page exposes one configured action for the selected run:
 - **Start** appears when monitoring has not started. It launches with
   `--incomplete-run-action restart`.
 - **Continue** appears when a saved monitoring state is incomplete and there is
-  no active launch. It launches with `--incomplete-run-action resume` from the
-  saved cursor.
+  no active launch. It launches with `--incomplete-run-action resume` and uses
+  the saved cursor when evaluation/policy fingerprints and source identity still
+  match. Changed fingerprints, unknown or rewritten source history, or a
+  retryable fallback trigger reconciliation from row zero instead.
 - **Re-evaluate** appears after monitoring completes. It launches with
   `--incomplete-run-action resume --rescan`, so the runner checks all selected
   source rows while retaining fingerprint-valid results.
@@ -148,16 +153,18 @@ boundary and the detached CLI's stdout and stderr to
 `outputs/runs/<run_id>/monitoring.log`. Re-evaluation and subsequent launches
 append to the same file rather than replacing earlier output.
 
-Expand **Evaluation log** on the Monitor page to inspect it. While a launch is
-Queued or In Progress, the panel polls for new content. Once the run is Complete
-or Incomplete, use its Refresh button. The API and UI expose at most the latest
-256 KiB and omit a partial first line when the file is larger.
+Expand **Evaluation log** on the Monitor page to inspect it. While the panel
+remains expanded and a launch is Queued or In Progress, it polls for new
+content. Once the run is Complete or Incomplete, use its Refresh button. The API
+and UI expose at most the latest 256 KiB and omit a partial first line when the
+file is larger.
 
 Only processes launched by the dashboard are automatically connected to this
 file. Output from `ase monitor run` started in another terminal is not captured
 unless that command is explicitly redirected to the same path, for example:
 
 ```bash
+RUN_ID=copy_the_run_id_printed_by_ase_run
 uv run ase monitor run \
   --run-folder "outputs/runs/$RUN_ID" \
   --incomplete-run-action resume \

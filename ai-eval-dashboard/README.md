@@ -79,13 +79,16 @@ the sampling strategy, per-window sample size, interval minutes, and optional
 maximum windows. Continue and Re-evaluate are prefilled from the saved
 `monitoring_state.json` values.
 
-Start uses the runner's restart recovery action, Continue resumes from its saved
-cursor, and Re-evaluate resumes with `--rescan`. A rescan traverses the selected
-source rows from the beginning but reuses fingerprint-matching metric results;
-only missing or stale evaluation groups require model calls. The dashboard does
-not offer dry-run scoring, custom metrics configuration, or arbitrary CLI
-arguments. Use the [monitoring guide](../docs/monitoring.md) for those CLI-only
-workflows.
+Start uses the runner's restart recovery action. Continue uses its saved cursor
+when fingerprints and source identity still match; otherwise changed
+evaluation/policy fingerprints, unknown or rewritten source history, or a
+retryable fallback trigger reconciliation from row zero. Re-evaluate resumes
+with `--rescan`. A rescan traverses the selected source rows from the beginning
+but reuses value-fingerprint-matching numeric results; policy-only changes
+relabel those scores without judge calls. Only missing, stale-value, or
+retryable-fallback groups require evaluation calls. The dashboard does not offer
+dry-run scoring, custom metrics configuration, or arbitrary CLI arguments. Use
+the [monitoring guide](../docs/monitoring.md) for those CLI-only workflows.
 
 Launches are detached and tracked as Queued before the child writes fresh state,
 then In Progress. The dashboard prevents another launch for that run while the
@@ -131,8 +134,9 @@ All dashboard data access is implemented by Node.js server routes:
   PID-backed launch lock prevent unsafe paths and duplicate active launches. The
   process is spawned directly without a shell.
 - `/api/evaluations/monitoring/log` returns at most the latest 256 KiB of the
-  selected run's `monitoring.log`. The Monitor page polls it while a launch is
-  Queued or In Progress and offers manual refresh after completion or interruption.
+  selected run's `monitoring.log`. While the Evaluation log panel is expanded,
+  the Monitor page polls it during a Queued or In Progress launch and offers
+  manual refresh after completion or interruption.
 - `/api/evaluations/trace` joins a selected monitoring point to matching
   `monitoring_scores.jsonl`, `chat_history.jsonl`, and `turns.jsonl` records.
 - `/api/evaluations/validation` checks the expected run and monitoring files and
