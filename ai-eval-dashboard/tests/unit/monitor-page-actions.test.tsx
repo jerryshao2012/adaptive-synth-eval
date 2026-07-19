@@ -89,6 +89,13 @@ vi.mock("@/hooks/use-evaluations", () => ({
     isFetching: false,
     error: null,
   }),
+  useMonitoringLog: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("@/components/dashboard/investigation-summary", () => ({
@@ -130,6 +137,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Monitor page evaluation configuration", () => {
+  it("renders the collapsed evaluation log directly below the selected run header", () => {
+    render(<DashboardPage />);
+
+    const runSelector = screen.getByLabelText("Select evaluation run");
+    const logToggle = screen.getByRole("button", {
+      name: "Show evaluation log",
+    });
+
+    expect(
+      runSelector.compareDocumentPosition(logToggle) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(logToggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("waits for matching saved state and freezes it when Re-evaluate opens", async () => {
     const user = userEvent.setup();
     hookState.statuses["run-1"] = undefined;

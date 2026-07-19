@@ -43,6 +43,7 @@ import {
 
 // New investigation workbench components
 import { RunSelectorHeader } from "@/components/dashboard/run-selector-header";
+import { EvaluationLogPanel } from "@/components/dashboard/evaluation-log-panel";
 import { EvaluationConfigDialog } from "@/components/dashboard/evaluation-config-dialog";
 import { InvestigationSummaryCard } from "@/components/dashboard/investigation-summary";
 import { FailureAnalysis } from "@/components/dashboard/failure-analysis";
@@ -657,20 +658,26 @@ export default function DashboardPage() {
           )}
 
           {runSummaries.length > 0 && (
-            <RunSelectorHeader
-              selectedRun={selectedRun}
-              monitoringStatus={displayedMonitoringStatus ?? null}
-              runs={runSummaries}
-              onSelectRun={setSelectedRunId}
-              onLaunchIntent={handleLaunchIntent}
-              pendingLaunchKey={
-                pendingLaunchKey ??
-                (retainedAcceptedLaunch?.runId === activeRunId
-                  ? retainedAcceptedLaunch.key
-                  : null)
-              }
-              onRefresh={refreshAll}
-            />
+            <>
+              <RunSelectorHeader
+                selectedRun={selectedRun}
+                monitoringStatus={displayedMonitoringStatus ?? null}
+                runs={runSummaries}
+                onSelectRun={setSelectedRunId}
+                onLaunchIntent={handleLaunchIntent}
+                pendingLaunchKey={
+                  pendingLaunchKey ??
+                  (retainedAcceptedLaunch?.runId === activeRunId
+                    ? retainedAcceptedLaunch.key
+                    : null)
+                }
+                onRefresh={refreshAll}
+              />
+              <EvaluationLogPanel
+                runId={activeRunId}
+                monitoringStatus={runStatus}
+              />
+            </>
           )}
 
           {/* Error state */}

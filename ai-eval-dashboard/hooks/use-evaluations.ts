@@ -6,6 +6,7 @@ import type {
   EvaluationRecord,
   EvaluationsResponse,
   MetricPointIdentity,
+  MonitoringLogResponse,
   MonitoringRunStatus,
   MonitoringStartRequest,
   MonitoringStartResponse,
@@ -127,6 +128,31 @@ export function useMonitoringStatus(runId?: string) {
       };
     },
   };
+}
+
+export function useMonitoringLog(
+  runId?: string,
+  open = false,
+  active = false
+) {
+  return useQuery({
+    queryKey: ["monitoring-log", runId ?? "none"],
+    queryFn: async () => {
+      const params = new URLSearchParams({ runId: runId || "" });
+      const res = await fetch(`${API_BASE}/monitoring/log?${params}`);
+      if (!res.ok) {
+        const body = await res
+          .json()
+          .catch(() => ({ error: "Failed to load the evaluation log." }));
+        throw new Error(
+          body.error || `API error: ${res.status} ${res.statusText}`
+        );
+      }
+      return (await res.json()) as MonitoringLogResponse;
+    },
+    enabled: open && Boolean(runId),
+    refetchInterval: open && active ? 2_000 : false,
+  });
 }
 
 export function useStartMonitoring() {
