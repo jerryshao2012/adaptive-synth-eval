@@ -56,6 +56,11 @@ uv run ase monitor run \
 
 Rows not selected in a sampled window are recorded as skipped as the runner advances. Use a deliberate sampling policy when coverage requirements matter.
 
+The effective sampling strategy, sample size, interval, and `max_windows` value
+are saved in `monitoring_state.json`. The dashboard uses those persisted values
+to prefill a later Continue or Re-evaluate dialog. A blank dashboard Max windows
+field is stored as `null` and means unlimited.
+
 ## Incremental and scheduled monitoring
 
 Progress is stored in `monitoring_state.json`. When the evaluation and policy fingerprints are unchanged, a later invocation resumes from `next_line_index`; if new rows were appended to `chat_history.jsonl`, only the appended range needs processing. When there are no new rows, the command completes without scoring calls.
@@ -90,6 +95,75 @@ Monitoring uses SHA-256-derived fingerprints to decide whether stored scores rem
 
 These fingerprints are generated automatically; there is no metric-version flag. Metric definitions are shipped in `src/adaptive_synth_eval/monitoring/metrics/*.yaml`. A custom monolithic metrics file can be supplied with `--metrics-config` for testing or controlled overrides.
 
+Use `--rescan` to traverse the source history again from row zero without
+discarding existing scores:
+
+```bash
+RUN_ID=copy_the_run_id_printed_by_ase_run
+uv run ase monitor run \
+  --run-folder "outputs/runs/$RUN_ID" \
+  --sampling-strategy systematic \
+  --sample-size 100 \
+  --incomplete-run-action resume \
+  --rescan
+```
+
+The rescan reconciles each selected row and metric group against its stored
+fingerprints. Fingerprint-matching results are reused without an evaluation-model
+call; only missing, stale, or retryable-fallback groups are evaluated again. A
+completed unchanged run can therefore finish with `evaluated_rows: 0`. Changing
+the sampling settings can select additional rows, while valid scores for rows
+already evaluated remain reusable.
+
+## Dashboard launches and lifecycle
+
+The Monitor page exposes one configured action for the selected run:
+
+- **Start** appears when monitoring has not started. It launches with
+  `--incomplete-run-action restart`.
+- **Continue** appears when a saved monitoring state is incomplete and there is
+  no active launch. It launches with `--incomplete-run-action resume` from the
+  saved cursor.
+- **Re-evaluate** appears after monitoring completes. It launches with
+  `--incomplete-run-action resume --rescan`, so the runner checks all selected
+  source rows while retaining fingerprint-valid results.
+- A launch is reported as **Queued** until the new process has produced newer
+  in-progress state, then as **In Progress**. Launch actions are unavailable in
+  both states.
+
+Each action opens the same configuration dialog for sampling strategy, sample
+size, interval minutes, and optional maximum windows. The sample-size control is
+not used with the `all` strategy. Continue and Re-evaluate are prefilled from
+`monitoring_state.json`; invalid or legacy values fall back to CLI defaults.
+
+Dashboard launches are always live evaluation-model runs. The dashboard does
+not expose or accept `--dry-run`, `--metrics-config`, or other custom CLI
+arguments. Use the CLI directly when deterministic dry-run scoring or a custom
+metrics file is required.
+
+### Dashboard evaluation log
+
+For each accepted dashboard launch, the server appends a timestamped launch
+boundary and the detached CLI's stdout and stderr to
+`outputs/runs/<run_id>/monitoring.log`. Re-evaluation and subsequent launches
+append to the same file rather than replacing earlier output.
+
+Expand **Evaluation log** on the Monitor page to inspect it. While a launch is
+Queued or In Progress, the panel polls for new content. Once the run is Complete
+or Incomplete, use its Refresh button. The API and UI expose at most the latest
+256 KiB and omit a partial first line when the file is larger.
+
+Only processes launched by the dashboard are automatically connected to this
+file. Output from `ase monitor run` started in another terminal is not captured
+unless that command is explicitly redirected to the same path, for example:
+
+```bash
+uv run ase monitor run \
+  --run-folder "outputs/runs/$RUN_ID" \
+  --incomplete-run-action resume \
+  >> "outputs/runs/$RUN_ID/monitoring.log" 2>&1
+```
+
 ## Recovery behavior
 
 If `monitoring_state.json` says a run is incomplete, `--incomplete-run-action` controls the next invocation:
@@ -122,6 +196,7 @@ ase monitor run --run-folder RUN_FOLDER
                 [--interval-minutes INTERVAL_MINUTES]
                 [--sampling-strategy {all,random,systematic}]
                 [--max-windows MAX_WINDOWS]
+                [--rescan]
                 [--metrics-config METRICS_CONFIG]
                 [--dry-run]
                 [--incomplete-run-action {ask,resume,restart,abort}]
@@ -134,6 +209,7 @@ ase monitor run --run-folder RUN_FOLDER
 | `--interval-minutes` | Time-window width; must be greater than zero |
 | `--sampling-strategy` | Select all rows, a random subset, or an evenly spaced subset |
 | `--max-windows` | Optional cap on windows processed in this invocation |
+| `--rescan` | Traverse source history from the beginning and reuse fingerprint-valid stored scores |
 | `--metrics-config` | Optional path to a custom monolithic metrics YAML file |
 | `--dry-run` | Use deterministic local scoring instead of live evaluation-model calls |
 | `--incomplete-run-action` | Ask, resume, restart, or abort when monitoring state is incomplete |

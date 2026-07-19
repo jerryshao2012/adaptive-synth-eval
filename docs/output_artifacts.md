@@ -28,6 +28,7 @@ outputs/runs/<run_id>/
 ├── monitoring_scores.jsonl     # Monitoring output (ase monitor run)
 ├── monitoring_state.json       # Monitoring resume/checkpoint state
 ├── eval_progress.md            # Monitoring progress/status markdown
+├── monitoring.log              # Append-only dashboard-launched CLI output
 └── personas/
 	└── <persona_id>_memory.md  # Synth and unified persona memory files
 ```
@@ -35,7 +36,11 @@ outputs/runs/<run_id>/
 Notes:
 - `synth` mode produces the common simulation artifacts and omits unified-only files.
 - `unified` mode produces common artifacts plus unified-specific files listed above.
-- Monitoring artifacts (`monitoring_*` and `eval_progress.md`) are created only when running `ase monitor run` against the run folder.
+- Score, state, and progress artifacts (`monitoring_scores.jsonl`,
+  `monitoring_state.json`, and `eval_progress.md`) are created by
+  `ase monitor run` against the run folder. `monitoring.log` is created when the
+  dashboard launches monitoring, or when a terminal command is explicitly
+  redirected to that path.
 
 For **unified runs**, `contract.normalized.json` uses canonical unified contract schema version 2. Provider
 settings are emitted in nested `azure`, `bedrock`, and `ollama` blocks, schedules are
@@ -132,6 +137,29 @@ The composite evaluation fingerprint remains an audit summary. Cache reuse is
 determined per row and per metric group, so a material change refreshes only
 the affected group. A group recorded as `heuristic_fallback` is retried on the
 next monitoring run.
+
+`ase monitor run --rescan` starts source traversal at row zero but does not
+clear this file. Existing rows and metric groups remain reusable when their
+content, judge, and policy fingerprints are valid. Only missing, stale, or
+retryable-fallback groups are refreshed, so an unchanged rescan can report zero
+newly evaluated rows.
+
+### Monitoring state and dashboard log
+
+`monitoring_state.json` is the resumable checkpoint and the dashboard's source
+for saved launch defaults. Its operational fields include `sample_size`,
+`interval_minutes`, `sampling_strategy`, and nullable `max_windows`, alongside
+`status`, `next_line_index`, row/window counts, source identity, provider, and
+evaluation/policy fingerprints. `eval_progress.md` presents the same progress in
+human-readable form, including the saved maximum-window setting.
+
+`monitoring.log` is append-only across dashboard Start, Continue, and
+Re-evaluate launches. Each dashboard launch writes a timestamped boundary, then
+connects both stdout and stderr from the detached `uv run ase monitor run`
+process to the file. The dashboard log endpoint returns at most the latest
+256 KiB, discarding a partial first line when the file is truncated. A CLI
+process started independently in a terminal is not included unless its output
+is explicitly redirected to this run-scoped file.
 
 ---
 

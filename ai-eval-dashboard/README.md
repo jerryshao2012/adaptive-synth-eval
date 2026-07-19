@@ -30,7 +30,8 @@ You need Node.js 20.9.0 or newer (required by the installed Next.js 16.2.10),
 Yarn 1.x (`package.json` declares Yarn 1.22.22), and an ASE environment installed
 with `uv` if you want the dashboard to start monitoring.
 Provider credentials are required only for live monitoring; deterministic
-monitoring can be run separately with `ase monitor run --dry-run`.
+monitoring can be run separately with `ase monitor run --dry-run`. Dashboard
+launches are live only and require provider configuration.
 
 The server resolves the repository root as the parent of its current working
 directory. Starting Next.js from another directory can therefore point it at the
@@ -72,10 +73,23 @@ The dashboard lists directories under `outputs/runs/`. A run needs
 [monitoring guide](../docs/monitoring.md) to generate or refresh monitoring data;
 it covers sampling, incremental runs, provider setup, recovery, and scheduling.
 
-The Monitor page can also start or continue monitoring. Its server route launches
-this repository's CLI from the repository root with `uv run ase monitor run`, a
-sample size, an interval, and either `restart` or `resume`. Launching is detached,
-so the page polls state files rather than streaming command output.
+The Monitor page can Start a run that has not been monitored, Continue an
+incomplete run, or Re-evaluate a completed run. Every action opens a dialog for
+the sampling strategy, per-window sample size, interval minutes, and optional
+maximum windows. Continue and Re-evaluate are prefilled from the saved
+`monitoring_state.json` values.
+
+Start uses the runner's restart recovery action, Continue resumes from its saved
+cursor, and Re-evaluate resumes with `--rescan`. A rescan traverses the selected
+source rows from the beginning but reuses fingerprint-matching metric results;
+only missing or stale evaluation groups require model calls. The dashboard does
+not offer dry-run scoring, custom metrics configuration, or arbitrary CLI
+arguments. Use the [monitoring guide](../docs/monitoring.md) for those CLI-only
+workflows.
+
+Launches are detached and tracked as Queued before the child writes fresh state,
+then In Progress. The dashboard prevents another launch for that run while the
+tracked process remains active.
 
 For complete field definitions and lifecycle details, see
 [output artifacts](../docs/output_artifacts.md).
@@ -90,6 +104,7 @@ Run-scoped files live in `outputs/runs/<run_id>/`:
 | `monitoring_scores.jsonl` | Charts, failures, review queue, and golden-dataset records |
 | `monitoring_state.json` | Monitoring status, progress, and fingerprints |
 | `eval_progress.md` | Human-readable monitoring progress |
+| `monitoring.log` | Append-only stdout/stderr from dashboard-launched monitoring processes |
 | `run_state.json` | Run metadata and artifact validation |
 | `run_summary.json` | Run mode and completion metadata |
 | `turns.jsonl` | Additional unified-turn detail in trace drill-down, when present |
@@ -112,7 +127,12 @@ All dashboard data access is implemented by Node.js server routes:
   `EVAL_BACKEND_URL` is set, in which case it proxies history requests to that
   backend.
 - `/api/evaluations/monitoring` reads monitoring status or starts a detached
-  local `ase monitor run` process. A short-lived lock prevents duplicate launches.
+  local `ase monitor run` process. Validated single-segment run IDs and a
+  PID-backed launch lock prevent unsafe paths and duplicate active launches. The
+  process is spawned directly without a shell.
+- `/api/evaluations/monitoring/log` returns at most the latest 256 KiB of the
+  selected run's `monitoring.log`. The Monitor page polls it while a launch is
+  Queued or In Progress and offers manual refresh after completion or interruption.
 - `/api/evaluations/trace` joins a selected monitoring point to matching
   `monitoring_scores.jsonl`, `chat_history.jsonl`, and `turns.jsonl` records.
 - `/api/evaluations/validation` checks the expected run and monitoring files and
@@ -125,12 +145,12 @@ All dashboard data access is implemented by Node.js server routes:
 ### Local-only security boundary
 
 This application is designed for a trusted local checkout, not direct exposure
-to untrusted users or a public network. Several server routes accept run or
-dataset identifiers that are used in filesystem paths, and the monitoring route
-builds a shell command from request data. Only the validation route currently
-applies an explicit path-traversal check; the application also has no built-in
-authentication or authorization. Put an authenticated, input-validating service
-boundary in front of it before any shared or remote deployment.
+to untrusted users or a public network. The monitoring launch and log routes
+validate run identifiers and bind file access beneath `outputs/runs`, but other
+server routes also accept run or dataset identifiers used in filesystem paths.
+The application has no built-in authentication or authorization. Put an
+authenticated, input-validating service boundary in front of it before any
+shared or remote deployment.
 
 The server can read evaluation content, write reviews and dataset metadata, and
 start local processes with the dashboard user's permissions. Run it with the
@@ -158,8 +178,13 @@ should not see.
 - Run `uv run ase monitor run --help` at the repository root to verify ASE is
   installed.
 - Confirm the selected run folder exists and contains `chat_history.jsonl`.
-- Configure the provider environment required for live monitoring, or first
-  generate deterministic data from the CLI with `--dry-run`.
+- Configure the provider environment required for live monitoring. For
+  deterministic data, run the CLI separately with `--dry-run`; the dashboard
+  intentionally has no dry-run control.
+- Expand **Evaluation log** to inspect output from dashboard launches. The panel
+  shows the latest 256 KiB. A CLI invocation started in another terminal appears
+  there only when its stdout and stderr are redirected to the run's
+  `monitoring.log`.
 
 ### Build, lint, or tests fail
 
