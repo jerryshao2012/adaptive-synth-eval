@@ -690,6 +690,83 @@ describe("monitoring launch transaction", () => {
     });
     expect(removeMatchingLock).toHaveBeenCalledOnce();
   });
+
+  it("blocks acquisition when failed-lock persistence removed the owned lock file", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const child = new FakeChild();
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(spawnSuccessfully(child));
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      persistRollbackFailedLock: async () => {
+        await fs.unlink(lockPath);
+        throw new Error("failed-lock disappeared");
+      },
+      kill: vi.fn(() => true),
+      terminationGraceMs: 1,
+    });
+
+    const launchFailure = await launcher(request()).catch((error: unknown) => error);
+    expect(launchFailure).toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("failed-lock disappeared"),
+    });
+    await expect(fs.access(lockPath)).rejects.toBeTruthy();
+
+    await expect(launcher(request({ action: "continue" }))).resolves.toMatchObject({
+      started: false,
+      monitoringStatus: "queued",
+    });
+    expect(spawn).toHaveBeenCalledOnce();
+
+    child.emit("close", null, "SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await expect(fs.access(lockPath)).rejects.toBeTruthy();
+  });
+
+  it("blocks acquisition without deleting a replacement lock after persistence ownership changes", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const child = new FakeChild();
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(spawnSuccessfully(child));
+    const replacement = {
+      launchId: "replacement-owner",
+      action: "start",
+      phase: "queued",
+      createdAt: "2026-07-19T11:00:00Z",
+      expiresAt: 0,
+    };
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      persistRollbackFailedLock: async () => {
+        await fs.writeFile(lockPath, JSON.stringify(replacement));
+        throw new Error("lock ownership changed");
+      },
+      kill: vi.fn(() => true),
+      terminationGraceMs: 1,
+    });
+
+    const launchFailure = await launcher(request()).catch((error: unknown) => error);
+    expect(launchFailure).toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("lock ownership changed"),
+    });
+
+    await expect(launcher(request({ action: "continue" }))).resolves.toMatchObject({
+      started: false,
+      monitoringStatus: "queued",
+    });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(replacement);
+
+    child.emit("close", null, "SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(replacement);
+  });
 });
 
 describe("launch liveness", () => {

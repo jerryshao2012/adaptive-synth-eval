@@ -16,7 +16,7 @@ export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
-const inProcessRollbackFailures = new Set<string>();
+const inProcessRollbackFailures = new Map<string, MonitoringLaunchLock>();
 
 export type MonitoringLaunchPhase = "queued" | "running" | "rollback_failed";
 
@@ -96,10 +96,6 @@ function defaultRepoRoot(): string {
 
 function lockPathFor(runDirectory: string): string {
   return path.join(runDirectory, MONITORING_LAUNCH_LOCK_FILE);
-}
-
-function rollbackFailureKey(lockPath: string, launchId: string): string {
-  return `${lockPath}\0${launchId}`;
 }
 
 async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> {
@@ -211,6 +207,10 @@ export async function getActiveMonitoringLaunch(
   dependencies: LivenessDependencies = {}
 ): Promise<MonitoringLaunchLock | null> {
   const lockPath = lockPathFor(runDirectory);
+  const inProcessFailure = inProcessRollbackFailures.get(lockPath);
+  if (inProcessFailure) {
+    return inProcessFailure;
+  }
   const lock = await readLock(lockPath);
   if (!lock) {
     return null;
@@ -218,11 +218,8 @@ export async function getActiveMonitoringLaunch(
 
   const kill = dependencies.kill ?? process.kill.bind(process);
   const now = dependencies.now ?? (() => new Date());
-  const rollbackKey = rollbackFailureKey(lockPath, lock.launchId);
   let active: boolean;
-  if (inProcessRollbackFailures.has(rollbackKey)) {
-    active = true;
-  } else if (lock.phase === "rollback_failed") {
+  if (lock.phase === "rollback_failed") {
     active =
       !lock.pid || pidIsAlive(lock.pid, kill);
   } else {
@@ -403,6 +400,11 @@ async function acquireLaunchLock(
     });
   };
 
+  const existingActive = await getActiveMonitoringLaunch(runDirectory, dependencies);
+  if (existingActive) {
+    return { acquired: false, active: existingActive };
+  }
+
   try {
     await write();
     return { acquired: true, active: lock };
@@ -517,10 +519,9 @@ export function createMonitoringLauncher(
           phase: "rollback_failed",
           ...(child?.pid ? { pid: child.pid } : {}),
         };
-        const failureKey = rollbackFailureKey(lockPath, lock.launchId);
         let persistenceSettled = false;
         let closeObserved = false;
-        inProcessRollbackFailures.add(failureKey);
+        inProcessRollbackFailures.set(lockPath, failedLock);
 
         const finishLateCloseCleanup = async () => {
           const current = await readLock(lockPath);
@@ -530,7 +531,11 @@ export function createMonitoringLauncher(
           ) {
             await removeMatchingLock(lockPath, lock.launchId);
           }
-          inProcessRollbackFailures.delete(failureKey);
+          if (
+            inProcessRollbackFailures.get(lockPath)?.launchId === lock.launchId
+          ) {
+            inProcessRollbackFailures.delete(lockPath);
+          }
         };
         const onLateClose = () => {
           closeObserved = true;
@@ -589,13 +594,13 @@ export function createMonitoringLauncher(
             dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
           );
         } catch (rollbackError) {
-          return retainFailedLock(
+          return await retainFailedLock(
             `rollback could not confirm child termination (${errorMessage(rollbackError)})`,
             rollbackError
           );
         }
         if (!terminated) {
-          return retainFailedLock(
+          return await retainFailedLock(
             "rollback timed out before child termination was confirmed"
           );
         }
