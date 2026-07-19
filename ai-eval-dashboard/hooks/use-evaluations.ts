@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ArtifactValidation,
   EvaluationRecord,
@@ -101,8 +101,10 @@ export function useRunList() {
 }
 
 export function useMonitoringStatus(runId?: string) {
-  return useQuery({
-    queryKey: ["monitoring-status", runId ?? "none"],
+  const queryClient = useQueryClient();
+  const queryKey = ["monitoring-status", runId ?? "none"] as const;
+  const query = useQuery({
+    queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({ runId: runId || "" });
       const res = await fetch(`${API_BASE}/monitoring?${params}`);
@@ -114,6 +116,17 @@ export function useMonitoringStatus(runId?: string) {
     enabled: Boolean(runId),
     refetchInterval: 5000,
   });
+
+  return {
+    ...query,
+    prepareRefreshAfterLaunch: async () => {
+      await queryClient.cancelQueries({ queryKey, exact: true });
+      return {
+        baseline: queryClient.getQueryData<MonitoringRunStatus>(queryKey),
+        result: query.refetch({ cancelRefetch: true }),
+      };
+    },
+  };
 }
 
 export function useStartMonitoring() {

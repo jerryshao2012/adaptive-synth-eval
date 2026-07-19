@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,9 +14,11 @@ const hookState = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   refetchRuns: vi.fn(),
   refetchStatus: vi.fn(),
+  prepareStatusRefreshAfterLaunch: vi.fn(),
   refetchEvaluations: vi.fn(),
-  monitoringStatus: undefined as MonitoringRunStatus | undefined,
-  statusUpdatedAt: 0,
+  runs: [] as RunSummary[],
+  statuses: {} as Record<string, MonitoringRunStatus | undefined>,
+  statusUpdatedAt: {} as Record<string, number>,
 }));
 
 const completedRun: RunSummary = {
@@ -34,6 +36,7 @@ const completedRun: RunSummary = {
 const completedStatus: MonitoringRunStatus = {
   runId: "run-1",
   monitoringStatus: "completed",
+  updatedAt: "2026-07-19T10:00:00Z",
   progress: { completed: 10, total: 10, percent: 100 },
   progressMarkdown: null,
   state: {
@@ -45,16 +48,28 @@ const completedStatus: MonitoringRunStatus = {
   hasMonitoringScores: true,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+}
+
 vi.mock("@/hooks/use-evaluations", () => ({
   useRunList: () => ({
-    data: [completedRun],
+    data: hookState.runs,
     isLoading: false,
     refetch: hookState.refetchRuns,
   }),
-  useMonitoringStatus: () => ({
-    data: hookState.monitoringStatus,
-    dataUpdatedAt: hookState.statusUpdatedAt,
-    refetch: hookState.refetchStatus,
+  useMonitoringStatus: (runId?: string) => ({
+    data: runId ? hookState.statuses[runId] : undefined,
+    dataUpdatedAt: runId ? hookState.statusUpdatedAt[runId] ?? 0 : 0,
+    refetch: () => hookState.refetchStatus(runId),
+    prepareRefreshAfterLaunch: () =>
+      hookState.prepareStatusRefreshAfterLaunch(runId),
   }),
   useStartMonitoring: () => ({
     mutateAsync: hookState.mutateAsync,
@@ -86,8 +101,9 @@ vi.mock("@/components/dashboard/trace-drawer", () => ({
 import DashboardPage from "@/app/(dashboard)/monitor/page";
 
 beforeEach(() => {
-  hookState.monitoringStatus = completedStatus;
-  hookState.statusUpdatedAt = 1;
+  hookState.runs = [completedRun];
+  hookState.statuses = { "run-1": completedStatus };
+  hookState.statusUpdatedAt = { "run-1": 1 };
   hookState.mutateAsync.mockReset();
   hookState.mutateAsync.mockResolvedValue({
     runId: "run-1",
@@ -97,6 +113,14 @@ beforeEach(() => {
   });
   hookState.refetchRuns.mockReset().mockResolvedValue({});
   hookState.refetchStatus.mockReset().mockResolvedValue({});
+  hookState.prepareStatusRefreshAfterLaunch
+    .mockReset()
+    .mockImplementation((runId) =>
+      Promise.resolve({
+        baseline: runId ? hookState.statuses[runId] : undefined,
+        result: Promise.resolve({}),
+      })
+    );
   hookState.refetchEvaluations.mockReset().mockResolvedValue({});
 });
 
@@ -105,8 +129,8 @@ afterEach(cleanup);
 describe("Monitor page evaluation configuration", () => {
   it("waits for matching saved state and freezes it when Re-evaluate opens", async () => {
     const user = userEvent.setup();
-    hookState.monitoringStatus = undefined;
-    hookState.statusUpdatedAt = 0;
+    hookState.statuses["run-1"] = undefined;
+    hookState.statusUpdatedAt["run-1"] = 0;
     const { rerender } = render(<DashboardPage />);
 
     const actionBeforeState = screen.getByRole("button", {
@@ -118,22 +142,22 @@ describe("Monitor page evaluation configuration", () => {
       screen.queryByRole("heading", { name: "Re-evaluate run" })
     ).toBeNull();
 
-    hookState.monitoringStatus = completedStatus;
-    hookState.statusUpdatedAt = 1;
+    hookState.statuses["run-1"] = completedStatus;
+    hookState.statusUpdatedAt["run-1"] = 1;
     rerender(<DashboardPage />);
     await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
 
     expect(
       (screen.getByLabelText("Interval minutes") as HTMLInputElement).value
     ).toBe("15");
-    hookState.monitoringStatus = {
+    hookState.statuses["run-1"] = {
       ...completedStatus,
       state: {
         ...completedStatus.state,
         interval_minutes: 99,
       },
     };
-    hookState.statusUpdatedAt = 2;
+    hookState.statusUpdatedAt["run-1"] = 2;
     rerender(<DashboardPage />);
     expect(
       (screen.getByLabelText("Interval minutes") as HTMLInputElement).value
@@ -189,7 +213,9 @@ describe("Monitor page evaluation configuration", () => {
     expect(hookState.mutateAsync).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(hookState.refetchRuns).toHaveBeenCalledTimes(1);
-      expect(hookState.refetchStatus).toHaveBeenCalledTimes(1);
+      expect(hookState.prepareStatusRefreshAfterLaunch).toHaveBeenCalledTimes(
+        1
+      );
       expect(hookState.refetchEvaluations).toHaveBeenCalledTimes(1);
     });
     await waitFor(() =>
@@ -224,8 +250,13 @@ describe("Monitor page evaluation configuration", () => {
 
   it("keeps an accepted launch queued when refresh fails, then yields to canonical completion", async () => {
     const user = userEvent.setup();
+    const failedStatusRefresh = deferred<{ data: MonitoringRunStatus }>();
     hookState.refetchRuns.mockRejectedValue(new Error("runs unavailable"));
     hookState.refetchStatus.mockRejectedValue(new Error("status unavailable"));
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: completedStatus,
+      result: failedStatusRefresh.promise,
+    });
     hookState.refetchEvaluations.mockRejectedValue(
       new Error("evaluations unavailable")
     );
@@ -244,6 +275,10 @@ describe("Monitor page evaluation configuration", () => {
         screen.queryByRole("heading", { name: "Re-evaluate run" })
       ).toBeNull()
     );
+    await act(async () => {
+      failedStatusRefresh.reject(new Error("status unavailable"));
+      await Promise.resolve();
+    });
     expect(
       screen.queryByText("status unavailable")
     ).toBeNull();
@@ -251,13 +286,176 @@ describe("Monitor page evaluation configuration", () => {
       screen.queryByRole("button", { name: "Re-evaluate" })
     ).toBeNull();
 
-    hookState.monitoringStatus = {
+    hookState.statuses["run-1"] = {
       ...completedStatus,
       state: { ...completedStatus.state, updated_at: "2026-07-19T12:00:00Z" },
     };
-    hookState.statusUpdatedAt = 2;
+    hookState.statusUpdatedAt["run-1"] = 2;
     rerender(<DashboardPage />);
 
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
+  });
+
+  it("ignores a stale completed poll that resolves during the launch POST", async () => {
+    const user = userEvent.setup();
+    const launch = deferred<{
+      runId: string;
+      started: boolean;
+      command: string;
+      monitoringStatus: "queued";
+    }>();
+    const postAcceptanceStatus = deferred<{
+      data: MonitoringRunStatus;
+    }>();
+    hookState.mutateAsync.mockReturnValue(launch.promise);
+    hookState.prepareStatusRefreshAfterLaunch.mockImplementation((runId) =>
+      Promise.resolve({
+        baseline: runId ? hookState.statuses[runId] : undefined,
+        result: postAcceptanceStatus.promise,
+      })
+    );
+    const { rerender } = render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() =>
+      expect(hookState.mutateAsync).toHaveBeenCalledTimes(1)
+    );
+
+    hookState.statuses["run-1"] = { ...completedStatus };
+    hookState.statusUpdatedAt["run-1"] = 2;
+    rerender(<DashboardPage />);
+    await act(async () => {
+      launch.resolve({
+        runId: "run-1",
+        started: true,
+        command: "uv run ase monitor run",
+        monitoringStatus: "queued",
+      });
+      await launch.promise;
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+    await act(async () => {
+      postAcceptanceStatus.resolve({ data: { ...completedStatus } });
+      await postAcceptanceStatus.promise;
+    });
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+  });
+
+  it("retains independent run overlays until each post-acceptance completion arrives", async () => {
+    const user = userEvent.setup();
+    const runTwo: RunSummary = {
+      ...completedRun,
+      runId: "run-2",
+    };
+    const statusTwo: MonitoringRunStatus = {
+      ...completedStatus,
+      runId: "run-2",
+      state: {
+        ...completedStatus.state,
+        sample_size: 48,
+      },
+    };
+    const runOneConfirmation = deferred<{ data: MonitoringRunStatus }>();
+    const runTwoConfirmation = deferred<{ data: MonitoringRunStatus }>();
+    hookState.runs = [completedRun, runTwo];
+    hookState.statuses = {
+      "run-1": completedStatus,
+      "run-2": statusTwo,
+    };
+    hookState.statusUpdatedAt = { "run-1": 1, "run-2": 1 };
+    hookState.prepareStatusRefreshAfterLaunch.mockImplementation((runId) =>
+      Promise.resolve({
+        baseline: runId ? hookState.statuses[runId] : undefined,
+        result:
+          runId === "run-1"
+            ? runOneConfirmation.promise
+            : runTwoConfirmation.promise,
+      })
+    );
+    const { rerender } = render(<DashboardPage />);
+
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-2"
+    );
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() => expect(hookState.mutateAsync).toHaveBeenCalledTimes(2));
+
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-1"
+    );
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-2"
+    );
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+
+    hookState.statuses["run-1"] = {
+      ...completedStatus,
+      updatedAt: "2026-07-19T12:00:00Z",
+    };
+    await act(async () => {
+      runOneConfirmation.resolve({ data: hookState.statuses["run-1"]! });
+      await runOneConfirmation.promise;
+    });
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-1"
+    );
+    rerender(<DashboardPage />);
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
+
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-2"
+    );
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+    hookState.statuses["run-2"] = {
+      ...statusTwo,
+      updatedAt: "2026-07-19T12:00:01Z",
+    };
+    await act(async () => {
+      runTwoConfirmation.resolve({ data: hookState.statuses["run-2"]! });
+      await runTwoConfirmation.promise;
+    });
+    rerender(<DashboardPage />);
     expect(
       await screen.findByRole("button", { name: "Re-evaluate" })
     ).toBeTruthy();

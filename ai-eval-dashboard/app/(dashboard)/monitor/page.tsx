@@ -85,6 +85,50 @@ function filterEvaluationsByPeriod(
   });
 }
 
+interface AcceptedLaunchOverlay {
+  key: string;
+  runId: string;
+  baselineReady: boolean;
+  baselineUpdatedAtMs: number | null;
+}
+
+function statusUpdatedAtMs(
+  status: MonitoringRunStatus | undefined
+): number | null {
+  if (!status) return null;
+
+  const stateUpdatedAt = status.state?.updated_at;
+  const candidates = [
+    status.updatedAt,
+    typeof stateUpdatedAt === "string" ? stateUpdatedAt : undefined,
+  ];
+  const timestamps = candidates
+    .map((value) => (value ? Date.parse(value) : Number.NaN))
+    .filter(Number.isFinite);
+  return timestamps.length > 0 ? Math.max(...timestamps) : null;
+}
+
+function hasPostAcceptanceStatusEvidence(
+  overlay: AcceptedLaunchOverlay,
+  status: MonitoringRunStatus | undefined
+): boolean {
+  if (!status || status.runId !== overlay.runId) return false;
+  if (
+    status.monitoringStatus === "queued" ||
+    status.monitoringStatus === "in_progress"
+  ) {
+    return true;
+  }
+
+  const updatedAtMs = statusUpdatedAtMs(status);
+  return (
+    overlay.baselineReady &&
+    overlay.baselineUpdatedAtMs !== null &&
+    updatedAtMs !== null &&
+    updatedAtMs > overlay.baselineUpdatedAtMs
+  );
+}
+
 export default function DashboardPage() {
   // ---- State ----
   const [globalPeriod] = useState<TimePeriodPreset>("last-90-days");
@@ -101,11 +145,9 @@ export default function DashboardPage() {
     runId: string;
     initialValues: EvalRunParameters;
   } | null>(null);
-  const [acceptedLaunch, setAcceptedLaunch] = useState<{
-    key: string;
-    runId: string;
-    statusUpdatedAt: number;
-  } | null>(null);
+  const [acceptedLaunches, setAcceptedLaunches] = useState<
+    Record<string, AcceptedLaunchOverlay>
+  >({});
   const pendingLaunchRef = useRef<string | null>(null);
   const [pendingLaunchKey, setPendingLaunchKey] = useState<string | null>(null);
 
@@ -130,7 +172,7 @@ export default function DashboardPage() {
 
   const {
     data: monitoringStatus,
-    dataUpdatedAt: monitoringStatusUpdatedAt,
+    prepareRefreshAfterLaunch: prepareMonitoringStatusRefreshAfterLaunch,
     refetch: refetchMonitoringStatus,
   } = useMonitoringStatus(activeRunId || undefined);
 
@@ -163,12 +205,10 @@ export default function DashboardPage() {
     );
 
   // ---- Actions ----
+  const acceptedLaunch = acceptedLaunches[activeRunId] ?? null;
   const retainedAcceptedLaunch =
     acceptedLaunch &&
-    !(
-      monitoringStatus?.runId === acceptedLaunch.runId &&
-      monitoringStatusUpdatedAt > acceptedLaunch.statusUpdatedAt
-    )
+    !hasPostAcceptanceStatusEvidence(acceptedLaunch, monitoringStatus)
       ? acceptedLaunch
       : null;
 
@@ -247,15 +287,57 @@ export default function DashboardPage() {
           action: launchIntent.action,
           ...parameters,
         });
-        setAcceptedLaunch({
+        const acceptedOverlay: AcceptedLaunchOverlay = {
           key: launchKey,
           runId: launchIntent.runId,
-          statusUpdatedAt: monitoringStatusUpdatedAt,
-        });
+          baselineReady: false,
+          baselineUpdatedAtMs: null,
+        };
+        setAcceptedLaunches((current) => ({
+          ...current,
+          [launchIntent.runId]: acceptedOverlay,
+        }));
         setLaunchIntent(null);
+        const postAcceptanceStatusRefresh =
+          prepareMonitoringStatusRefreshAfterLaunch().then(
+            async ({ baseline, result }) => {
+              const preparedOverlay: AcceptedLaunchOverlay = {
+                ...acceptedOverlay,
+                baselineReady: true,
+                baselineUpdatedAtMs: statusUpdatedAtMs(baseline),
+              };
+              setAcceptedLaunches((current) =>
+                current[launchIntent.runId]?.key === launchKey
+                  ? {
+                      ...current,
+                      [launchIntent.runId]: preparedOverlay,
+                    }
+                  : current
+              );
+
+              const refreshedStatus = await result;
+              setAcceptedLaunches((current) => {
+                const overlay = current[launchIntent.runId];
+                if (
+                  !overlay ||
+                  overlay.key !== launchKey ||
+                  !hasPostAcceptanceStatusEvidence(
+                    preparedOverlay,
+                    refreshedStatus.data
+                  )
+                ) {
+                  return current;
+                }
+
+                const next = { ...current };
+                delete next[launchIntent.runId];
+                return next;
+              });
+            }
+          );
         void Promise.allSettled([
           refetchRuns(),
-          refetchMonitoringStatus(),
+          postAcceptanceStatusRefresh,
           refetch(),
         ]);
       } finally {
@@ -269,9 +351,8 @@ export default function DashboardPage() {
     },
     [
       launchIntent,
-      monitoringStatusUpdatedAt,
+      prepareMonitoringStatusRefreshAfterLaunch,
       refetch,
-      refetchMonitoringStatus,
       refetchRuns,
       startMonitoring,
     ]
