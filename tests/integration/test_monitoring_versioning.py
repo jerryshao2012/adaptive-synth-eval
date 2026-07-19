@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from adaptive_synth_eval.cli import main
+from adaptive_synth_eval.monitoring import runner as monitoring_runner
 from adaptive_synth_eval.monitoring.fingerprint import (
     compute_evaluation_fingerprint,
     compute_metric_content_fingerprint,
@@ -210,7 +211,7 @@ def test_retryable_fallback_rescans_and_refreshes_only_stale_batch(tmp_path):
     assert final_state["retryable_fallbacks"] is False
 
 
-def test_explicit_rescan_refreshes_only_stale_judge_batch(tmp_path):
+def test_explicit_rescan_refreshes_only_stale_judge_batch(tmp_path, monkeypatch):
     run_dir = tmp_path / "outputs" / "runs" / "run_stale_batch_rescan"
     _write_chat_history(run_dir, total_rows=1)
     args = _monitor_args(run_dir, sample_size=1000)
@@ -236,8 +237,21 @@ def test_explicit_rescan_refreshes_only_stale_judge_batch(tmp_path):
     score["performance_metrics"]["relevance"]["percent"] = -1.0
     scores_path.write_text(json.dumps(score) + "\n", encoding="utf-8")
 
+    evaluated_batch_ids = []
+    real_evaluate_judge_batches = monitoring_runner._evaluate_judge_batches
+
+    def record_evaluated_batches(*args, **kwargs):
+        evaluated_batch_ids.append(kwargs.get("batch_ids"))
+        return real_evaluate_judge_batches(*args, **kwargs)
+
+    monkeypatch.setattr(
+        monitoring_runner,
+        "_evaluate_judge_batches",
+        record_evaluated_batches,
+    )
     assert main([*args, "--rescan"]) == 0
 
+    assert evaluated_batch_ids == [{performance_id}]
     refreshed = _read_jsonl(scores_path)[0]
     assert refreshed["value_versions"]["judge_batches"][safety_id] == safety_batch_before
     assert refreshed["safety_metrics"] == safety_metrics_before

@@ -113,7 +113,10 @@ def test_monitoring_cli_resume_after_partial_windows(tmp_path):
     mid_state = json.loads((run_dir / "monitoring_state.json").read_text(encoding="utf-8"))
     assert mid_state["status"] == "in_progress"
     assert mid_state["next_line_index"] == 2
+    assert mid_state["max_windows"] == 1
     assert "evaluation_fingerprint" in mid_state
+    progress_text = (run_dir / "eval_progress.md").read_text(encoding="utf-8")
+    assert "- Max Windows: 1" in progress_text
 
     second_exit = main(_monitor_args(run_dir, sample_size=2, interval_minutes=2))
     assert second_exit == 0
