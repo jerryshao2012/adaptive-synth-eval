@@ -16,7 +16,6 @@ export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
-const inProcessRollbackFailures = new Map<string, MonitoringLaunchLock>();
 
 export type MonitoringLaunchPhase = "queued" | "running" | "rollback_failed";
 
@@ -28,6 +27,13 @@ export interface MonitoringLaunchLock {
   expiresAt: number;
   pid?: number;
 }
+
+interface RollbackFailureMarker {
+  lock: MonitoringLaunchLock;
+  closeConfirmed: boolean;
+}
+
+const inProcessRollbackFailures = new Map<string, RollbackFailureMarker>();
 
 export interface LaunchChild {
   pid?: number;
@@ -72,10 +78,15 @@ export interface MonitoringLaunchDependencies {
     lock: MonitoringLaunchLock
   ) => Promise<void>;
   removeMatchingLock?: (lockPath: string, launchId: string) => Promise<void>;
+  readLockFile?: (lockPath: string) => Promise<string>;
+  reportLogCloseError?: (error: unknown) => void;
   terminationGraceMs?: number;
 }
 
-type LivenessDependencies = Pick<MonitoringLaunchDependencies, "kill" | "now">;
+type LivenessDependencies = Pick<
+  MonitoringLaunchDependencies,
+  "kill" | "now" | "readLockFile" | "removeMatchingLock"
+>;
 
 export class MonitoringLaunchRollbackError extends Error {
   readonly launchError: unknown;
@@ -90,6 +101,17 @@ export class MonitoringLaunchRollbackError extends Error {
   }
 }
 
+export class MonitoringLaunchLockReadError extends Error {
+  readonly lockPath: string;
+
+  constructor(lockPath: string, cause: unknown) {
+    super(`Could not read monitoring launch lock '${lockPath}': ${errorMessage(cause)}`);
+    this.name = "MonitoringLaunchLockReadError";
+    this.lockPath = lockPath;
+    this.cause = cause;
+  }
+}
+
 function defaultRepoRoot(): string {
   return path.resolve(process.cwd(), "..");
 }
@@ -98,17 +120,45 @@ function lockPathFor(runDirectory: string): string {
   return path.join(runDirectory, MONITORING_LAUNCH_LOCK_FILE);
 }
 
-async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> {
+async function readLock(
+  lockPath: string,
+  readLockFile: (lockPath: string) => Promise<string> = (candidate) =>
+    fs.readFile(candidate, "utf8")
+): Promise<MonitoringLaunchLock | null> {
+  let content: string;
   try {
-    const value = JSON.parse(await fs.readFile(lockPath, "utf8")) as Record<string, unknown>;
-    const action = value.action;
-    if (action !== "start" && action !== "continue" && action !== "reevaluate") {
+    content = await readLockFile(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
     }
-    const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
+    throw new MonitoringLaunchLockReadError(lockPath, error);
+  }
+
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    const action = value.action;
+    if (action !== "start" && action !== "continue" && action !== "reevaluate") {
+      throw new Error("lock action is invalid");
+    }
+    if (typeof value.launchId !== "string" || !value.launchId) {
+      throw new Error("lock launchId is invalid");
+    }
+    if (typeof value.createdAt !== "string" || !value.createdAt) {
+      throw new Error("lock createdAt is invalid");
+    }
+    const createdAt = value.createdAt;
     const phase = value.phase;
+    if (
+      phase !== undefined &&
+      phase !== "queued" &&
+      phase !== "running" &&
+      phase !== "rollback_failed"
+    ) {
+      throw new Error("lock phase is invalid");
+    }
     return {
-      launchId: typeof value.launchId === "string" ? value.launchId : "",
+      launchId: value.launchId,
       action,
       phase:
         phase === "running" || phase === "rollback_failed" ? phase : "queued",
@@ -122,16 +172,17 @@ async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> 
           ? value.pid
           : undefined,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    throw new MonitoringLaunchLockReadError(lockPath, error);
   }
 }
 
 async function removeLockSnapshot(
   lockPath: string,
-  snapshot: MonitoringLaunchLock
+  snapshot: MonitoringLaunchLock,
+  readLockFile?: (lockPath: string) => Promise<string>
 ): Promise<void> {
-  const current = await readLock(lockPath);
+  const current = await readLock(lockPath, readLockFile);
   if (
     !current ||
     (snapshot.launchId
@@ -186,6 +237,25 @@ export async function promoteMonitoringLock(
   }
 }
 
+async function retryRollbackFailureCleanup(
+  lockPath: string,
+  marker: RollbackFailureMarker,
+  dependencies: LivenessDependencies
+): Promise<void> {
+  const current = await readLock(lockPath, dependencies.readLockFile);
+  if (
+    current?.launchId === marker.lock.launchId &&
+    (current.phase === "rollback_failed" || current.phase === "queued")
+  ) {
+    const removeMatchingLock =
+      dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
+    await removeMatchingLock(lockPath, marker.lock.launchId);
+  }
+  if (inProcessRollbackFailures.get(lockPath) === marker) {
+    inProcessRollbackFailures.delete(lockPath);
+  }
+}
+
 function pidIsAlive(pid: number, kill: NonNullable<MonitoringLaunchDependencies["kill"]>): boolean {
   try {
     kill(pid, 0);
@@ -209,9 +279,20 @@ export async function getActiveMonitoringLaunch(
   const lockPath = lockPathFor(runDirectory);
   const inProcessFailure = inProcessRollbackFailures.get(lockPath);
   if (inProcessFailure) {
-    return inProcessFailure;
+    if (!inProcessFailure.closeConfirmed) {
+      return inProcessFailure.lock;
+    }
+    try {
+      await retryRollbackFailureCleanup(lockPath, inProcessFailure, dependencies);
+    } catch {
+      return inProcessFailure.lock;
+    }
+    const remainingFailure = inProcessRollbackFailures.get(lockPath);
+    if (remainingFailure) {
+      return remainingFailure.lock;
+    }
   }
-  const lock = await readLock(lockPath);
+  const lock = await readLock(lockPath, dependencies.readLockFile);
   if (!lock) {
     return null;
   }
@@ -229,7 +310,7 @@ export async function getActiveMonitoringLaunch(
     return lock;
   }
 
-  await removeLockSnapshot(lockPath, lock);
+  await removeLockSnapshot(lockPath, lock, dependencies.readLockFile);
   return null;
 }
 
@@ -445,6 +526,11 @@ export function createMonitoringLauncher(
   const persistRollbackFailedLock =
     dependencies.persistRollbackFailedLock ?? promoteMonitoringLock;
   const removeMatchingLock = dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
+  const readLockFile =
+    dependencies.readLockFile ?? ((lockPath: string) => fs.readFile(lockPath, "utf8"));
+  const reportLogCloseError =
+    dependencies.reportLogCloseError ??
+    ((error: unknown) => console.error("Failed to close monitoring log descriptor.", error));
 
   return async (request) => {
     const runDirectory = await resolveRunDirectory(request.runId, repoRoot);
@@ -461,7 +547,12 @@ export function createMonitoringLauncher(
       expiresAt: createdAt.getTime() + QUEUED_LOCK_TTL_MS,
     };
 
-    const lockResult = await acquireLaunchLock(runDirectory, lock, { kill, now });
+    const lockResult = await acquireLaunchLock(runDirectory, lock, {
+      kill,
+      now,
+      readLockFile,
+      removeMatchingLock,
+    });
     if (!lockResult.acquired) {
       let state: Record<string, unknown> | null = null;
       try {
@@ -521,24 +612,23 @@ export function createMonitoringLauncher(
         };
         let persistenceSettled = false;
         let closeObserved = false;
-        inProcessRollbackFailures.set(lockPath, failedLock);
+        const failureMarker: RollbackFailureMarker = {
+          lock: failedLock,
+          closeConfirmed: false,
+        };
+        inProcessRollbackFailures.set(lockPath, failureMarker);
 
         const finishLateCloseCleanup = async () => {
-          const current = await readLock(lockPath);
-          if (
-            current?.launchId === lock.launchId &&
-            (current.phase === "rollback_failed" || current.phase === "queued")
-          ) {
-            await removeMatchingLock(lockPath, lock.launchId);
-          }
-          if (
-            inProcessRollbackFailures.get(lockPath)?.launchId === lock.launchId
-          ) {
-            inProcessRollbackFailures.delete(lockPath);
-          }
+          await retryRollbackFailureCleanup(lockPath, failureMarker, {
+            kill,
+            now,
+            readLockFile,
+            removeMatchingLock,
+          });
         };
         const onLateClose = () => {
           closeObserved = true;
+          failureMarker.closeConfirmed = true;
           if (persistenceSettled) {
             void finishLateCloseCleanup().catch(() => {
               // Keep the in-process fail-closed marker when late cleanup fails.
@@ -617,7 +707,15 @@ export function createMonitoringLauncher(
       throw error;
     } finally {
       if (log) {
-        await log.close();
+        try {
+          await log.close();
+        } catch (closeError) {
+          try {
+            reportLogCloseError(closeError);
+          } catch {
+            // Diagnostics must never replace the launch outcome.
+          }
+        }
       }
     }
   };

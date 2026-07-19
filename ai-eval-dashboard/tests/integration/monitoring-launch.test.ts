@@ -201,6 +201,32 @@ describe("monitoring launch transaction", () => {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
+  it("preserves a successful launch when closing the parent log descriptor fails", async () => {
+    const { repoRoot } = await makeRepo();
+    const child = new FakeChild();
+    const reportLogCloseError = vi.fn();
+    const dependencies = {
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      openLog: async () => ({
+        fd: 99,
+        appendFile: async () => undefined,
+        close: async () => { throw new Error("close failed"); },
+      }),
+      reportLogCloseError,
+    } as MonitoringLaunchDependencies & {
+      reportLogCloseError: (error: unknown) => void;
+    };
+
+    await expect(createMonitoringLauncher(dependencies)(request())).resolves.toMatchObject({
+      started: true,
+      monitoringStatus: "queued",
+    });
+    expect(reportLogCloseError).toHaveBeenCalledWith(expect.objectContaining({
+      message: "close failed",
+    }));
+  });
+
   it("acquires the initial lock exclusively and prevents a second spawn", async () => {
     const { repoRoot } = await makeRepo();
     const firstChild = new FakeChild(4321);
@@ -215,6 +241,47 @@ describe("monitoring launch transaction", () => {
 
     firstChild.emit("spawn");
     await first;
+  });
+
+  it("fails closed with an explicit error for a corrupt existing lock", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    await fs.writeFile(lockPath, "{not-json");
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(createMonitoringLauncher({ repoRoot, spawn })(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchLockReadError",
+      message: expect.stringContaining("Could not read monitoring launch lock"),
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{not-json");
+  });
+
+  it("fails closed when an injected lock read returns an I/O error", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    await fs.writeFile(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE), JSON.stringify({
+      launchId: "existing",
+      action: "start",
+      phase: "queued",
+      createdAt: "2026-07-19T12:00:00Z",
+      expiresAt: Date.now() + 30_000,
+    }));
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+    const dependencies = {
+      repoRoot,
+      spawn,
+      readLockFile: async () => {
+        throw Object.assign(new Error("read denied"), { code: "EACCES" });
+      },
+    } as MonitoringLaunchDependencies & {
+      readLockFile: (lockPath: string) => Promise<string>;
+    };
+
+    await expect(createMonitoringLauncher(dependencies)(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchLockReadError",
+      message: expect.stringContaining("read denied"),
+    });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each(["unsafe/segment", "missing-run"])(
@@ -321,6 +388,37 @@ describe("monitoring launch transaction", () => {
     expect(child.unref).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
     await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+  });
+
+  it("preserves the primary rollback error when log descriptor close also fails", async () => {
+    const { repoRoot } = await makeRepo();
+    const child = new FakeChild();
+    const reportLogCloseError = vi.fn();
+    const kill = vi.fn((_pid: number, signal?: NodeJS.Signals | 0) => {
+      if (signal === "SIGTERM") queueMicrotask(() => child.emit("close", 143));
+      return true;
+    });
+    const dependencies = {
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      openLog: async () => ({
+        fd: 99,
+        appendFile: async () => undefined,
+        close: async () => { throw new Error("close failed"); },
+      }),
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      kill,
+      reportLogCloseError,
+    } as MonitoringLaunchDependencies & {
+      reportLogCloseError: (error: unknown) => void;
+    };
+
+    await expect(createMonitoringLauncher(dependencies)(request())).rejects.toThrow(
+      "promotion failed"
+    );
+    expect(reportLogCloseError).toHaveBeenCalledWith(expect.objectContaining({
+      message: "close failed",
+    }));
   });
 
   it("escalates from SIGTERM to SIGKILL and confirms close before removing the lock", async () => {
@@ -766,6 +864,48 @@ describe("monitoring launch transaction", () => {
     child.emit("close", null, "SIGKILL");
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(replacement);
+  });
+
+  it("retries transient late-close cleanup during a subsequent liveness check", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const lockPath = path.join(runDir, MONITORING_LAUNCH_LOCK_FILE);
+    const child = new FakeChild();
+    const removeMatchingLock = vi.fn(async (candidatePath: string, launchId: string) => {
+      if (removeMatchingLock.mock.calls.length === 1) {
+        throw new Error("transient cleanup failure");
+      }
+      const lock = JSON.parse(await fs.readFile(candidatePath, "utf8"));
+      if (lock.launchId === launchId) await fs.unlink(candidatePath);
+    });
+    const kill = vi.fn(() => true);
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      removeMatchingLock,
+      kill,
+      terminationGraceMs: 1,
+    });
+    await expect(launcher(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+    });
+
+    child.emit("close", null, "SIGKILL");
+    await vi.waitFor(() => expect(removeMatchingLock).toHaveBeenCalledOnce());
+    await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+    const livenessDependencies = {
+      kill,
+      removeMatchingLock,
+    } as NonNullable<Parameters<typeof getActiveMonitoringLaunch>[1]> & {
+      removeMatchingLock: typeof removeMatchingLock;
+    };
+    await expect(getActiveMonitoringLaunch(
+      runDir,
+      livenessDependencies
+    )).resolves.toBeNull();
+    expect(removeMatchingLock).toHaveBeenCalledTimes(2);
+    await expect(fs.access(lockPath)).rejects.toBeTruthy();
   });
 });
 
