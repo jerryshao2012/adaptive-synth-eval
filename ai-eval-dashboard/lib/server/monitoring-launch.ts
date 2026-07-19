@@ -16,10 +16,14 @@ export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
+const inProcessRollbackFailures = new Set<string>();
+
+export type MonitoringLaunchPhase = "queued" | "running" | "rollback_failed";
 
 export interface MonitoringLaunchLock {
   launchId: string;
   action: MonitoringAction;
+  phase?: MonitoringLaunchPhase;
   createdAt: string;
   expiresAt: number;
   pid?: number;
@@ -63,6 +67,10 @@ export interface MonitoringLaunchDependencies {
     lockPath: string,
     lock: MonitoringLaunchLock
   ) => Promise<void>;
+  persistRollbackFailedLock?: (
+    lockPath: string,
+    lock: MonitoringLaunchLock
+  ) => Promise<void>;
   removeMatchingLock?: (lockPath: string, launchId: string) => Promise<void>;
   terminationGraceMs?: number;
 }
@@ -90,6 +98,10 @@ function lockPathFor(runDirectory: string): string {
   return path.join(runDirectory, MONITORING_LAUNCH_LOCK_FILE);
 }
 
+function rollbackFailureKey(lockPath: string, launchId: string): string {
+  return `${lockPath}\0${launchId}`;
+}
+
 async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> {
   try {
     const value = JSON.parse(await fs.readFile(lockPath, "utf8")) as Record<string, unknown>;
@@ -98,9 +110,12 @@ async function readLock(lockPath: string): Promise<MonitoringLaunchLock | null> 
       return null;
     }
     const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
+    const phase = value.phase;
     return {
       launchId: typeof value.launchId === "string" ? value.launchId : "",
       action,
+      phase:
+        phase === "running" || phase === "rollback_failed" ? phase : "queued",
       createdAt,
       expiresAt:
         typeof value.expiresAt === "number"
@@ -203,7 +218,16 @@ export async function getActiveMonitoringLaunch(
 
   const kill = dependencies.kill ?? process.kill.bind(process);
   const now = dependencies.now ?? (() => new Date());
-  const active = lock.pid ? pidIsAlive(lock.pid, kill) : lock.expiresAt > now().getTime();
+  const rollbackKey = rollbackFailureKey(lockPath, lock.launchId);
+  let active: boolean;
+  if (lock.phase === "rollback_failed") {
+    active =
+      inProcessRollbackFailures.has(rollbackKey) ||
+      !lock.pid ||
+      pidIsAlive(lock.pid, kill);
+  } else {
+    active = lock.pid ? pidIsAlive(lock.pid, kill) : lock.expiresAt > now().getTime();
+  }
   if (active) {
     return lock;
   }
@@ -338,8 +362,7 @@ async function terminateAndReap(
     throw error;
   }
   if (termResult === "absent") {
-    closedAfterTerm.cancel();
-    return true;
+    return closedAfterTerm.promise;
   }
   if (await closedAfterTerm.promise) return true;
 
@@ -352,8 +375,7 @@ async function terminateAndReap(
     throw error;
   }
   if (killResult === "absent") {
-    closedAfterKill.cancel();
-    return true;
+    return closedAfterKill.promise;
   }
   return closedAfterKill.promise;
 }
@@ -418,6 +440,8 @@ export function createMonitoringLauncher(
     dependencies.openLog ??
     (async (logPath: string) => (await fs.open(logPath, "a")) as LaunchLogHandle);
   const promoteLock = dependencies.promoteLock ?? promoteMonitoringLock;
+  const persistRollbackFailedLock =
+    dependencies.persistRollbackFailedLock ?? promoteMonitoringLock;
   const removeMatchingLock = dependencies.removeMatchingLock ?? removeMatchingMonitoringLock;
 
   return async (request) => {
@@ -430,6 +454,7 @@ export function createMonitoringLauncher(
     const lock: MonitoringLaunchLock = {
       launchId: makeLaunchId(),
       action: request.action,
+      phase: "queued",
       createdAt: createdAt.toISOString(),
       expiresAt: createdAt.getTime() + QUEUED_LOCK_TTL_MS,
     };
@@ -474,7 +499,7 @@ export function createMonitoringLauncher(
       if (!child.pid) {
         throw new Error("Monitoring process spawned without a PID.");
       }
-      await promoteLock(lockPath, { ...lock, pid: child.pid });
+      await promoteLock(lockPath, { ...lock, phase: "running", pid: child.pid });
       child.unref();
       return {
         runId,
@@ -483,6 +508,58 @@ export function createMonitoringLauncher(
         monitoringStatus: "queued",
       };
     } catch (error) {
+      const retainFailedLock = async (
+        reason: string,
+        rollbackError?: unknown
+      ): Promise<never> => {
+        const failedLock: MonitoringLaunchLock = {
+          ...lock,
+          phase: "rollback_failed",
+          ...(child?.pid ? { pid: child.pid } : {}),
+        };
+        try {
+          await persistRollbackFailedLock(lockPath, failedLock);
+        } catch (persistenceError) {
+          throw new MonitoringLaunchRollbackError(
+            `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock persistence failed (${errorMessage(persistenceError)}). The original launch lock was retained in its best available state.`,
+            error,
+            rollbackError ?? persistenceError
+          );
+        }
+
+        const failureKey = rollbackFailureKey(lockPath, lock.launchId);
+        inProcessRollbackFailures.add(failureKey);
+        const removeAfterLateClose = () => {
+          void readLock(lockPath)
+            .then(async (current) => {
+              if (
+                current?.launchId === lock.launchId &&
+                current.phase === "rollback_failed"
+              ) {
+                await removeMatchingLock(lockPath, lock.launchId);
+              }
+              inProcessRollbackFailures.delete(failureKey);
+            })
+            .catch(() => {
+              // Keep the in-process fail-closed marker when late cleanup fails.
+            });
+        };
+        child?.once("close", removeAfterLateClose);
+        if (
+          (child?.exitCode !== null && child?.exitCode !== undefined) ||
+          (child?.signalCode !== null && child?.signalCode !== undefined)
+        ) {
+          child.removeListener("close", removeAfterLateClose);
+          removeAfterLateClose();
+        }
+
+        throw new MonitoringLaunchRollbackError(
+          `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock retained.`,
+          error,
+          rollbackError
+        );
+      };
+
       if (spawned && child) {
         let terminated = false;
         try {
@@ -493,16 +570,14 @@ export function createMonitoringLauncher(
             dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
           );
         } catch (rollbackError) {
-          throw new MonitoringLaunchRollbackError(
-            `Monitoring launch failed (${errorMessage(error)}); rollback could not confirm child termination (${errorMessage(rollbackError)}); launch lock retained.`,
-            error,
+          return retainFailedLock(
+            `rollback could not confirm child termination (${errorMessage(rollbackError)})`,
             rollbackError
           );
         }
         if (!terminated) {
-          throw new MonitoringLaunchRollbackError(
-            `Monitoring launch failed (${errorMessage(error)}); rollback timed out before child termination was confirmed; launch lock retained.`,
-            error
+          return retainFailedLock(
+            "rollback timed out before child termination was confirmed"
           );
         }
       }
