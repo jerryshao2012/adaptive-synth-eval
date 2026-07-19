@@ -168,6 +168,14 @@ export interface MonitoringStartResponse {
   monitoringStatus: "queued" | "in_progress";
 }
 
+export interface MonitoringLogResponse {
+  runId: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+  updatedAt?: string;
+}
+
 // Per-metric threshold configuration
 export interface MetricThreshold {
   metricKey: string;

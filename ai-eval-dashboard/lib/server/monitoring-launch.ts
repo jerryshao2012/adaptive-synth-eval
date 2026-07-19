@@ -7,6 +7,7 @@ import { buildMonitoringArgs } from "@/lib/monitoring-config";
 import { resolveRunDirectory } from "@/lib/server/run-paths";
 import type {
   MonitoringAction,
+  MonitoringLogResponse,
   MonitoringStartRequest,
   MonitoringStartResponse,
   RunSummary,
@@ -14,6 +15,7 @@ import type {
 
 export const MONITORING_LAUNCH_LOCK_FILE = ".monitoring-launch.lock.json";
 export const MONITORING_LOG_FILE = "monitoring.log";
+export const MONITORING_LOG_TAIL_MAX_BYTES = 256 * 1024;
 const QUEUED_LOCK_TTL_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
 const LOCK_GUARD_TIMEOUT_MS = 5_000;
@@ -117,6 +119,71 @@ export class MonitoringLaunchLockReadError extends Error {
 
 function defaultRepoRoot(): string {
   return path.resolve(process.cwd(), "..");
+}
+
+export async function readMonitoringLogTail(
+  runId: string,
+  repoRoot = defaultRepoRoot()
+): Promise<MonitoringLogResponse> {
+  const runDirectory = await resolveRunDirectory(runId, repoRoot);
+  const logPath = path.join(runDirectory, MONITORING_LOG_FILE);
+
+  let log: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    log = await fs.open(logPath, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        runId: runId.trim(),
+        content: "",
+        size: 0,
+        truncated: false,
+      };
+    }
+    throw error;
+  }
+
+  try {
+    const stat = await log.stat();
+    const size = stat.size;
+    const truncated = size > MONITORING_LOG_TAIL_MAX_BYTES;
+    const start = truncated ? size - MONITORING_LOG_TAIL_MAX_BYTES : 0;
+    const bytesToRead = Math.min(size, MONITORING_LOG_TAIL_MAX_BYTES);
+    const buffer = Buffer.alloc(bytesToRead);
+    let bytesRead = 0;
+
+    while (bytesRead < bytesToRead) {
+      const result = await log.read(
+        buffer,
+        bytesRead,
+        bytesToRead - bytesRead,
+        start + bytesRead
+      );
+      if (result.bytesRead === 0) {
+        break;
+      }
+      bytesRead += result.bytesRead;
+    }
+
+    let contentBuffer = buffer.subarray(0, bytesRead);
+    if (truncated) {
+      const firstNewline = contentBuffer.indexOf(0x0a);
+      contentBuffer =
+        firstNewline === -1
+          ? Buffer.alloc(0)
+          : contentBuffer.subarray(firstNewline + 1);
+    }
+
+    return {
+      runId: runId.trim(),
+      content: contentBuffer.toString("utf8"),
+      size,
+      truncated,
+      updatedAt: stat.mtime.toISOString(),
+    };
+  } finally {
+    await log.close();
+  }
 }
 
 function lockPathFor(runDirectory: string): string {
