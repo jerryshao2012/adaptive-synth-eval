@@ -220,11 +220,11 @@ export async function getActiveMonitoringLaunch(
   const now = dependencies.now ?? (() => new Date());
   const rollbackKey = rollbackFailureKey(lockPath, lock.launchId);
   let active: boolean;
-  if (lock.phase === "rollback_failed") {
+  if (inProcessRollbackFailures.has(rollbackKey)) {
+    active = true;
+  } else if (lock.phase === "rollback_failed") {
     active =
-      inProcessRollbackFailures.has(rollbackKey) ||
-      !lock.pid ||
-      pidIsAlive(lock.pid, kill);
+      !lock.pid || pidIsAlive(lock.pid, kill);
   } else {
     active = lock.pid ? pidIsAlive(lock.pid, kill) : lock.expiresAt > now().getTime();
   }
@@ -517,40 +517,59 @@ export function createMonitoringLauncher(
           phase: "rollback_failed",
           ...(child?.pid ? { pid: child.pid } : {}),
         };
+        const failureKey = rollbackFailureKey(lockPath, lock.launchId);
+        let persistenceSettled = false;
+        let closeObserved = false;
+        inProcessRollbackFailures.add(failureKey);
+
+        const finishLateCloseCleanup = async () => {
+          const current = await readLock(lockPath);
+          if (
+            current?.launchId === lock.launchId &&
+            (current.phase === "rollback_failed" || current.phase === "queued")
+          ) {
+            await removeMatchingLock(lockPath, lock.launchId);
+          }
+          inProcessRollbackFailures.delete(failureKey);
+        };
+        const onLateClose = () => {
+          closeObserved = true;
+          if (persistenceSettled) {
+            void finishLateCloseCleanup().catch(() => {
+              // Keep the in-process fail-closed marker when late cleanup fails.
+            });
+          }
+        };
+        child?.once("close", onLateClose);
+        if (
+          (child?.exitCode !== null && child?.exitCode !== undefined) ||
+          (child?.signalCode !== null && child?.signalCode !== undefined)
+        ) {
+          child.removeListener("close", onLateClose);
+          onLateClose();
+        }
+
+        let persistenceFailed = false;
+        let persistenceError: unknown;
         try {
           await persistRollbackFailedLock(lockPath, failedLock);
-        } catch (persistenceError) {
+        } catch (errorDuringPersistence) {
+          persistenceFailed = true;
+          persistenceError = errorDuringPersistence;
+        } finally {
+          persistenceSettled = true;
+          if (closeObserved) {
+            void finishLateCloseCleanup().catch(() => {
+              // Keep the in-process fail-closed marker when late cleanup fails.
+            });
+          }
+        }
+        if (persistenceFailed) {
           throw new MonitoringLaunchRollbackError(
             `Monitoring launch failed (${errorMessage(error)}); ${reason}; rollback_failed lock persistence failed (${errorMessage(persistenceError)}). The original launch lock was retained in its best available state.`,
             error,
             rollbackError ?? persistenceError
           );
-        }
-
-        const failureKey = rollbackFailureKey(lockPath, lock.launchId);
-        inProcessRollbackFailures.add(failureKey);
-        const removeAfterLateClose = () => {
-          void readLock(lockPath)
-            .then(async (current) => {
-              if (
-                current?.launchId === lock.launchId &&
-                current.phase === "rollback_failed"
-              ) {
-                await removeMatchingLock(lockPath, lock.launchId);
-              }
-              inProcessRollbackFailures.delete(failureKey);
-            })
-            .catch(() => {
-              // Keep the in-process fail-closed marker when late cleanup fails.
-            });
-        };
-        child?.once("close", removeAfterLateClose);
-        if (
-          (child?.exitCode !== null && child?.exitCode !== undefined) ||
-          (child?.signalCode !== null && child?.signalCode !== undefined)
-        ) {
-          child.removeListener("close", removeAfterLateClose);
-          removeAfterLateClose();
         }
 
         throw new MonitoringLaunchRollbackError(

@@ -643,14 +643,20 @@ describe("monitoring launch transaction", () => {
     ))).toMatchObject({ phase: "rollback_failed", pid: 4321 });
   });
 
-  it("surfaces a composite safety error when rollback_failed persistence fails", async () => {
+  it("keeps persistence failures fail-closed beyond TTL and cleans up on matching late close", async () => {
     const { repoRoot, runDir } = await makeRepo();
+    let currentTime = new Date("2026-07-19T12:00:00Z");
     const child = new FakeChild();
     const close = vi.fn(async () => undefined);
-    const removeMatchingLock = vi.fn<NonNullable<MonitoringLaunchDependencies["removeMatchingLock"]>>();
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>(spawnSuccessfully(child));
+    const removeMatchingLock = vi.fn(async (lockPath: string, launchId: string) => {
+      const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+      if (lock.launchId === launchId) await fs.unlink(lockPath);
+    });
     const dependencies = {
       repoRoot,
-      spawn: spawnSuccessfully(child),
+      spawn,
+      now: () => currentTime,
       openLog: async () => ({ fd: 99, appendFile: async () => undefined, close }),
       promoteLock: async () => { throw new Error("promotion failed"); },
       persistRollbackFailedLock: async () => { throw new Error("failed-lock write failed"); },
@@ -671,6 +677,18 @@ describe("monitoring launch transaction", () => {
       path.join(runDir, MONITORING_LAUNCH_LOCK_FILE),
       "utf8"
     ))).toMatchObject({ phase: "queued" });
+
+    currentTime = new Date("2026-07-19T12:01:00Z");
+    await expect(createMonitoringLauncher(dependencies)(
+      request({ action: "continue" })
+    )).resolves.toMatchObject({ started: false, monitoringStatus: "queued" });
+    expect(spawn).toHaveBeenCalledOnce();
+
+    child.emit("close", null, "SIGKILL");
+    await vi.waitFor(async () => {
+      await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+    });
+    expect(removeMatchingLock).toHaveBeenCalledOnce();
   });
 });
 
