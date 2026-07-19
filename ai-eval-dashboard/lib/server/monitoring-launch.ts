@@ -183,9 +183,49 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 function isUnsafeFinalPathError(error: unknown): boolean {
-  return ["ELOOP", "ENOTDIR", "EISDIR"].includes(
+  return ["ELOOP", "ENOTDIR", "EISDIR", "ENXIO"].includes(
     (error as NodeJS.ErrnoException).code ?? ""
   );
+}
+
+async function openMonitoringLogForLaunch(
+  logPath: string
+): Promise<LaunchLogHandle> {
+  const flags =
+    fsConstants.O_WRONLY |
+    fsConstants.O_APPEND |
+    fsConstants.O_CREAT |
+    fsConstants.O_NONBLOCK |
+    fsConstants.O_NOFOLLOW;
+
+  let log: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    log = await fs.open(logPath, flags, 0o666);
+  } catch (error) {
+    if (isUnsafeFinalPathError(error)) {
+      throw monitoringLogPathError();
+    }
+    throw error;
+  }
+
+  try {
+    const stat = await log.stat();
+    if (!stat.isFile()) {
+      throw monitoringLogPathError();
+    }
+    await assertOpenedLogMatchesPath(logPath, stat);
+    return log as LaunchLogHandle;
+  } catch (error) {
+    try {
+      await log.close();
+    } catch {
+      // Preserve the validation error while ensuring cleanup is attempted.
+    }
+    if (error instanceof RunPathValidationError) {
+      throw error;
+    }
+    throw monitoringLogPathError();
+  }
 }
 
 export async function readMonitoringLogTail(
@@ -933,7 +973,7 @@ export function createMonitoringLauncher(
   const kill = dependencies.kill ?? process.kill.bind(process);
   const openLog =
     dependencies.openLog ??
-    (async (logPath: string) => (await fs.open(logPath, "a")) as LaunchLogHandle);
+    openMonitoringLogForLaunch;
   const promoteLock = dependencies.promoteLock ?? promoteMonitoringLockUnlocked;
   const persistRollbackFailedLock =
     dependencies.persistRollbackFailedLock ?? promoteMonitoringLockUnlocked;

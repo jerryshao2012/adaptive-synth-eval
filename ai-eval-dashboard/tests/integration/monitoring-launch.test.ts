@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { promises as fs, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { constants as fsConstants, promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,6 +20,7 @@ import {
   RunPathValidationError,
   resolveRunDirectory,
 } from "@/lib/server/run-paths";
+import { getMonitoringStatus } from "@/lib/server/monitoring";
 import type { MonitoringStartRequest } from "@/types/evaluation";
 
 const tempRoots: string[] = [];
@@ -73,7 +75,24 @@ describe("resolveRunDirectory", () => {
     );
   });
 
-  it.each(["", " ", ".", "..", "../run-1", "nested/run", "nested\\run", "run\0id"])(
+  it.each([
+    "",
+    " ",
+    ".",
+    "..",
+    "../run-1",
+    "nested/run",
+    "nested\\run",
+    "run\0id",
+    "run\nid",
+    "run\rid",
+    "run\u001bid",
+    "run\u007fid",
+    "run\u0085id",
+    "\nrun-1",
+    "run-1\r",
+    "\u001brun-1",
+  ])(
     "rejects unsafe run id %j",
     async (runId) => {
       const { repoRoot } = await makeRepo();
@@ -107,6 +126,35 @@ describe("resolveRunDirectory", () => {
 
     await expect(resolveRunDirectory("run-alias", repoRoot)).resolves.toBe(
       await fs.realpath(runDir)
+    );
+  });
+
+  it("rejects status traversal before reading or reconciling an outside lock", async () => {
+    const { repoRoot } = await makeRepo();
+    const outsideDirectory = path.join(repoRoot, "outside");
+    await fs.mkdir(outsideDirectory);
+    await fs.writeFile(
+      path.join(outsideDirectory, "monitoring_state.json"),
+      JSON.stringify({ status: "completed" })
+    );
+    const outsideLockPath = path.join(
+      outsideDirectory,
+      MONITORING_LAUNCH_LOCK_FILE
+    );
+    const outsideLock = JSON.stringify({
+      launchId: "outside-lock",
+      action: "start",
+      phase: "queued",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      expiresAt: 0,
+    });
+    await fs.writeFile(outsideLockPath, outsideLock);
+
+    await expect(
+      getMonitoringStatus("../../outside", repoRoot)
+    ).rejects.toBeInstanceOf(RunPathValidationError);
+    await expect(fs.readFile(outsideLockPath, "utf8")).resolves.toBe(
+      outsideLock
     );
   });
 });
@@ -171,6 +219,7 @@ describe("monitoring launch transaction", () => {
 
   it("writes the boundary before spawn and sends stdout and stderr to one append fd", async () => {
     const { repoRoot, runDir } = await makeRepo();
+    await fs.writeFile(path.join(runDir, "monitoring.log"), "existing output\n");
     const child = new FakeChild();
     let logAtSpawn = "";
     const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>((_file, _args, options) => {
@@ -193,8 +242,64 @@ describe("monitoring launch transaction", () => {
     })(request({ action: "continue", samplingStrategy: "random", sampleSize: 11 }));
 
     expect(logAtSpawn).toContain("2026-07-19T12:00:00.000Z");
+    expect(logAtSpawn.startsWith("existing output\n")).toBe(true);
     expect(logAtSpawn).toContain("action=continue");
     expect(logAtSpawn).toContain("--sample-size 11");
+  });
+
+  it("rejects a monitoring log symlink without changing its outside target or spawning", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const outsideDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "monitoring-launch-outside-")
+    );
+    tempRoots.push(outsideDirectory);
+    const outsideLog = path.join(outsideDirectory, "outside.log");
+    const originalOutsideContent = "outside content must remain unchanged\n";
+    await fs.writeFile(outsideLog, originalOutsideContent);
+    await fs.symlink(outsideLog, path.join(runDir, "monitoring.log"));
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+
+    await expect(
+      createMonitoringLauncher({ repoRoot, spawn })(request())
+    ).rejects.toBeInstanceOf(RunPathValidationError);
+    await expect(fs.readFile(outsideLog, "utf8")).resolves.toBe(
+      originalOutsideContent
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a monitoring log FIFO promptly without spawning", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const fifoPath = path.join(runDir, "monitoring.log");
+    execFileSync("mkfifo", [fifoPath]);
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+    const launchPromise = createMonitoringLauncher({ repoRoot, spawn })(request());
+    const timeout = Symbol("timeout");
+    const outcome = await Promise.race([
+      launchPromise.then(
+        () => null,
+        (error: unknown) => error
+      ),
+      new Promise<typeof timeout>((resolve) =>
+        setTimeout(() => resolve(timeout), 100)
+      ),
+    ]);
+
+    if (outcome === timeout) {
+      const reader = await fs.open(
+        fifoPath,
+        fsConstants.O_RDONLY | fsConstants.O_NONBLOCK
+      );
+      try {
+        await launchPromise.catch(() => undefined);
+      } finally {
+        await reader.close();
+      }
+    }
+
+    expect(outcome).not.toBe(timeout);
+    expect(outcome).toBeInstanceOf(RunPathValidationError);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("persists the PID before unref and promotes the exclusive queued lock", async () => {

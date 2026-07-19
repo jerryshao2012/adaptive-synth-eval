@@ -24,14 +24,15 @@ export async function resolveRunDirectory(
   runId: string,
   repoRoot = DEFAULT_REPO_ROOT
 ): Promise<string> {
+  const hasControlCharacters = /[\u0000-\u001f\u007f-\u009f]/u.test(runId);
   const normalized = runId.trim();
   if (
+    hasControlCharacters ||
     !normalized ||
     normalized === "." ||
     normalized === ".." ||
     normalized.includes("/") ||
-    normalized.includes("\\") ||
-    normalized.includes("\0")
+    normalized.includes("\\")
   ) {
     throw new RunPathValidationError();
   }

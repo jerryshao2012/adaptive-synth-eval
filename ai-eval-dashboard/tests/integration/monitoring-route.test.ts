@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { handleMonitoringPost } from "@/app/api/evaluations/monitoring/route";
+import {
+  GET,
+  handleMonitoringPost,
+} from "@/app/api/evaluations/monitoring/route";
 import {
   RunNotFoundError,
   RunPathValidationError,
@@ -30,6 +33,37 @@ function malformedJsonRequest(): NextRequest {
     body: "{not-json",
   });
 }
+
+function statusRequest(runId?: string): NextRequest {
+  const url = new URL("http://localhost/api/evaluations/monitoring");
+  if (runId !== undefined) {
+    url.searchParams.set("runId", runId);
+  }
+  return new NextRequest(url);
+}
+
+describe("GET /api/evaluations/monitoring", () => {
+  it.each(["../escape", "run\nid", "run\rid", "run\u001bid", "run\u0085id"])(
+    "returns 400 for unsafe run ID %j",
+    async (runId) => {
+      const response = await GET(statusRequest(runId));
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "runId must be one safe path segment.",
+      });
+    }
+  );
+
+  it("returns 404 for a missing safe run", async () => {
+    const response = await GET(statusRequest("missing-safe-run"));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      error: "Run 'missing-safe-run' was not found.",
+    });
+  });
+});
 
 describe("handleMonitoringPost", () => {
   it("passes only a validated and normalized request to the launcher", async () => {

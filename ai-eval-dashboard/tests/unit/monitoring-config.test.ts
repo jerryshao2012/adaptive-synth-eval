@@ -159,6 +159,14 @@ describe("parseMonitoringStartRequest", () => {
     "nested/run",
     "nested\\run",
     "run\0id",
+    "run\nid",
+    "run\rid",
+    "run\u001bid",
+    "run\u007fid",
+    "run\u0085id",
+    "\nrun-1",
+    "run-1\r",
+    "\u001brun-1",
   ])("rejects an unsafe run ID: %j", (runId) => {
     expect(() =>
       parseMonitoringStartRequest({ runId, action: "start" })

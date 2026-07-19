@@ -19,6 +19,7 @@ const hookState = vi.hoisted(() => ({
   runs: [] as RunSummary[],
   statuses: {} as Record<string, MonitoringRunStatus | undefined>,
   statusUpdatedAt: {} as Record<string, number>,
+  latestSuccessfulStatusRequestId: {} as Record<string, number>,
 }));
 
 const completedRun: RunSummary = {
@@ -67,6 +68,9 @@ vi.mock("@/hooks/use-evaluations", () => ({
   useMonitoringStatus: (runId?: string) => ({
     data: runId ? hookState.statuses[runId] : undefined,
     dataUpdatedAt: runId ? hookState.statusUpdatedAt[runId] ?? 0 : 0,
+    latestSuccessfulRequestId: runId
+      ? hookState.latestSuccessfulStatusRequestId[runId] ?? 0
+      : 0,
     refetch: () => hookState.refetchStatus(runId),
     prepareRefreshAfterLaunch: () =>
       hookState.prepareStatusRefreshAfterLaunch(runId),
@@ -111,6 +115,7 @@ beforeEach(() => {
   hookState.runs = [completedRun];
   hookState.statuses = { "run-1": completedStatus };
   hookState.statusUpdatedAt = { "run-1": 1 };
+  hookState.latestSuccessfulStatusRequestId = { "run-1": 1 };
   hookState.mutateAsync.mockReset();
   hookState.mutateAsync.mockResolvedValue({
     runId: "run-1",
@@ -125,6 +130,9 @@ beforeEach(() => {
     .mockImplementation((runId) =>
       Promise.resolve({
         baseline: runId ? hookState.statuses[runId] : undefined,
+        baselineRequestId: runId
+          ? hookState.latestSuccessfulStatusRequestId[runId] ?? 0
+          : 0,
         result: Promise.resolve({
           data: runId ? hookState.statuses[runId] : undefined,
           isSuccess: true,
@@ -321,6 +329,150 @@ describe("Monitor page evaluation configuration", () => {
     expect(
       await screen.findByRole("button", { name: "Re-evaluate" })
     ).toBeTruthy();
+  });
+
+  it("releases a Start overlay after a later successful terminal poll when no baseline exists", async () => {
+    const user = userEvent.setup();
+    const failedExplicitRefresh = deferred<{
+      data: MonitoringRunStatus;
+      isSuccess: true;
+    }>();
+    hookState.runs = [
+      {
+        ...completedRun,
+        monitoringStatus: "not_started",
+        progress: { completed: 0, total: 10, percent: 0 },
+        hasMonitoringState: false,
+        hasMonitoringScores: false,
+        canStart: true,
+        canReevaluate: false,
+      },
+    ];
+    hookState.statuses = { "run-1": undefined };
+    hookState.latestSuccessfulStatusRequestId = { "run-1": 4 };
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: undefined,
+      baselineRequestId: 4,
+      result: failedExplicitRefresh.promise,
+    });
+    const { rerender } = render(<DashboardPage />);
+
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Start evaluation" })
+      ).toBeNull()
+    );
+    await act(async () => {
+      failedExplicitRefresh.reject(new Error("status unavailable"));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+
+    hookState.statuses["run-1"] = {
+      ...completedStatus,
+      updatedAt: undefined,
+    };
+    hookState.latestSuccessfulStatusRequestId["run-1"] = 5;
+    rerender(<DashboardPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
+  });
+
+  it("releases a legacy null-timestamp overlay after a later successful terminal poll", async () => {
+    const user = userEvent.setup();
+    const failedExplicitRefresh = deferred<{
+      data: MonitoringRunStatus;
+      isSuccess: true;
+    }>();
+    const legacyStatus: MonitoringRunStatus = {
+      ...completedStatus,
+      updatedAt: undefined,
+    };
+    hookState.statuses["run-1"] = legacyStatus;
+    hookState.latestSuccessfulStatusRequestId["run-1"] = 8;
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: legacyStatus,
+      baselineRequestId: 8,
+      result: failedExplicitRefresh.promise,
+    });
+    const { rerender } = render(<DashboardPage />);
+
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    await act(async () => {
+      failedExplicitRefresh.reject(new Error("status unavailable"));
+      await Promise.resolve();
+    });
+
+    hookState.statuses["run-1"] = { ...legacyStatus };
+    hookState.latestSuccessfulStatusRequestId["run-1"] = 9;
+    rerender(<DashboardPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
+  });
+
+  it("does not release a null-timestamp overlay for pre-accept or failed cached data", async () => {
+    const user = userEvent.setup();
+    const failedExplicitRefresh = deferred<{
+      data: MonitoringRunStatus;
+      isSuccess: true;
+    }>();
+    const legacyStatus: MonitoringRunStatus = {
+      ...completedStatus,
+      updatedAt: undefined,
+    };
+    hookState.statuses["run-1"] = legacyStatus;
+    hookState.latestSuccessfulStatusRequestId["run-1"] = 12;
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: legacyStatus,
+      baselineRequestId: 12,
+      result: failedExplicitRefresh.promise,
+    });
+    const { rerender } = render(<DashboardPage />);
+
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    await act(async () => {
+      failedExplicitRefresh.reject(new Error("status unavailable"));
+      await Promise.resolve();
+    });
+
+    // A request that began before acceptance may finish afterward, but its
+    // request id is not newer than the captured launch boundary.
+    hookState.statuses["run-1"] = { ...legacyStatus };
+    hookState.latestSuccessfulStatusRequestId["run-1"] = 12;
+    rerender(<DashboardPage />);
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
+
+    // A failed poll can expose the same cached data without advancing the
+    // last successful request id; that must remain suppressed too.
+    hookState.statusUpdatedAt["run-1"] = 99;
+    rerender(<DashboardPage />);
+    expect(
+      screen.queryByRole("button", { name: "Re-evaluate" })
+    ).toBeNull();
   });
 
   it("ignores a stale pre-accept poll, then trusts the equal-timestamp explicit result", async () => {

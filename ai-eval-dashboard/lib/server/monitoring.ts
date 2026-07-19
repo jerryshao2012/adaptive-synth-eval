@@ -6,6 +6,7 @@ import {
   projectMonitoringRun,
   startMonitoringRun,
 } from "@/lib/server/monitoring-launch";
+import { resolveRunDirectory } from "@/lib/server/run-paths";
 
 import type {
   EvaluationRecord,
@@ -153,12 +154,12 @@ export async function listRunSummaries(): Promise<RunSummary[]> {
   return runs.sort(sortRuns);
 }
 
-export async function getMonitoringStatus(runId: string): Promise<MonitoringRunStatus | null> {
-  const runDir = runDirPath(runId);
-  const exists = await fileExists(runDir);
-  if (!exists) {
-    return null;
-  }
+export async function getMonitoringStatus(
+  runId: string,
+  repoRoot = REPO_ROOT
+): Promise<MonitoringRunStatus | null> {
+  const normalizedRunId = runId.trim();
+  const runDir = await resolveRunDirectory(runId, repoRoot);
 
   const monitoringState = await readJsonFile<Record<string, unknown>>(
     path.join(runDir, "monitoring_state.json")
@@ -174,7 +175,7 @@ export async function getMonitoringStatus(runId: string): Promise<MonitoringRunS
   const total = safeNumber(monitoringState?.total_lines ?? 0);
 
   return {
-    runId,
+    runId: normalizedRunId,
     monitoringStatus: projection.monitoringStatus,
     progress: {
       completed,

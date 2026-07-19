@@ -30,15 +30,24 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const status = await getMonitoringStatus(runId);
-  if (!status) {
-    return NextResponse.json(
-      { error: `Run '${runId}' was not found.` },
-      { status: 404 }
-    );
+  try {
+    const status = await getMonitoringStatus(runId);
+    if (!status) {
+      return NextResponse.json(
+        { error: `Run '${runId}' was not found.` },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json(status);
+  } catch (error) {
+    if (error instanceof RunPathValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof RunNotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    throw error;
   }
-
-  return NextResponse.json(status);
 }
 
 type StartMonitoringFn = (

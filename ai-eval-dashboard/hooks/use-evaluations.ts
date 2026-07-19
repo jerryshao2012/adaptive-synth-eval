@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ArtifactValidation,
@@ -104,15 +105,28 @@ export function useRunList() {
 export function useMonitoringStatus(runId?: string) {
   const queryClient = useQueryClient();
   const queryKey = ["monitoring-status", runId ?? "none"] as const;
+  const nextRequestIdByRun = useRef(new Map<string, number>());
+  const [latestSuccessfulRequestIdByRun, setLatestSuccessfulRequestIdByRun] =
+    useState<Record<string, number>>({});
   const query = useQuery({
     queryKey,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
+      const requestRunId = runId || "";
+      const requestId = (nextRequestIdByRun.current.get(requestRunId) ?? 0) + 1;
+      nextRequestIdByRun.current.set(requestRunId, requestId);
       const params = new URLSearchParams({ runId: runId || "" });
-      const res = await fetch(`${API_BASE}/monitoring?${params}`);
+      const res = await fetch(`${API_BASE}/monitoring?${params}`, { signal });
       if (!res.ok) {
         throw new Error(`API error: ${res.status} ${res.statusText}`);
       }
-      return (await res.json()) as MonitoringRunStatus;
+      const status = (await res.json()) as MonitoringRunStatus;
+      if (!signal.aborted) {
+        setLatestSuccessfulRequestIdByRun((current) => ({
+          ...current,
+          [requestRunId]: Math.max(current[requestRunId] ?? 0, requestId),
+        }));
+      }
+      return status;
     },
     enabled: Boolean(runId),
     refetchInterval: 5000,
@@ -120,10 +134,15 @@ export function useMonitoringStatus(runId?: string) {
 
   return {
     ...query,
+    latestSuccessfulRequestId:
+      latestSuccessfulRequestIdByRun[runId || ""] ?? 0,
     prepareRefreshAfterLaunch: async () => {
       await queryClient.cancelQueries({ queryKey, exact: true });
+      const baselineRequestId =
+        nextRequestIdByRun.current.get(runId || "") ?? 0;
       return {
         baseline: queryClient.getQueryData<MonitoringRunStatus>(queryKey),
+        baselineRequestId,
         result: query.refetch({ cancelRefetch: true, throwOnError: true }),
       };
     },

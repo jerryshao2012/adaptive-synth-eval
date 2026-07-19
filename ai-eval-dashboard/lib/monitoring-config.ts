@@ -87,14 +87,15 @@ function parseRunId(value: unknown): string {
     throw new MonitoringRequestValidationError("runId must be a string.");
   }
 
+  const hasControlCharacters = /[\u0000-\u001f\u007f-\u009f]/u.test(value);
   const runId = value.trim();
   if (
+    hasControlCharacters ||
     !runId ||
     runId === "." ||
     runId === ".." ||
     runId.includes("/") ||
-    runId.includes("\\") ||
-    runId.includes("\0")
+    runId.includes("\\")
   ) {
     throw new MonitoringRequestValidationError(
       "runId must be one safe path segment."

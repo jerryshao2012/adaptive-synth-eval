@@ -91,6 +91,7 @@ interface AcceptedLaunchOverlay {
   runId: string;
   baselineReady: boolean;
   baselineUpdatedAtMs: number | null;
+  baselineRequestId: number | null;
 }
 
 function statusUpdatedAtMs(
@@ -111,7 +112,8 @@ function statusUpdatedAtMs(
 
 function hasPostAcceptanceStatusEvidence(
   overlay: AcceptedLaunchOverlay,
-  status: MonitoringRunStatus | undefined
+  status: MonitoringRunStatus | undefined,
+  latestSuccessfulRequestId: number
 ): boolean {
   if (!status || status.runId !== overlay.runId) return false;
   if (
@@ -122,12 +124,16 @@ function hasPostAcceptanceStatusEvidence(
   }
 
   const updatedAtMs = statusUpdatedAtMs(status);
-  return (
+  const hasNewerSemanticTimestamp =
     overlay.baselineReady &&
     overlay.baselineUpdatedAtMs !== null &&
     updatedAtMs !== null &&
-    updatedAtMs > overlay.baselineUpdatedAtMs
-  );
+    updatedAtMs > overlay.baselineUpdatedAtMs;
+  const hasSuccessfulPostAcceptanceRequest =
+    overlay.baselineReady &&
+    overlay.baselineRequestId !== null &&
+    latestSuccessfulRequestId > overlay.baselineRequestId;
+  return hasNewerSemanticTimestamp || hasSuccessfulPostAcceptanceRequest;
 }
 
 export default function DashboardPage() {
@@ -173,6 +179,7 @@ export default function DashboardPage() {
 
   const {
     data: monitoringStatus,
+    latestSuccessfulRequestId: latestSuccessfulMonitoringStatusRequestId,
     prepareRefreshAfterLaunch: prepareMonitoringStatusRefreshAfterLaunch,
     refetch: refetchMonitoringStatus,
   } = useMonitoringStatus(activeRunId || undefined);
@@ -209,7 +216,11 @@ export default function DashboardPage() {
   const acceptedLaunch = acceptedLaunches[activeRunId] ?? null;
   const retainedAcceptedLaunch =
     acceptedLaunch &&
-    !hasPostAcceptanceStatusEvidence(acceptedLaunch, monitoringStatus)
+    !hasPostAcceptanceStatusEvidence(
+      acceptedLaunch,
+      monitoringStatus,
+      latestSuccessfulMonitoringStatusRequestId
+    )
       ? acceptedLaunch
       : null;
 
@@ -293,6 +304,7 @@ export default function DashboardPage() {
           runId: launchIntent.runId,
           baselineReady: false,
           baselineUpdatedAtMs: null,
+          baselineRequestId: null,
         };
         setAcceptedLaunches((current) => ({
           ...current,
@@ -301,11 +313,12 @@ export default function DashboardPage() {
         setLaunchIntent(null);
         const postAcceptanceStatusRefresh =
           prepareMonitoringStatusRefreshAfterLaunch().then(
-            async ({ baseline, result }) => {
+            async ({ baseline, baselineRequestId, result }) => {
               const preparedOverlay: AcceptedLaunchOverlay = {
                 ...acceptedOverlay,
                 baselineReady: true,
                 baselineUpdatedAtMs: statusUpdatedAtMs(baseline),
+                baselineRequestId,
               };
               setAcceptedLaunches((current) =>
                 current[launchIntent.runId]?.key === launchKey
