@@ -69,8 +69,10 @@ const LATENCY_METRICS = [
 ];
 
 const DEFAULT_MONITORING_CONFIG: EvalRunParameters = {
+  samplingStrategy: "all",
   sampleSize: 1000,
   intervalMinutes: 60,
+  maxWindows: null,
 };
 
 function filterEvaluationsByPeriod(
@@ -169,8 +171,10 @@ export default function DashboardPage() {
         await startMonitoring.mutateAsync({
           runId,
           action,
+          samplingStrategy: globalEvalDefaults.samplingStrategy,
           sampleSize: globalEvalDefaults.sampleSize,
           intervalMinutes: globalEvalDefaults.intervalMinutes,
+          maxWindows: globalEvalDefaults.maxWindows,
         });
         await Promise.all([refetchRuns(), refetchMonitoringStatus()]);
       } catch {

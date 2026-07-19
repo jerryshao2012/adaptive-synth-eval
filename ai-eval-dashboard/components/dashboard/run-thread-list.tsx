@@ -39,8 +39,12 @@ function effectiveParams(
 ): EvalRunParameters {
   const patch = overrides[runId] || {};
   return {
+    samplingStrategy:
+      patch.samplingStrategy ?? defaults.samplingStrategy,
     sampleSize: Number(patch.sampleSize ?? defaults.sampleSize),
     intervalMinutes: Number(patch.intervalMinutes ?? defaults.intervalMinutes),
+    maxWindows:
+      patch.maxWindows === undefined ? defaults.maxWindows : patch.maxWindows,
   };
 }
 

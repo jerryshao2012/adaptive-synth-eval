@@ -4,7 +4,14 @@ import {
   getMonitoringStatus,
   startMonitoringRun,
 } from "@/lib/server/monitoring";
-import type { MonitoringStartRequest } from "@/types/evaluation";
+import {
+  MonitoringRequestValidationError,
+  parseMonitoringStartRequest,
+} from "@/lib/monitoring-config";
+import type {
+  MonitoringStartRequest,
+  MonitoringStartResponse,
+} from "@/types/evaluation";
 
 export const runtime = "nodejs";
 
@@ -30,10 +37,17 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(status);
 }
 
-export async function POST(request: NextRequest) {
-  let payload: MonitoringStartRequest;
+type StartMonitoringFn = (
+  request: MonitoringStartRequest
+) => Promise<MonitoringStartResponse>;
+
+export async function handleMonitoringPost(
+  request: NextRequest,
+  startFn: StartMonitoringFn
+) {
+  let value: unknown;
   try {
-    payload = (await request.json()) as MonitoringStartRequest;
+    value = await request.json();
   } catch {
     return NextResponse.json(
       { error: "Invalid JSON body." },
@@ -41,42 +55,28 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!payload?.runId || !payload?.action) {
+  let payload: MonitoringStartRequest;
+  try {
+    payload = parseMonitoringStartRequest(value);
+  } catch (error) {
+    if (!(error instanceof MonitoringRequestValidationError)) {
+      throw error;
+    }
     return NextResponse.json(
-      { error: "runId and action are required." },
-      { status: 400 }
-    );
-  }
-  if (!["start", "continue"].includes(payload.action)) {
-    return NextResponse.json(
-      { error: "action must be either 'start' or 'continue'." },
-      { status: 400 }
-    );
-  }
-  if (
-    payload.sampleSize !== undefined &&
-    (!Number.isFinite(Number(payload.sampleSize)) || Number(payload.sampleSize) <= 0)
-  ) {
-    return NextResponse.json(
-      { error: "sampleSize must be a positive number." },
-      { status: 400 }
-    );
-  }
-  if (
-    payload.intervalMinutes !== undefined &&
-    (!Number.isFinite(Number(payload.intervalMinutes)) || Number(payload.intervalMinutes) <= 0)
-  ) {
-    return NextResponse.json(
-      { error: "intervalMinutes must be a positive number." },
+      { error: error.message },
       { status: 400 }
     );
   }
 
   try {
-    const response = await startMonitoringRun(payload);
+    const response = await startFn(payload);
     return NextResponse.json(response, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start monitoring run.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+export async function POST(request: NextRequest) {
+  return handleMonitoringPost(request, startMonitoringRun);
 }

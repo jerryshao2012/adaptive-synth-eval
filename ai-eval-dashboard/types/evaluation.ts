@@ -96,7 +96,7 @@ export interface BatchEvalStatus {
 export interface RunSummary {
   runId: string;
   mode: string;
-  monitoringStatus: "not_started" | "queued" | "in_progress" | "completed";
+  monitoringStatus: "not_started" | "queued" | "in_progress" | "incomplete" | "completed";
   startedAt?: string;
   updatedAt?: string;
   completedAt?: string;
@@ -114,7 +114,7 @@ export interface RunSummary {
 
 export interface MonitoringRunStatus {
   runId: string;
-  monitoringStatus: "not_started" | "queued" | "in_progress" | "completed";
+  monitoringStatus: "not_started" | "queued" | "in_progress" | "incomplete" | "completed";
   progress: {
     completed: number;
     total: number;
@@ -127,9 +127,15 @@ export interface MonitoringRunStatus {
   updatedAt?: string;
 }
 
+export type MonitoringAction = "start" | "continue" | "reevaluate";
+
+export type SamplingStrategy = "all" | "random" | "systematic";
+
 export interface EvalRunParameters {
+  samplingStrategy: SamplingStrategy;
   sampleSize: number;
   intervalMinutes: number;
+  maxWindows: number | null;
 }
 
 export interface MetricPointIdentity {
@@ -149,11 +155,9 @@ export interface TraceDetailsResponse {
   notFoundReason?: string;
 }
 
-export interface MonitoringStartRequest {
+export interface MonitoringStartRequest extends EvalRunParameters {
   runId: string;
-  sampleSize?: number;
-  intervalMinutes?: number;
-  action: "start" | "continue";
+  action: MonitoringAction;
 }
 
 export interface MonitoringStartResponse {
