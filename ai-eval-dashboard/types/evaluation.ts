@@ -298,6 +298,120 @@ export interface GoldenDataset {
   updatedAt: string;
 }
 
+// ---- Reusable Golden Dataset Types (schema v2) ----
+
+export type GoldenMetricKey =
+  | "toxicity"
+  | "bias_fairness"
+  | "robustness"
+  | "compliance"
+  | "relevance"
+  | "groundedness"
+  | "correctness"
+  | "completeness"
+  | "style"
+  | "precision";
+
+export interface GoldenExampleContent {
+  userText: string;
+  responseText: string;
+  conversationContext?: string;
+  referenceContext?: string;
+  referenceAnswer?: string;
+}
+
+export interface GoldenSourceRef {
+  runId: string;
+  conversationId: string;
+  turnId: string;
+  reviewId: string;
+  reviewerId: string;
+  reviewedAt: string;
+  evaluationFingerprint?: string;
+}
+
+export interface GoldenReviewSnapshot {
+  reviewStatus: "approved";
+  overallStatus: MetricScoreStatus;
+  safetyScores: HumanReview["safetyScores"];
+  performanceScores: HumanReview["performanceScores"];
+  notes: string;
+  flags: HumanReview["flags"];
+}
+
+export interface GoldenExample {
+  schemaVersion: 2;
+  exampleId: string;
+  contentFingerprint: string;
+  content: GoldenExampleContent;
+  sourceRefs: GoldenSourceRef[];
+  reviewSnapshot: GoldenReviewSnapshot;
+  tags: string[];
+  similarExampleIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoldenAnnotation {
+  expectedStatus: MetricScoreStatus;
+  expectedScore?: number;
+  rationale: string;
+  reviewerId: string;
+  reviewedAt: string;
+}
+
+export interface GoldenMembership {
+  exampleId: string;
+  annotations: Partial<Record<GoldenMetricKey, GoldenAnnotation>>;
+  weight: number;
+  notes: string;
+  addedAt: string;
+  updatedAt: string;
+}
+
+export interface GoldenCollection {
+  schemaVersion: 2;
+  collectionId: string;
+  name: string;
+  description: string;
+  dimensions: GoldenMetricKey[];
+  tags: string[];
+  status: "draft" | "published" | "archived";
+  revision: number;
+  memberships: GoldenMembership[];
+  latestPublishedVersion?: string;
+  latestPublishedAt?: string;
+  lastPublishedFingerprint?: string;
+  legacyDatasetId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoldenVersionRecord {
+  exampleId: string;
+  contentFingerprint: string;
+  content: GoldenExampleContent;
+  sourceRefs: GoldenSourceRef[];
+  tags: string[];
+  annotations: Partial<Record<GoldenMetricKey, GoldenAnnotation>>;
+  weight: number;
+  notes: string;
+}
+
+export interface GoldenDatasetVersion {
+  schemaVersion: 2;
+  versionId: string;
+  collectionId: string;
+  collectionName: string;
+  version: string;
+  dimensions: GoldenMetricKey[];
+  tags: string[];
+  manifestFingerprint: string;
+  records: GoldenVersionRecord[];
+  publisherId: string;
+  publishedAt: string;
+}
+
 // ---- Investigation Workbench Types ----
 
 export type VerdictLevel = "healthy" | "needs_review" | "failed";

@@ -1,147 +1,243 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { Plus, RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Database, FolderKanban, Plus } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { CollectionListV2 } from "@/components/golden/collection-list-v2";
 import {
-  useGoldenDatasets,
-  useGoldenDataset,
-  useCreateDataset,
+  CollectionWorkspace,
+  defaultMembershipAnnotations,
+} from "@/components/golden/collection-workspace";
+import { CreateCollectionDialog } from "@/components/golden/create-collection-dialog";
+import { ExampleLibrary } from "@/components/golden/example-library";
+import {
+  useCreateGoldenCollection,
+  useGoldenCollections,
+  useGoldenCollectionV2,
+  useGoldenExamplesV2,
+  usePublishGoldenCollection,
+  useRemoveGoldenMembership,
+  useRemoveGoldenMemberships,
   useRunList,
+  useSyncApprovedGoldenExamples,
+  useUpdateGoldenCollection,
+  useUpsertGoldenMembership,
+  useUpsertGoldenMemberships,
 } from "@/hooks/use-evaluations";
-import { DatasetList } from "@/components/golden/dataset-list";
-import { CreateDatasetDialog } from "@/components/golden/create-dataset-dialog";
-import { DatasetDetailPanel } from "@/components/golden/dataset-detail-panel";
+import type { GoldenCollection, GoldenMetricKey } from "@/types/evaluation";
+import { GOLDEN_METRIC_KEYS } from "@/lib/golden-metrics";
+
+type WorkspaceView = "examples" | "collections";
 
 export default function GoldenDatasetPage() {
-  const queryClient = useQueryClient();
+  const [view, setView] = useState<WorkspaceView>("examples");
   const [createOpen, setCreateOpen] = useState(false);
-  const [viewDatasetId, setViewDatasetId] = useState<string | null>(null);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string>();
+  const [message, setMessage] = useState<string>();
+  const [exampleSearch, setExampleSearch] = useState("");
+  const [exampleDimension, setExampleDimension] = useState<GoldenMetricKey>();
+  const [exampleTag, setExampleTag] = useState("");
+  const [exampleRun, setExampleRun] = useState("");
+  const [exampleCollectionId, setExampleCollectionId] = useState("");
+  const [collectionSearch, setCollectionSearch] = useState("");
+  const [collectionStatus, setCollectionStatus] = useState<GoldenCollection["status"] | "">("");
+  const [collectionDimension, setCollectionDimension] = useState<GoldenMetricKey>();
+  const [collectionTag, setCollectionTag] = useState("");
 
-  const { data: datasets = [], isLoading, isError, refetch } = useGoldenDatasets();
-  const { data: viewDataset, isLoading: viewLoading } =
-    useGoldenDataset(viewDatasetId ?? undefined);
-  const createDataset = useCreateDataset();
+  const examplesQuery = useGoldenExamplesV2({
+    search: exampleSearch || undefined,
+    dimensions: exampleDimension ? [exampleDimension] : undefined,
+    tags: exampleTag ? [exampleTag] : undefined,
+    runId: exampleRun || undefined,
+    collectionId: exampleCollectionId || undefined,
+  });
+  const catalogExamplesQuery = useGoldenExamplesV2();
+  const collectionsQuery = useGoldenCollections({
+    search: collectionSearch || undefined,
+    status: collectionStatus || undefined,
+    dimensions: collectionDimension ? [collectionDimension] : undefined,
+    tags: collectionTag ? [collectionTag] : undefined,
+  });
+  const catalogCollectionsQuery = useGoldenCollections();
+  const collectionQuery = useGoldenCollectionV2(selectedCollectionId);
   const { data: runs = [] } = useRunList();
+  const createCollection = useCreateGoldenCollection();
+  const updateCollection = useUpdateGoldenCollection();
+  const upsertMembership = useUpsertGoldenMembership();
+  const upsertMemberships = useUpsertGoldenMemberships();
+  const removeMembership = useRemoveGoldenMembership();
+  const removeMemberships = useRemoveGoldenMemberships();
+  const publishCollection = usePublishGoldenCollection();
+  const syncApproved = useSyncApprovedGoldenExamples();
 
-  const handleCreate = useCallback(
-    async (name: string, version: string) => {
-      try {
-        await createDataset.mutateAsync({
-          name,
-          version,
-          filters: {
-            runIds: runs.map((r) => r.runId),
-          },
-        });
-        queryClient.invalidateQueries({ queryKey: ["golden-datasets"] });
-      } catch {
-        // handled by mutation
-      }
-    },
-    [createDataset, runs, queryClient]
-  );
+  const examples = examplesQuery.data ?? [];
+  const catalogExamples = catalogExamplesQuery.data ?? [];
+  const collections = collectionsQuery.data ?? [];
+  const catalogCollections = catalogCollectionsQuery.data ?? [];
+  const visibleCollections = collectionStatus
+    ? collections
+    : collections.filter((collection) => collection.status !== "archived");
+  const selectedCollection = collectionQuery.data;
+  const isMutating =
+    updateCollection.isPending ||
+    upsertMembership.isPending ||
+    upsertMemberships.isPending ||
+    removeMembership.isPending ||
+    removeMemberships.isPending ||
+    publishCollection.isPending;
 
-  const handleExport = useCallback(
-    (datasetId: string, format: "jsonl" | "csv") => {
-      const url = `/api/golden-dataset/${datasetId}/export?format=${format}`;
-      window.open(url, "_blank");
-    },
-    []
-  );
+  async function showResult(action: () => Promise<unknown>, success: string) {
+    setMessage(undefined);
+    try {
+      await action();
+      setMessage(success);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Golden dataset operation failed.");
+      throw error;
+    }
+  }
 
-  const handleArchive = useCallback(
-    async (datasetId: string) => {
-      try {
-        const res = await fetch(`/api/golden-dataset/${datasetId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "archived" }),
-        });
-        if (res.ok) {
-          queryClient.invalidateQueries({ queryKey: ["golden-datasets"] });
-        }
-      } catch {
-        // handled silently
-      }
-    },
-    [queryClient]
-  );
-
-  function handleRefresh() {
-    queryClient.invalidateQueries({ queryKey: ["golden-datasets"] });
+  async function addExamples(ids: string[]) {
+    if (!selectedCollection) return;
+    const members = ids.flatMap((id) => {
+      const example = catalogExamples.find((item) => item.exampleId === id);
+      return example
+        ? [{ exampleId: id, annotations: defaultMembershipAnnotations(example, selectedCollection.dimensions) }]
+        : [];
+    });
+    await upsertMemberships.mutateAsync({
+      collectionId: selectedCollection.collectionId,
+      expectedRevision: selectedCollection.revision,
+      members,
+    });
+    setMessage(`${ids.length} ${ids.length === 1 ? "example" : "examples"} added.`);
   }
 
   return (
-    <div className="px-4 py-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+    <div className="space-y-4 px-4 py-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold text-foreground">
-            Golden Dataset
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            Curate reviewed evaluation records for model benchmarking and
-            fine-tuning.
+          <h1 className="text-base font-semibold">Golden datasets</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Reuse approved examples across metric-specific collections and publish immutable versions.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isLoading}
-          >
-            <RefreshCw
-              className={`h-4 w-4 mr-1.5 ${isLoading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+        {view === "collections" && (
           <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            New Dataset
+            <Plus className="mr-1.5 h-4 w-4" />New collection
           </Button>
-        </div>
-      </div>
+        )}
+      </header>
 
-      {/* Error */}
-      {isError && (
-        <div className="text-sm text-destructive mb-4">
-          Failed to load datasets.
-          <Button variant="link" size="sm" onClick={() => refetch()} className="ml-2">
-            Retry
-          </Button>
+      <nav className="flex w-fit gap-1 rounded-lg bg-muted p-1" aria-label="Golden dataset workspace">
+        <Button variant={view === "examples" ? "default" : "ghost"} size="sm" onClick={() => setView("examples")}>
+          <Database className="mr-1.5 h-4 w-4" />Example Library
+        </Button>
+        <Button variant={view === "collections" ? "default" : "ghost"} size="sm" onClick={() => setView("collections")}>
+          <FolderKanban className="mr-1.5 h-4 w-4" />Collections
+        </Button>
+      </nav>
+
+      {message && <div role="status" className="rounded-md border border-border bg-card px-3 py-2 text-xs">{message}</div>}
+      {(examplesQuery.isError || collectionsQuery.isError) && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          Failed to load the golden dataset catalog.
         </div>
       )}
 
-      {/* Dataset list */}
-      {!isError && (
-        <DatasetList
-          datasets={datasets}
-          isLoading={isLoading}
-          onView={(id) => setViewDatasetId(id)}
-          onExport={handleExport}
-          onArchive={handleArchive}
+      {view === "examples" ? (
+        <ExampleLibrary
+          examples={examples}
+          collections={catalogCollections}
+          isLoading={examplesQuery.isLoading}
+          search={exampleSearch}
+          dimension={exampleDimension}
+          tag={exampleTag}
+          runId={exampleRun}
+          collectionId={exampleCollectionId}
+          onSearchChange={setExampleSearch}
+          onDimensionChange={setExampleDimension}
+          onTagChange={setExampleTag}
+          onRunIdChange={setExampleRun}
+          onCollectionIdChange={setExampleCollectionId}
+          onSync={() =>
+            void showResult(
+              () => syncApproved.mutateAsync({ runIds: runs.map((run) => run.runId) }),
+              "Approved reviews synchronized."
+            ).catch(() => undefined)
+          }
+          isSyncing={syncApproved.isPending}
         />
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2 rounded-lg border bg-card p-3">
+            <input aria-label="Search collections" value={collectionSearch} onChange={(event) => setCollectionSearch(event.target.value)} placeholder="Search collections" className="h-9 min-w-56 flex-1 rounded-md border bg-background px-3 text-sm" />
+            <select aria-label="Filter collection status" value={collectionStatus} onChange={(event) => setCollectionStatus(event.target.value as GoldenCollection["status"] | "")} className="h-9 rounded-md border bg-background px-2 text-sm"><option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select>
+            <select aria-label="Filter collection dimension" value={collectionDimension ?? ""} onChange={(event) => setCollectionDimension((event.target.value || undefined) as GoldenMetricKey | undefined)} className="h-9 rounded-md border bg-background px-2 text-sm"><option value="">All dimensions</option>{GOLDEN_METRIC_KEYS.map((metric) => <option key={metric} value={metric}>{metric.replaceAll("_", " ")}</option>)}</select>
+            <input aria-label="Filter collection tag" value={collectionTag} onChange={(event) => setCollectionTag(event.target.value)} placeholder="Tag" className="h-9 w-32 rounded-md border bg-background px-3 text-sm" />
+          </div>
+          <CollectionListV2
+            collections={visibleCollections}
+            allCollections={catalogCollections}
+            isLoading={collectionsQuery.isLoading}
+            onManage={setSelectedCollectionId}
+            onArchive={(collection) =>
+              void showResult(
+                () => updateCollection.mutateAsync({ collectionId: collection.collectionId, expectedRevision: collection.revision, status: "archived" }),
+                `${collection.name} archived.`
+              ).catch(() => undefined)
+            }
+          />
+        </div>
       )}
 
-      {/* Create Dialog */}
-      <CreateDatasetDialog
+      <CreateCollectionDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreate={handleCreate}
-        isPending={createDataset.isPending}
+        isPending={createCollection.isPending}
+        onCreate={async (input) => {
+          await showResult(() => createCollection.mutateAsync(input), `${input.name} created.`);
+        }}
       />
 
-      {/* Detail Panel */}
-      <DatasetDetailPanel
-        open={Boolean(viewDatasetId)}
-        dataset={viewDataset ?? null}
-        isLoading={viewLoading}
-        onClose={() => setViewDatasetId(null)}
-        onExport={handleExport}
+      <CollectionWorkspace
+        key={`${selectedCollectionId ?? "closed"}-${selectedCollection?.latestPublishedVersion ?? "draft"}`}
+        open={Boolean(selectedCollectionId)}
+        collection={selectedCollection}
+        examples={catalogExamples}
+        isLoading={collectionQuery.isLoading}
+        isPending={isMutating}
+        onClose={() => setSelectedCollectionId(undefined)}
+        onAddExamples={addExamples}
+        onSaveMembership={async (exampleId, annotations, weight, notes) => {
+          if (!selectedCollection) return;
+          await showResult(
+            () => upsertMembership.mutateAsync({ collectionId: selectedCollection.collectionId, expectedRevision: selectedCollection.revision, exampleId, annotations, weight, notes }),
+            "Membership annotation saved."
+          );
+        }}
+        onRemoveMembership={async (exampleId) => {
+          if (!selectedCollection) return;
+          await showResult(
+            () => removeMembership.mutateAsync({ collectionId: selectedCollection.collectionId, exampleId, expectedRevision: selectedCollection.revision }),
+            "Example removed from collection."
+          );
+        }}
+        onRemoveExamples={async (exampleIds) => {
+          if (!selectedCollection) return;
+          await showResult(
+            () => removeMemberships.mutateAsync({ collectionId: selectedCollection.collectionId, exampleIds, expectedRevision: selectedCollection.revision }),
+            `${exampleIds.length} ${exampleIds.length === 1 ? "example" : "examples"} removed.`
+          );
+        }}
+        onPublish={async (version) => {
+          if (!selectedCollection) return;
+          await showResult(
+            () => publishCollection.mutateAsync({ collectionId: selectedCollection.collectionId, version, expectedRevision: selectedCollection.revision, publisherId: "dashboard-curator" }),
+            `Version ${version} published.`
+          );
+        }}
       />
     </div>
   );

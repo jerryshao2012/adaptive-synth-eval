@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exportDataset } from "@/lib/server/golden-datasets";
+import { exportDataset, LegacyDatasetIdError } from "@/lib/server/golden-datasets";
 
 export const runtime = "nodejs";
 
@@ -20,6 +20,9 @@ export async function GET(
       },
     });
   } catch (error) {
+    if (error instanceof LegacyDatasetIdError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const message =
       error instanceof Error ? error.message : "Failed to export dataset.";
     return NextResponse.json({ error: message }, { status: 500 });

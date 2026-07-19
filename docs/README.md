@@ -18,6 +18,7 @@ Use this page to choose the shortest path for your task. Configuration details l
 ## Understand outputs
 
 - [Output artifacts and schemas](output_artifacts.md) — Analysts and integrators can locate run files and interpret their record formats.
+- [Golden datasets](golden_datasets.md) — Curators and API developers can reuse approved examples across metric-specific collections, publish immutable versions, and export reproducible manifests.
 - [Persona memory](persona_memory.md) — Evaluators can understand how persona context is isolated, retained, and updated across conversations.
 - [Dashboard setup](../ai-eval-dashboard/README.md) — Reviewers can launch the local dashboard to inspect run and monitoring artifacts.
 

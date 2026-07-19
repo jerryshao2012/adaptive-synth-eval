@@ -6,6 +6,10 @@ import type {
   ArtifactValidation,
   EvaluationRecord,
   EvaluationsResponse,
+  GoldenCollection,
+  GoldenDatasetVersion,
+  GoldenExample,
+  GoldenMetricKey,
   MetricPointIdentity,
   MonitoringLogResponse,
   MonitoringRunStatus,
@@ -360,6 +364,204 @@ export function useCreateDataset() {
       return res.json();
     },
   });
+}
+
+export interface GoldenExampleQuery {
+  search?: string;
+  tags?: string[];
+  dimensions?: GoldenMetricKey[];
+  collectionId?: string;
+  runId?: string;
+}
+
+export interface GoldenCollectionQuery {
+  search?: string;
+  tags?: string[];
+  dimensions?: GoldenMetricKey[];
+  status?: GoldenCollection["status"];
+}
+
+function goldenParams(filters: object): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (Array.isArray(value) && value.length) params.set(key, value.join(","));
+    else if (typeof value === "string" && value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+async function goldenJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((body as { error?: string }).error || `API error: ${response.status}`);
+  }
+  return body as T;
+}
+
+export function useGoldenExamplesV2(filters: GoldenExampleQuery = {}) {
+  return useQuery({
+    queryKey: ["golden-examples-v2", filters],
+    queryFn: () =>
+      goldenJson<GoldenExample[]>(
+        `/api/golden-dataset/examples${goldenParams(filters)}`
+      ),
+  });
+}
+
+export function useGoldenCollections(filters: GoldenCollectionQuery = {}) {
+  return useQuery({
+    queryKey: ["golden-collections", filters],
+    queryFn: () =>
+      goldenJson<GoldenCollection[]>(
+        `/api/golden-dataset/collections${goldenParams(filters)}`
+      ),
+  });
+}
+
+export function useGoldenCollectionV2(id?: string) {
+  return useQuery({
+    queryKey: ["golden-collection-v2", id],
+    queryFn: () =>
+      goldenJson<GoldenCollection & { versions: GoldenDatasetVersion[] }>(
+        `/api/golden-dataset/collections/${id}`
+      ),
+    enabled: Boolean(id),
+  });
+}
+
+function useGoldenMutation<TInput, TOutput>(
+  mutationFn: (input: TInput) => Promise<TOutput>
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["golden-examples-v2"] });
+      queryClient.invalidateQueries({ queryKey: ["golden-collections"] });
+      queryClient.invalidateQueries({ queryKey: ["golden-collection-v2"] });
+    },
+  });
+}
+
+export function useCreateGoldenCollection() {
+  return useGoldenMutation<
+    Pick<GoldenCollection, "name" | "description" | "dimensions" | "tags">,
+    GoldenCollection
+  >((payload) =>
+    goldenJson("/api/golden-dataset/collections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function useUpdateGoldenCollection() {
+  return useGoldenMutation<
+    { collectionId: string; expectedRevision: number } & Partial<
+      Pick<GoldenCollection, "name" | "description" | "dimensions" | "tags" | "status">
+    >,
+    GoldenCollection
+  >(({ collectionId, ...payload }) =>
+    goldenJson(`/api/golden-dataset/collections/${collectionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function useUpsertGoldenMembership() {
+  return useGoldenMutation<
+    {
+      collectionId: string;
+      expectedRevision: number;
+      exampleId: string;
+      annotations: GoldenCollection["memberships"][number]["annotations"];
+      weight?: number;
+      notes?: string;
+    },
+    GoldenCollection
+  >(({ collectionId, ...payload }) =>
+    goldenJson(`/api/golden-dataset/collections/${collectionId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function useUpsertGoldenMemberships() {
+  return useGoldenMutation<
+    {
+      collectionId: string;
+      expectedRevision: number;
+      members: Array<{
+        exampleId: string;
+        annotations: GoldenCollection["memberships"][number]["annotations"];
+        weight?: number;
+        notes?: string;
+      }>;
+    },
+    GoldenCollection
+  >(({ collectionId, ...payload }) =>
+    goldenJson(`/api/golden-dataset/collections/${collectionId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function useRemoveGoldenMembership() {
+  return useGoldenMutation<
+    { collectionId: string; exampleId: string; expectedRevision: number },
+    GoldenCollection
+  >(({ collectionId, exampleId, expectedRevision }) =>
+    goldenJson(
+      `/api/golden-dataset/collections/${collectionId}/members/${exampleId}?expectedRevision=${expectedRevision}`,
+      { method: "DELETE" }
+    )
+  );
+}
+
+export function useRemoveGoldenMemberships() {
+  return useGoldenMutation<
+    { collectionId: string; exampleIds: string[]; expectedRevision: number },
+    GoldenCollection
+  >(({ collectionId, ...payload }) =>
+    goldenJson(`/api/golden-dataset/collections/${collectionId}/members`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function usePublishGoldenCollection() {
+  return useGoldenMutation<
+    { collectionId: string; version: string; expectedRevision: number; publisherId: string },
+    GoldenDatasetVersion
+  >(({ collectionId, ...payload }) =>
+    goldenJson(`/api/golden-dataset/collections/${collectionId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+export function useSyncApprovedGoldenExamples() {
+  return useGoldenMutation<{ runIds: string[] }, { imported: number; reused: number }>(
+    (payload) =>
+      goldenJson("/api/golden-dataset/examples/sync-approved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+  );
 }
 
 /**

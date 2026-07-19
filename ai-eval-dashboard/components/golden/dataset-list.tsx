@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   Database,
-  Download,
   Eye,
   Archive,
   FileJson,

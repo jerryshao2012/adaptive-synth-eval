@@ -11,8 +11,9 @@ The dashboard provides three views:
   group failures, and drill into source turn and trace records.
 - **Review Queue** — filter monitored turns, compare AI scores with human
   decisions, and save individual or bulk review actions.
-- **Golden Dataset** — collect approved reviews into versioned datasets and
-  export them as JSONL or CSV.
+- **Golden Dataset** — sync approved reviews into a canonical example library,
+  reuse examples in metric-specific collections, and publish immutable JSONL or
+  CSV versions.
 
 The root page redirects to `/monitor`.
 
@@ -113,11 +114,31 @@ Run-scoped files live in `outputs/runs/<run_id>/`:
 | `turns.jsonl` | Additional unified-turn detail in trace drill-down, when present |
 | `human_reviews.jsonl` | Human review decisions written by the Review Queue |
 
-Golden-dataset metadata is written to
-`outputs/golden_datasets/<dataset_id>.json`. Exports are assembled on demand from
-the dataset's current record references, monitoring records, and matching human
-reviews. New datasets initially select approved reviews, but exporting does not
-recheck approval status after the dataset metadata has been updated.
+Reusable golden-dataset artifacts use schema version 2:
+
+```text
+outputs/golden_datasets/
+├── examples/<example_id>.json
+├── collections/<collection_id>.json
+└── versions/<collection_id>/<semantic_version>.json
+```
+
+An example snapshots approved prompt/response content, review evidence, source
+provenance, and a normalized content fingerprint. Collections reference those
+examples through memberships whose expected outcome and rationale are specific
+to each metric dimension. Publishing copies the complete content and annotation
+manifest into an immutable version, so exports do not depend on the continued
+existence of the source run.
+
+Legacy `outputs/golden_datasets/<dataset_id>.json` files remain readable and
+exportable. An explicit upgrade preflights every referenced review before
+creating v2 artifacts and leaves the legacy file unchanged. Draft preview
+exports are marked as mutable; reproducible consumers should use a published
+semantic version.
+
+See the combined [golden dataset guide](../docs/golden_datasets.md) for the
+curator workflow, data relationships, deduplication rules, version lifecycle,
+API contracts, exports, and legacy-upgrade limitations.
 
 ## Server and API behavior
 
@@ -143,15 +164,22 @@ All dashboard data access is implemented by Node.js server routes:
   reports missing, empty, or malformed artifacts.
 - `/api/review/*` builds the review queue from monitoring scores and persists
   review decisions to each run's `human_reviews.jsonl`.
-- `/api/golden-dataset/*` creates and updates dataset metadata and exports
-  the dataset's referenced records as JSONL or CSV.
+- `/api/golden-dataset/examples/*` searches canonical examples, imports approved
+  review snapshots, edits tags, and synchronizes approved reviews from runs.
+- `/api/golden-dataset/collections/*` manages collections and atomic bulk
+  memberships with optimistic revisions, publishes immutable versions, and
+  exports draft previews or version-pinned JSONL/CSV files.
+- The original `/api/golden-dataset` and `/api/golden-dataset/<id>` routes remain
+  compatibility endpoints for legacy flat artifacts; `POST
+  /api/golden-dataset/<id>/upgrade` performs the explicit v2 conversion.
 
 ### Local-only security boundary
 
 This application is designed for a trusted local checkout, not direct exposure
 to untrusted users or a public network. The monitoring launch and log routes
-validate run identifiers and bind file access beneath `outputs/runs`, but other
-server routes also accept run or dataset identifiers used in filesystem paths.
+validate run and golden-dataset identifiers and bind those file operations
+beneath their expected output directories, but other server routes also accept
+identifiers used in filesystem paths.
 The application has no built-in authentication or authorization. Put an
 authenticated, input-validating service boundary in front of it before any
 shared or remote deployment.

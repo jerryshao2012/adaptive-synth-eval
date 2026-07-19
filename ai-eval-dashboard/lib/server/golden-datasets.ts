@@ -9,12 +9,28 @@ import { getHumanReviews } from "@/lib/server/reviews";
 const REPO_ROOT = path.resolve(process.cwd(), "..");
 const DATASETS_DIR = path.join(REPO_ROOT, "outputs", "golden_datasets");
 
+export class LegacyDatasetIdError extends Error {
+  constructor() {
+    super("datasetId must be one safe path segment.");
+    this.name = "LegacyDatasetIdError";
+  }
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
 function datasetPath(datasetId: string): string {
-  return path.join(DATASETS_DIR, `${datasetId}.json`);
+  const normalized = datasetId.trim();
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized === ".." ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(normalized)
+  ) {
+    throw new LegacyDatasetIdError();
+  }
+  return path.join(DATASETS_DIR, `${normalized}.json`);
 }
 
 // ---- CRUD ----

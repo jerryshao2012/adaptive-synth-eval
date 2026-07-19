@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDataset, updateDataset } from "@/lib/server/golden-datasets";
+import {
+  getDataset,
+  LegacyDatasetIdError,
+  updateDataset,
+} from "@/lib/server/golden-datasets";
 
 export const runtime = "nodejs";
 
@@ -16,6 +20,9 @@ export async function GET(
     }
     return NextResponse.json(dataset);
   } catch (error) {
+    if (error instanceof LegacyDatasetIdError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const message =
       error instanceof Error ? error.message : "Failed to load dataset.";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -45,6 +52,9 @@ export async function PUT(
     }
     return NextResponse.json(updated);
   } catch (error) {
+    if (error instanceof LegacyDatasetIdError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const message =
       error instanceof Error ? error.message : "Failed to update dataset.";
     return NextResponse.json({ error: message }, { status: 500 });
