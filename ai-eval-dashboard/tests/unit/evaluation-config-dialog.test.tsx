@@ -52,7 +52,7 @@ describe("EvaluationConfigDialog", () => {
     expect((screen.getByLabelText("Max windows") as HTMLInputElement).value).toBe("6");
   });
 
-  it("resets local edits from new initial values each time it opens", async () => {
+  it("resets local edits from the latest initial values after closing and reopening the same action", async () => {
     const user = userEvent.setup();
     const { rerender, props } = renderDialog();
     const interval = screen.getByLabelText("Interval minutes");
@@ -64,13 +64,34 @@ describe("EvaluationConfigDialog", () => {
       <EvaluationConfigDialog
         {...props}
         open
-        action="continue"
         initialValues={{ ...INITIAL_VALUES, intervalMinutes: 30, maxWindows: null }}
       />
     );
 
     expect((screen.getByLabelText("Interval minutes") as HTMLInputElement).value).toBe("30");
     expect((screen.getByLabelText("Max windows") as HTMLInputElement).value).toBe("");
+  });
+
+  it("preserves edits and validation errors when polling updates initial values while open", async () => {
+    const user = userEvent.setup();
+    const { rerender, props } = renderDialog();
+    const interval = screen.getByLabelText("Interval minutes");
+    await user.clear(interval);
+    await user.type(interval, "99");
+    fireEvent.change(screen.getByLabelText("Max windows"), {
+      target: { value: "0" },
+    });
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+
+    rerender(
+      <EvaluationConfigDialog
+        {...props}
+        initialValues={{ ...INITIAL_VALUES, intervalMinutes: 30, maxWindows: 8 }}
+      />
+    );
+
+    expect((screen.getByLabelText("Interval minutes") as HTMLInputElement).value).toBe("99");
+    expect(screen.getByText("Max windows must be a positive integer or left blank.")).toBeTruthy();
   });
 
   it("disables sample size for all rows and enables it for sampled strategies", async () => {
@@ -124,6 +145,26 @@ describe("EvaluationConfigDialog", () => {
     );
   });
 
+  it("submits all rows with the normalized sample size when retained sample text is invalid", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderDialog({ onSubmit });
+    await user.clear(screen.getByLabelText("Sample size"));
+    await user.selectOptions(screen.getByLabelText("Sampling strategy"), "all");
+
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({
+        samplingStrategy: "all",
+        sampleSize: 24,
+        intervalMinutes: 15,
+        maxWindows: 6,
+      })
+    );
+    expect(screen.queryByText("Sample size must be a positive integer.")).toBeNull();
+  });
+
   it("shows a server error without closing", () => {
     const onOpenChange = vi.fn();
     renderDialog({ serverError: "The evaluation launch is already active.", onOpenChange });
@@ -159,8 +200,58 @@ describe("EvaluationConfigDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "Starting evaluation" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector("form")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("status").textContent).toContain("Evaluation launch is in progress.");
 
     resolveSubmit?.();
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("preserves pending state and blocks duplicate or close actions across polling updates", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn(() => new Promise<void>(() => {}));
+    const onOpenChange = vi.fn();
+    const { rerender, props } = renderDialog({ onSubmit, onOpenChange });
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+
+    rerender(
+      <EvaluationConfigDialog
+        {...props}
+        initialValues={{ ...INITIAL_VALUES, intervalMinutes: 30 }}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Starting evaluation" }));
+    await user.keyboard("{Escape}");
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("focuses and announces the first invalid control", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.selectOptions(screen.getByLabelText("Sampling strategy"), "random");
+    fireEvent.change(screen.getByLabelText("Sample size"), {
+      target: { value: "0" },
+    });
+    fireEvent.change(screen.getByLabelText("Interval minutes"), {
+      target: { value: "0" },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+
+    expect(document.activeElement).toBe(screen.getByLabelText("Sample size"));
+    expect(screen.getAllByRole("alert")[0].textContent).toContain(
+      "Sample size must be a positive integer."
+    );
+  });
+
+  it("keeps the dialog scrollable within the dynamic viewport", () => {
+    renderDialog();
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("max-h-[calc(100dvh-2rem)]");
+    expect(dialog.className).toContain("overflow-y-auto");
   });
 });

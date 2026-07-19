@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -91,13 +91,21 @@ function EvaluationConfigDialogSession({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fallbackSampleSize] = useState(initialValues.sampleSize);
+  const sampleSizeRef = useRef<HTMLInputElement>(null);
+  const intervalMinutesRef = useRef<HTMLInputElement>(null);
+  const maxWindowsRef = useRef<HTMLInputElement>(null);
 
   const content = ACTION_CONTENT[action];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const sampleSize = parsePositiveInteger(sampleSizeText);
+    const parsedSampleSize = parsePositiveInteger(sampleSizeText);
+    const sampleSize =
+      samplingStrategy === "all"
+        ? parsedSampleSize ?? fallbackSampleSize
+        : parsedSampleSize;
     const intervalMinutes = parsePositiveInteger(intervalMinutesText);
     const maxWindows =
       maxWindowsText.trim() === ""
@@ -105,7 +113,7 @@ function EvaluationConfigDialogSession({
         : parsePositiveInteger(maxWindowsText);
     const nextErrors: Record<string, string> = {};
 
-    if (sampleSize === null) {
+    if (samplingStrategy !== "all" && sampleSize === null) {
       nextErrors.sampleSize = "Sample size must be a positive integer.";
     }
     if (intervalMinutes === null) {
@@ -119,7 +127,16 @@ function EvaluationConfigDialogSession({
 
     setErrors(nextErrors);
     setSubmissionError(null);
-    if (Object.keys(nextErrors).length > 0) return;
+    if (Object.keys(nextErrors).length > 0) {
+      if (nextErrors.sampleSize) {
+        sampleSizeRef.current?.focus();
+      } else if (nextErrors.intervalMinutes) {
+        intervalMinutesRef.current?.focus();
+      } else {
+        maxWindowsRef.current?.focus();
+      }
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -149,7 +166,7 @@ function EvaluationConfigDialogSession({
       }}
     >
       <DialogContent
-        className="max-w-md border-border bg-card text-foreground"
+        className="max-h-[calc(100dvh-2rem)] max-w-md overflow-y-auto border-border bg-card text-foreground"
         showCloseButton={!isSubmitting}
       >
         <DialogHeader>
@@ -159,7 +176,12 @@ function EvaluationConfigDialogSession({
           <DialogDescription>{content.description}</DialogDescription>
         </DialogHeader>
 
-        <form className="space-y-4" noValidate onSubmit={handleSubmit}>
+        <form
+          className="space-y-4"
+          noValidate
+          onSubmit={handleSubmit}
+          aria-busy={isSubmitting}
+        >
           <div>
             <label className={LABEL_CLASS_NAME} htmlFor="evaluation-sampling-strategy">
               Sampling strategy
@@ -188,6 +210,7 @@ function EvaluationConfigDialogSession({
             </label>
             <input
               id="evaluation-sample-size"
+              ref={sampleSizeRef}
               className={CONTROL_CLASS_NAME}
               type="number"
               inputMode="numeric"
@@ -207,6 +230,8 @@ function EvaluationConfigDialogSession({
               <p
                 className={ERROR_CLASS_NAME}
                 id="evaluation-sample-size-error"
+                role="alert"
+                aria-live="polite"
               >
                 {errors.sampleSize}
               </p>
@@ -228,6 +253,7 @@ function EvaluationConfigDialogSession({
             </label>
             <input
               id="evaluation-interval-minutes"
+              ref={intervalMinutesRef}
               className={CONTROL_CLASS_NAME}
               type="number"
               inputMode="numeric"
@@ -247,6 +273,8 @@ function EvaluationConfigDialogSession({
               <p
                 className={ERROR_CLASS_NAME}
                 id="evaluation-interval-minutes-error"
+                role="alert"
+                aria-live="polite"
               >
                 {errors.intervalMinutes}
               </p>
@@ -266,6 +294,7 @@ function EvaluationConfigDialogSession({
             </label>
             <input
               id="evaluation-max-windows"
+              ref={maxWindowsRef}
               className={CONTROL_CLASS_NAME}
               type="number"
               inputMode="numeric"
@@ -282,7 +311,12 @@ function EvaluationConfigDialogSession({
               }
             />
             {errors.maxWindows ? (
-              <p className={ERROR_CLASS_NAME} id="evaluation-max-windows-error">
+              <p
+                className={ERROR_CLASS_NAME}
+                id="evaluation-max-windows-error"
+                role="alert"
+                aria-live="polite"
+              >
                 {errors.maxWindows}
               </p>
             ) : (
@@ -296,10 +330,15 @@ function EvaluationConfigDialogSession({
             <p
               className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               role="alert"
+              aria-live="polite"
             >
               {submissionError || serverError}
             </p>
           )}
+
+          <p className="sr-only" role="status" aria-live="polite">
+            {isSubmitting ? "Evaluation launch is in progress." : ""}
+          </p>
 
           <DialogFooter className="mt-4">
             <Button
@@ -321,17 +360,11 @@ function EvaluationConfigDialogSession({
 }
 
 export function EvaluationConfigDialog(props: EvaluationConfigDialogProps) {
-  const resetKey = props.open
-    ? [
-        props.action,
-        props.initialValues.samplingStrategy,
-        props.initialValues.sampleSize,
-        props.initialValues.intervalMinutes,
-        props.initialValues.maxWindows ?? "unlimited",
-      ].join(":")
-    : "closed";
+  if (!props.open) {
+    return <Dialog open={false} onOpenChange={props.onOpenChange} />;
+  }
 
-  return <EvaluationConfigDialogSession key={resetKey} {...props} />;
+  return <EvaluationConfigDialogSession key={props.action} {...props} />;
 }
 
 export type { EvaluationConfigDialogProps };
