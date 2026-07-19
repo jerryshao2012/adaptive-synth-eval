@@ -51,3 +51,8 @@ pythonpath = ["src"]
 [tool.uv]
 package = true
 link-mode = "copy"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+]
