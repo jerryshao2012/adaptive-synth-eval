@@ -321,10 +321,7 @@ export default function DashboardPage() {
                 if (
                   !overlay ||
                   overlay.key !== launchKey ||
-                  !hasPostAcceptanceStatusEvidence(
-                    preparedOverlay,
-                    refreshedStatus.data
-                  )
+                  refreshedStatus.data?.runId !== launchIntent.runId
                 ) {
                   return current;
                 }

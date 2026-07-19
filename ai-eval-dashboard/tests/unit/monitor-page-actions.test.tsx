@@ -298,7 +298,7 @@ describe("Monitor page evaluation configuration", () => {
     ).toBeTruthy();
   });
 
-  it("ignores a stale completed poll that resolves during the launch POST", async () => {
+  it("ignores a stale pre-accept poll, then trusts the equal-timestamp explicit result", async () => {
     const user = userEvent.setup();
     const launch = deferred<{
       runId: string;
@@ -351,8 +351,52 @@ describe("Monitor page evaluation configuration", () => {
       await postAcceptanceStatus.promise;
     });
     expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
+  });
+
+  it("releases a legacy null-timestamp overlay from its explicit matching result", async () => {
+    const user = userEvent.setup();
+    const legacyStatus: MonitoringRunStatus = {
+      ...completedStatus,
+      updatedAt: undefined,
+      state: {
+        sampling_strategy: "systematic",
+        sample_size: 24,
+        interval_minutes: 15,
+        max_windows: null,
+      },
+    };
+    const postAcceptanceStatus = deferred<{
+      data: MonitoringRunStatus;
+    }>();
+    hookState.statuses["run-1"] = legacyStatus;
+    hookState.prepareStatusRefreshAfterLaunch.mockResolvedValue({
+      baseline: legacyStatus,
+      result: postAcceptanceStatus.promise,
+    });
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("button", { name: "Re-evaluate" }));
+    await user.click(
+      screen.getByRole("button", { name: "Re-evaluate run" })
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Re-evaluate run" })
+      ).toBeNull()
+    );
+    expect(
       screen.queryByRole("button", { name: "Re-evaluate" })
     ).toBeNull();
+
+    await act(async () => {
+      postAcceptanceStatus.resolve({ data: { ...legacyStatus } });
+      await postAcceptanceStatus.promise;
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Re-evaluate" })
+    ).toBeTruthy();
   });
 
   it("retains independent run overlays until each post-acceptance completion arrives", async () => {
