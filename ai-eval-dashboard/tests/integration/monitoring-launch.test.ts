@@ -37,6 +37,7 @@ afterEach(async () => {
 class FakeChild extends EventEmitter implements LaunchChild {
   pid: number | undefined;
   unref = vi.fn();
+  kill = vi.fn<LaunchChild["kill"]>(() => true);
 
   constructor(pid = 4321) {
     super();
@@ -244,6 +245,27 @@ describe("monitoring launch transaction", () => {
     await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
   });
 
+  it("closes the log and removes its lock when writing the launch boundary fails", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const close = vi.fn(async () => undefined);
+    const spawn = vi.fn<MonitoringLaunchDependencies["spawn"]>();
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn,
+      openLog: async () => ({
+        fd: 99,
+        appendFile: async () => { throw new Error("boundary write failed"); },
+        close,
+      }),
+      launchId: () => "boundary-failure",
+    });
+
+    await expect(launcher(request())).rejects.toThrow("boundary write failed");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+  });
+
   it("closes the log and removes its lock when spawn emits an error", async () => {
     const { repoRoot, runDir } = await makeRepo();
     const close = vi.fn(async () => undefined);
@@ -295,6 +317,165 @@ describe("monitoring launch transaction", () => {
     expect(child.unref).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
     await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+  });
+
+  it("escalates from SIGTERM to SIGKILL and confirms close before removing the lock", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const events: string[] = [];
+    const child = new FakeChild();
+    const removeMatchingLock = vi.fn(async (lockPath: string, launchId: string) => {
+      events.push("lock-remove");
+      const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+      if (lock.launchId === launchId) await fs.unlink(lockPath);
+    });
+    const kill = vi.fn((_pid: number, signal?: NodeJS.Signals | 0) => {
+      events.push(`kill-${signal}`);
+      if (signal === "SIGKILL") {
+        queueMicrotask(() => {
+          events.push("child-close");
+          child.emit("close", null, "SIGKILL");
+        });
+      }
+      return true;
+    });
+
+    await expect(createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      removeMatchingLock,
+      kill,
+      terminationGraceMs: 1,
+    })(request())).rejects.toThrow("promotion failed");
+
+    expect(kill.mock.calls).toEqual([[-4321, "SIGTERM"], [-4321, "SIGKILL"]]);
+    expect(events.indexOf("child-close")).toBeLessThan(events.indexOf("lock-remove"));
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+  });
+
+  it("retains the lock and surfaces rollback failure when group signaling throws", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const child = new FakeChild();
+    const close = vi.fn(async () => undefined);
+    const removeMatchingLock = vi.fn<NonNullable<MonitoringLaunchDependencies["removeMatchingLock"]>>();
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      openLog: async () => ({ fd: 99, appendFile: async () => undefined, close }),
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      removeMatchingLock,
+      kill: () => { throw Object.assign(new Error("signal denied"), { code: "EACCES" }); },
+      terminationGraceMs: 1,
+    });
+
+    await expect(launcher(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("lock retained"),
+    });
+    expect(removeMatchingLock).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).resolves.toBeUndefined();
+  });
+
+  it("bounds the SIGKILL wait and retains the lock when the child never closes", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const child = new FakeChild();
+    const close = vi.fn(async () => undefined);
+    const kill = vi.fn(() => true);
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      openLog: async () => ({ fd: 99, appendFile: async () => undefined, close }),
+      promoteLock: async () => { throw new Error("promotion failed"); },
+      kill,
+      terminationGraceMs: 1,
+    });
+
+    await expect(launcher(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("lock retained"),
+    });
+    expect(kill.mock.calls).toEqual([[-4321, "SIGTERM"], [-4321, "SIGKILL"]]);
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).resolves.toBeUndefined();
+  });
+
+  it("uses the child handle for a spawned child without a PID and removes the lock after close", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const events: string[] = [];
+    const child = new FakeChild();
+    child.pid = undefined;
+    child.kill.mockImplementation((signal) => {
+      events.push(`child-kill-${signal}`);
+      queueMicrotask(() => {
+        events.push("child-close");
+        child.emit("close", null, signal);
+      });
+      return true;
+    });
+    const removeMatchingLock = vi.fn(async (lockPath: string, launchId: string) => {
+      events.push("lock-remove");
+      const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+      if (lock.launchId === launchId) await fs.unlink(lockPath);
+    });
+    const groupKill = vi.fn(() => true);
+
+    await expect(createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      removeMatchingLock,
+      kill: groupKill,
+      terminationGraceMs: 1,
+    })(request())).rejects.toThrow("spawned without a PID");
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(groupKill).not.toHaveBeenCalled();
+    expect(events.indexOf("child-close")).toBeLessThan(events.indexOf("lock-remove"));
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).rejects.toBeTruthy();
+  });
+
+  it("retains the lock when a no-PID child does not close after handle termination", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const child = new FakeChild();
+    child.pid = undefined;
+    const close = vi.fn(async () => undefined);
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn: spawnSuccessfully(child),
+      openLog: async () => ({ fd: 99, appendFile: async () => undefined, close }),
+      kill: vi.fn(() => true),
+      terminationGraceMs: 1,
+    });
+
+    await expect(launcher(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("lock retained"),
+    });
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).resolves.toBeUndefined();
+  });
+
+  it("surfaces matching-lock cleanup failure and still closes the descriptor", async () => {
+    const { repoRoot, runDir } = await makeRepo();
+    const close = vi.fn(async () => undefined);
+    const launcher = createMonitoringLauncher({
+      repoRoot,
+      spawn: vi.fn<MonitoringLaunchDependencies["spawn"]>(),
+      openLog: async () => ({
+        fd: 99,
+        appendFile: async () => { throw new Error("boundary write failed"); },
+        close,
+      }),
+      removeMatchingLock: async () => { throw new Error("lock cleanup failed"); },
+    });
+
+    await expect(launcher(request())).rejects.toMatchObject({
+      name: "MonitoringLaunchRollbackError",
+      message: expect.stringContaining("lock cleanup failed"),
+    });
+    expect(close).toHaveBeenCalledOnce();
+    await expect(fs.access(path.join(runDir, MONITORING_LAUNCH_LOCK_FILE))).resolves.toBeUndefined();
   });
 });
 

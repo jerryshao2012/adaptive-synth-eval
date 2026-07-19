@@ -29,6 +29,7 @@ export interface LaunchChild {
   pid?: number;
   exitCode?: number | null;
   signalCode?: NodeJS.Signals | null;
+  kill(signal?: NodeJS.Signals | number): boolean;
   once(event: "spawn", listener: () => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "close", listener: (...args: unknown[]) => void): this;
@@ -67,6 +68,19 @@ export interface MonitoringLaunchDependencies {
 }
 
 type LivenessDependencies = Pick<MonitoringLaunchDependencies, "kill" | "now">;
+
+export class MonitoringLaunchRollbackError extends Error {
+  readonly launchError: unknown;
+  readonly rollbackError?: unknown;
+
+  constructor(message: string, launchError: unknown, rollbackError?: unknown) {
+    super(message);
+    this.name = "MonitoringLaunchRollbackError";
+    this.launchError = launchError;
+    this.rollbackError = rollbackError;
+    this.cause = launchError;
+  }
+}
 
 function defaultRepoRoot(): string {
   return path.resolve(process.cwd(), "..");
@@ -249,52 +263,103 @@ function waitForSpawn(child: LaunchChild): Promise<void> {
   });
 }
 
-function waitForClose(child: LaunchChild, timeoutMs?: number): Promise<boolean> {
+interface CloseWaiter {
+  promise: Promise<boolean>;
+  cancel(): void;
+}
+
+function waitForClose(child: LaunchChild, timeoutMs: number): CloseWaiter {
   if (child.exitCode !== null && child.exitCode !== undefined) {
-    return Promise.resolve(true);
+    return { promise: Promise.resolve(true), cancel: () => undefined };
   }
   if (child.signalCode !== null && child.signalCode !== undefined) {
-    return Promise.resolve(true);
+    return { promise: Promise.resolve(true), cancel: () => undefined };
   }
-  return new Promise((resolve) => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const onClose = () => {
+  let settle: ((closed: boolean) => void) | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let onClose: (...args: unknown[]) => void = () => undefined;
+  const promise = new Promise<boolean>((resolve) => {
+    settle = resolve;
+    onClose = () => {
       if (timeout) clearTimeout(timeout);
+      settle = undefined;
       resolve(true);
     };
     child.once("close", onClose);
-    if (timeoutMs !== undefined) {
-      timeout = setTimeout(() => {
-        child.removeListener("close", onClose);
-        resolve(false);
-      }, timeoutMs);
-    }
+    timeout = setTimeout(() => {
+      child.removeListener("close", onClose);
+      settle = undefined;
+      resolve(false);
+    }, timeoutMs);
   });
+  return {
+    promise,
+    cancel: () => {
+      if (!settle) return;
+      if (timeout) clearTimeout(timeout);
+      child.removeListener("close", onClose);
+      const resolve = settle;
+      settle = undefined;
+      resolve(false);
+    },
+  };
+}
+
+function signalDetachedChild(
+  child: LaunchChild,
+  pid: number | undefined,
+  signal: NodeJS.Signals,
+  kill: NonNullable<MonitoringLaunchDependencies["kill"]>,
+): "sent" | "absent" {
+  try {
+    if (pid) kill(-pid, signal);
+    else child.kill(signal);
+    return "sent";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      return "absent";
+    }
+    throw error;
+  }
 }
 
 async function terminateAndReap(
   child: LaunchChild,
-  pid: number,
+  pid: number | undefined,
   kill: NonNullable<MonitoringLaunchDependencies["kill"]>,
-  graceMs: number
-): Promise<void> {
-  const closedAfterTerm = waitForClose(child, graceMs);
+  timeoutMs: number
+): Promise<boolean> {
+  const closedAfterTerm = waitForClose(child, timeoutMs);
+  let termResult: "sent" | "absent";
   try {
-    kill(-pid, "SIGTERM");
+    termResult = signalDetachedChild(child, pid, "SIGTERM", kill);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    closedAfterTerm.cancel();
+    throw error;
   }
-  if (await closedAfterTerm) {
-    return;
+  if (termResult === "absent") {
+    closedAfterTerm.cancel();
+    return true;
   }
+  if (await closedAfterTerm.promise) return true;
 
-  const closedAfterKill = waitForClose(child);
+  const closedAfterKill = waitForClose(child, timeoutMs);
+  let killResult: "sent" | "absent";
   try {
-    kill(-pid, "SIGKILL");
+    killResult = signalDetachedChild(child, pid, "SIGKILL", kill);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    closedAfterKill.cancel();
+    throw error;
   }
-  await closedAfterKill;
+  if (killResult === "absent") {
+    closedAfterKill.cancel();
+    return true;
+  }
+  return closedAfterKill.promise;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function displayQuote(argument: string): string {
@@ -418,19 +483,38 @@ export function createMonitoringLauncher(
         monitoringStatus: "queued",
       };
     } catch (error) {
-      if (spawned && child?.pid) {
+      if (spawned && child) {
+        let terminated = false;
         try {
-          await terminateAndReap(
+          terminated = await terminateAndReap(
             child,
             child.pid,
             kill,
             dependencies.terminationGraceMs ?? TERMINATION_GRACE_MS
           );
-        } catch {
-          // Preserve the launch/persistence error while still releasing our lock.
+        } catch (rollbackError) {
+          throw new MonitoringLaunchRollbackError(
+            `Monitoring launch failed (${errorMessage(error)}); rollback could not confirm child termination (${errorMessage(rollbackError)}); launch lock retained.`,
+            error,
+            rollbackError
+          );
+        }
+        if (!terminated) {
+          throw new MonitoringLaunchRollbackError(
+            `Monitoring launch failed (${errorMessage(error)}); rollback timed out before child termination was confirmed; launch lock retained.`,
+            error
+          );
         }
       }
-      await removeMatchingLock(lockPath, lock.launchId);
+      try {
+        await removeMatchingLock(lockPath, lock.launchId);
+      } catch (rollbackError) {
+        throw new MonitoringLaunchRollbackError(
+          `Monitoring launch failed (${errorMessage(error)}); lock cleanup failed (${errorMessage(rollbackError)}); launch lock retained.`,
+          error,
+          rollbackError
+        );
+      }
       throw error;
     } finally {
       if (log) {
