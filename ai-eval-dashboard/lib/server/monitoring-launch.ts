@@ -125,7 +125,7 @@ export class MonitoringLaunchLockReadError extends Error {
 }
 
 function defaultRepoRoot(): string {
-  return path.resolve(process.cwd(), "..");
+  return process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..");
 }
 
 function monitoringLogPathError(): RunPathValidationError {
@@ -139,7 +139,13 @@ function runDirectoryIdentityError(): RunPathValidationError {
 }
 
 function sameFileIdentity(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  if (left.ino !== right.ino) {
+    return false;
+  }
+  if (left.dev === right.dev) {
+    return true;
+  }
+  return process.platform === "win32" && (left.dev === 0 || right.dev === 0);
 }
 
 async function assertBoundRunDirectory(

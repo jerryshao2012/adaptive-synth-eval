@@ -37,7 +37,10 @@ export async function resolveRunDirectory(
     throw new RunPathValidationError();
   }
 
-  const runsDirectory = path.resolve(repoRoot, "outputs", "runs");
+  // Support environment variable override for runs directory (useful when project is on OneDrive)
+  const runsDirectory =
+    process.env.ASE_RUNS_DIR ||
+    path.resolve(repoRoot, "outputs", "runs");
   const runDirectory = path.resolve(runsDirectory, normalized);
   const relative = path.relative(runsDirectory, runDirectory);
   if (

@@ -1,30 +1,34 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+
+import {
+  getActiveMonitoringLaunch,
+  projectMonitoringRun,
+  startMonitoringRun,
+} from "@/lib/server/monitoring-launch";
+import { resolveRunDirectory } from "@/lib/server/run-paths";
 
 import type {
   EvaluationRecord,
-  HumanReview,
-  ReviewQueueFilters,
-  ReviewQueueItem,
-  ReviewQueueResponse,
-  ReviewStats,
-  MetricScoreStatus,
+  EvaluationsResponse,
+  MetricPointIdentity,
+  MonitoringRunStatus,
+  RunSummary,
+  TraceDetailsResponse,
 } from "@/types/evaluation";
-import { METRIC_THRESHOLDS } from "@/lib/metrics";
-import {
-  listRunSummaries,
-  getMonitoringEvaluations,
-} from "@/lib/server/monitoring";
 
 const REPO_ROOT = path.resolve(process.cwd(), "..");
-const RUNS_DIR = path.join(REPO_ROOT, "outputs", "runs");
-const REVIEW_STATE_PATH = path.join(REPO_ROOT, "outputs", "review_state.json");
-const HUMAN_REVIEWS_FILE = "human_reviews.jsonl";
+// Support environment variable override for runs directory (useful when project is on OneDrive)
+const RUNS_DIR =
+  process.env.ASE_RUNS_DIR ||
+  path.join(REPO_ROOT, "outputs", "runs");
+const DEFAULT_LIMIT = 2000;
 
-// ---- Helpers (mirror monitoring.ts utilities) ----
+function runDirPath(runId: string): string {
+  return path.join(RUNS_DIR, runId);
+}
 
-async function fileExists(filePath: string): Promise<boolean> {
+export async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
@@ -33,7 +37,7 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
+export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return JSON.parse(content) as T;
@@ -42,7 +46,15 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
-async function readJsonLines<T>(filePath: string): Promise<T[]> {
+async function readTextFile(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+export async function readJsonLines<T>(filePath: string): Promise<T[]> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return content
@@ -61,435 +73,241 @@ async function readJsonLines<T>(filePath: string): Promise<T[]> {
   }
 }
 
-async function appendJsonLine(
-  filePath: string,
-  row: Record<string, unknown>
-): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.appendFile(filePath, JSON.stringify(row) + "\n", "utf-8");
+function safeNumber(value: unknown): number {
+  return typeof value === "number" ? value : Number(value || 0);
 }
 
-function runDirPath(runId: string): string {
-  return path.join(RUNS_DIR, runId);
+function clampPercent(completed: number, total: number): number {
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Number(((completed / total) * 100).toFixed(2))));
 }
 
-function metricKeys(): string[] {
-  return Object.keys(METRIC_THRESHOLDS);
+function sortRuns(a: RunSummary, b: RunSummary): number {
+  const left = a.updatedAt || a.startedAt || "";
+  const right = b.updatedAt || b.startedAt || "";
+  return right.localeCompare(left);
 }
 
-function avgAiScore(record: EvaluationRecord): number {
-  const allMetrics = [
-    ...Object.values(record.safety_metrics),
-    ...Object.values(record.performance_metrics),
-  ];
-  if (allMetrics.length === 0) return 0;
-  return Math.round(
-    allMetrics.reduce((sum, m) => sum + m.percent, 0) / allMetrics.length
-  );
-}
-
-function compositeKey(
-  runId: string,
-  conversationId: string,
-  turnId: string
-): string {
-  return `${runId}::${conversationId}::${turnId}`;
-}
-
-// ---- Human Review CRUD ----
-
-export async function getHumanReviews(
-  runId: string
-): Promise<HumanReview[]> {
-  const filePath = path.join(runDirPath(runId), HUMAN_REVIEWS_FILE);
-  return readJsonLines<HumanReview>(filePath);
-}
-
-export async function saveHumanReview(
-  review: HumanReview
-): Promise<void> {
-  const filePath = path.join(runDirPath(review.runId), HUMAN_REVIEWS_FILE);
-
-  // Read existing, deduplicate by reviewId
-  const existing = await getHumanReviews(review.runId);
-  const filtered = existing.filter((r) => r.reviewId !== review.reviewId);
-
-  // Rewrite file with deduplicated + new review
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  const lines = [...filtered, review]
-    .map((r) => JSON.stringify(r))
-    .join("\n");
-  await fs.writeFile(filePath, lines + (lines ? "\n" : ""), "utf-8");
-}
-
-// ---- Review Queue Builder ----
-
-export async function getReviewQueue(
-  filters: ReviewQueueFilters = {}
-): Promise<ReviewQueueResponse> {
-  const page = filters.page ?? 1;
-  const pageSize = filters.pageSize ?? 50;
-
-  // 1. Get all runs
-  const runs = await listRunSummaries();
-  const runIds = filters.runId ? [filters.runId] : runs.map((r) => r.runId);
-
-  // 2. For each run, load evaluations and existing reviews
-  const allItems: ReviewQueueItem[] = [];
-
-  for (const runId of runIds) {
-    const evalResp = await getMonitoringEvaluations(runId);
-    if (!evalResp) continue;
-
-    const reviews = await getHumanReviews(runId);
-    const reviewMap = new Map<string, HumanReview>();
-    for (const r of reviews) {
-      reviewMap.set(compositeKey(r.runId, r.conversationId, r.turnId), r);
-    }
-
-    for (const record of evalResp.evaluations) {
-      const key = compositeKey(
-        runId,
-        record.conversation_id || "",
-        String(record.turn_id)
-      );
-      const review = reviewMap.get(key) || null;
-
-      const item: ReviewQueueItem = {
-        runId,
-        conversationId: record.conversation_id || "",
-        turnId: String(record.turn_id),
-        userText: record.user_text,
-        responseText: record.response_text,
-        timestamp: record.timestamp,
-        safetyStatus: record.safety_status,
-        performanceStatus: record.performance_status,
-        avgAiScore: avgAiScore(record),
-        hasHumanReview: Boolean(review),
-        reviewStatus: review?.reviewStatus ?? null,
-        flags: review?.flags ?? [],
-        reviewedAt: review?.reviewedAt ?? null,
-      };
-
-      allItems.push(item);
-    }
+export async function listRunSummaries(): Promise<RunSummary[]> {
+  let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    entries = (await fs.readdir(RUNS_DIR, {
+      withFileTypes: true,
+    })) as Array<{ name: string; isDirectory: () => boolean }>;
+  } catch {
+    return [];
   }
 
-  // 3. Apply filters
-  let filtered = allItems.filter((item) => {
-    if (filters.status) {
-      if (
-        item.safetyStatus !== filters.status &&
-        item.performanceStatus !== filters.status
-      ) {
-        return false;
-      }
-    }
-    if (filters.searchText) {
-      const q = filters.searchText.toLowerCase();
-      if (
-        !item.userText.toLowerCase().includes(q) &&
-        !item.responseText.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
-    }
-    if (filters.disputedOnly) {
-      if (!item.flags.includes("disputed")) return false;
-    }
-    if (filters.unreviewedOnly) {
-      if (item.hasHumanReview) return false;
-    }
-    return true;
-  });
+  const runs = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const runId = entry.name;
+        const runDir = runDirPath(runId);
+        const monitoringState = await readJsonFile<Record<string, unknown>>(
+          path.join(runDir, "monitoring_state.json")
+        );
+        const runState = await readJsonFile<Record<string, unknown>>(
+          path.join(runDir, "run_state.json")
+        );
+        const runSummary = await readJsonFile<Record<string, unknown>>(
+          path.join(runDir, "run_summary.json")
+        );
+        const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
+        const activeLaunch = await getActiveMonitoringLaunch(runDir);
+        const projection = projectMonitoringRun(monitoringState, activeLaunch);
 
-  // 4. Sort
-  const sortBy = filters.sortBy || "timestamp";
-  const sortOrder = filters.sortOrder || "desc";
-  filtered.sort((a, b) => {
-    let cmp = 0;
-    switch (sortBy) {
-      case "timestamp":
-        cmp = a.timestamp.localeCompare(b.timestamp);
-        break;
-      case "avgAiScore":
-        cmp = a.avgAiScore - b.avgAiScore;
-        break;
-      case "safetyStatus":
-        cmp = a.safetyStatus.localeCompare(b.safetyStatus);
-        break;
-      case "reviewStatus":
-        cmp = (a.reviewStatus || "").localeCompare(b.reviewStatus || "");
-        break;
-    }
-    return sortOrder === "asc" ? cmp : -cmp;
-  });
+        const progressCompleted = safeNumber(
+          monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
+        );
+        const progressTotal = safeNumber(monitoringState?.total_lines ?? 0);
 
-  // 5. Paginate
-  const total = filtered.length;
-  const start = (page - 1) * pageSize;
-  const items = filtered.slice(start, start + pageSize);
-
-  return { items, total, page, pageSize };
-}
-
-// ---- Review Detail ----
-
-export async function getReviewDetail(
-  runId: string,
-  turnId: string
-): Promise<{
-  evaluation: EvaluationRecord;
-  existingReview: HumanReview | null;
-} | null> {
-  const evalResp = await getMonitoringEvaluations(runId);
-  if (!evalResp) return null;
-
-  const evaluation = evalResp.evaluations.find(
-    (e) => String(e.turn_id) === turnId
-  );
-  if (!evaluation) return null;
-
-  const reviews = await getHumanReviews(runId);
-  const existingReview =
-    reviews.find(
-      (r) => r.runId === runId && r.turnId === turnId
-    ) ?? null;
-
-  return { evaluation, existingReview };
-}
-
-// ---- Bulk Operations ----
-
-export async function bulkApprove(
-  recordRefs: Array<{ runId: string; turnId: string }>
-): Promise<number> {
-  let count = 0;
-  for (const { runId, turnId } of recordRefs) {
-    const detail = await getReviewDetail(runId, turnId);
-    if (!detail) continue;
-
-    const { evaluation, existingReview } = detail;
-
-    // Build human scores from AI scores
-    const safetyScores: HumanReview["safetyScores"] = {};
-    for (const [key, m] of Object.entries(evaluation.safety_metrics)) {
-      safetyScores[key] = {
-        aiScore: m.percent,
-        humanScore: m.percent,
-        status: m.status,
-      };
-    }
-    const performanceScores: HumanReview["performanceScores"] = {};
-    for (const [key, m] of Object.entries(evaluation.performance_metrics)) {
-      performanceScores[key] = {
-        aiScore: m.percent,
-        humanScore: m.percent,
-        status: m.status,
-      };
-    }
-
-    const now = new Date().toISOString();
-    const review: HumanReview = {
-      reviewId: existingReview?.reviewId ?? randomUUID(),
-      evaluationRecordId: compositeKey(
-        runId,
-        evaluation.conversation_id || "",
-        String(evaluation.turn_id)
-      ),
-      runId,
-      conversationId: evaluation.conversation_id || "",
-      turnId: String(evaluation.turn_id),
-      reviewerId: "auto-approved",
-      reviewStatus: "approved",
-      safetyScores,
-      performanceScores,
-      overallStatus:
-        evaluation.safety_status === "fail" ||
-        evaluation.performance_status === "fail"
-          ? "fail"
-          : evaluation.safety_status === "warn" ||
-              evaluation.performance_status === "warn"
-            ? "warn"
-            : "pass",
-      notes: existingReview?.notes ?? "",
-      flags: existingReview?.flags ?? ["reviewed_ok"],
-      reviewedAt: now,
-      createdAt: existingReview?.createdAt ?? now,
-      updatedAt: now,
-    };
-
-    await saveHumanReview(review);
-    count++;
-  }
-  return count;
-}
-
-export async function bulkFlag(
-  recordRefs: Array<{ runId: string; turnId: string }>,
-  flag: string
-): Promise<number> {
-  let count = 0;
-  for (const { runId, turnId } of recordRefs) {
-    const detail = await getReviewDetail(runId, turnId);
-    if (!detail) continue;
-
-    const { evaluation, existingReview } = detail;
-    const now = new Date().toISOString();
-
-    // If no review exists, create a draft one with the flag
-    const safetyScores =
-      existingReview?.safetyScores ??
-      Object.fromEntries(
-        Object.entries(evaluation.safety_metrics).map(([key, m]) => [
-          key,
-          { aiScore: m.percent, humanScore: m.percent, status: m.status },
-        ])
-      );
-
-    const performanceScores =
-      existingReview?.performanceScores ??
-      Object.fromEntries(
-        Object.entries(evaluation.performance_metrics).map(([key, m]) => [
-          key,
-          { aiScore: m.percent, humanScore: m.percent, status: m.status },
-        ])
-      );
-
-    const existingFlags = existingReview?.flags ?? [];
-    const newFlags = existingFlags.includes(flag as HumanReview["flags"][number])
-      ? existingFlags
-      : [...existingFlags, flag as HumanReview["flags"][number]];
-
-    const review: HumanReview = {
-      reviewId: existingReview?.reviewId ?? randomUUID(),
-      evaluationRecordId: compositeKey(
-        runId,
-        evaluation.conversation_id || "",
-        String(evaluation.turn_id)
-      ),
-      runId,
-      conversationId: evaluation.conversation_id || "",
-      turnId: String(evaluation.turn_id),
-      reviewerId: existingReview?.reviewerId ?? "bulk-flag",
-      reviewStatus: existingReview?.reviewStatus ?? "draft",
-      safetyScores,
-      performanceScores,
-      overallStatus:
-        existingReview?.overallStatus ??
-        (evaluation.safety_status === "fail" ||
-        evaluation.performance_status === "fail"
-          ? "fail"
-          : evaluation.safety_status === "warn" ||
-              evaluation.performance_status === "warn"
-            ? "warn"
-            : "pass"),
-      notes: existingReview?.notes ?? "",
-      flags: newFlags,
-      reviewedAt: existingReview?.reviewedAt ?? now,
-      createdAt: existingReview?.createdAt ?? now,
-      updatedAt: now,
-    };
-
-    await saveHumanReview(review);
-    count++;
-  }
-  return count;
-}
-
-// ---- Review Stats ----
-
-export async function getReviewStats(): Promise<ReviewStats> {
-  const runs = await listRunSummaries();
-
-  let totalRecords = 0;
-  let reviewedCount = 0;
-  let draftCount = 0;
-  let approvedCount = 0;
-  let disputedCount = 0;
-  const totalAgreementSum = 0;
-  const totalAgreementCount = 0;
-  const perMetricAgreementSums: Record<string, number> = {};
-  const perMetricAgreementCounts: Record<string, number> = {};
-  for (const key of metricKeys()) {
-    perMetricAgreementSums[key] = 0;
-    perMetricAgreementCounts[key] = 0;
-  }
-
-  for (const run of runs) {
-    const evalResp = await getMonitoringEvaluations(run.runId);
-    if (!evalResp) continue;
-
-    const reviews = await getHumanReviews(run.runId);
-    const reviewMap = new Map<string, HumanReview>();
-    for (const r of reviews) {
-      reviewMap.set(compositeKey(r.runId, r.conversationId, r.turnId), r);
-    }
-
-    for (const record of evalResp.evaluations) {
-      totalRecords++;
-      const key = compositeKey(
-        run.runId,
-        record.conversation_id || "",
-        String(record.turn_id)
-      );
-      const review = reviewMap.get(key);
-
-      if (review) {
-        reviewedCount++;
-        if (review.reviewStatus === "draft") draftCount++;
-        if (review.reviewStatus === "approved") approvedCount++;
-        if (review.flags.includes("disputed")) disputedCount++;
-
-        // Per-metric agreement
-        const allScores = {
-          ...review.safetyScores,
-          ...review.performanceScores,
+        const summary: RunSummary = {
+          runId,
+          mode: String(runSummary?.mode || runState?.mode || "unknown"),
+          monitoringStatus: projection.monitoringStatus,
+          startedAt: String(
+            monitoringState?.started_at || runState?.started_at || runSummary?.started_at || ""
+          ),
+          updatedAt: String(
+            monitoringState?.updated_at || runState?.updated_at || runSummary?.completed_at || ""
+          ),
+          completedAt: runSummary?.completed_at ? String(runSummary.completed_at) : undefined,
+          progress: {
+            completed: progressCompleted,
+            total: progressTotal,
+            percent: clampPercent(progressCompleted, progressTotal),
+          },
+          evaluationFingerprint: monitoringState?.evaluation_fingerprint
+            ? String(monitoringState.evaluation_fingerprint)
+            : undefined,
+          hasMonitoringState: Boolean(monitoringState),
+          hasMonitoringScores: hasScores,
+          canStart: projection.canStart,
+          canContinue: projection.canContinue,
+          canReevaluate: projection.canReevaluate,
         };
-        for (const [metricKey, scores] of Object.entries(allScores)) {
-          if (perMetricAgreementSums[metricKey] === undefined) {
-            perMetricAgreementSums[metricKey] = 0;
-            perMetricAgreementCounts[metricKey] = 0;
-          }
-          const delta = Math.abs(scores.aiScore - scores.humanScore);
-          const agreed = delta <= 5 ? 1 : 0;
-          perMetricAgreementSums[metricKey] += agreed;
-          perMetricAgreementCounts[metricKey] += 1;
-        }
-      }
-    }
-  }
 
-  // Compute per-metric agreement percentages
-  const perMetricAgreement: Record<string, number> = {};
-  for (const key of Object.keys(perMetricAgreementSums)) {
-    const count = perMetricAgreementCounts[key];
-    perMetricAgreement[key] = count > 0
-      ? Math.round((perMetricAgreementSums[key] / count) * 100)
-      : 100;
-  }
+        return summary;
+      })
+  );
 
-  const agreementCount = Object.values(perMetricAgreementCounts).reduce(
-    (sum, c) => sum + c,
-    0
+  return runs.sort(sortRuns);
+}
+
+export async function getMonitoringStatus(
+  runId: string,
+  repoRoot = REPO_ROOT
+): Promise<MonitoringRunStatus | null> {
+  const normalizedRunId = runId.trim();
+  const runDir = await resolveRunDirectory(runId, repoRoot);
+
+  const monitoringState = await readJsonFile<Record<string, unknown>>(
+    path.join(runDir, "monitoring_state.json")
   );
-  const agreementSum = Object.values(perMetricAgreementSums).reduce(
-    (sum, s) => sum + s,
-    0
+  const progressMarkdown = await readTextFile(path.join(runDir, "eval_progress.md"));
+  const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
+  const activeLaunch = await getActiveMonitoringLaunch(runDir);
+  const projection = projectMonitoringRun(monitoringState, activeLaunch);
+
+  const completed = safeNumber(
+    monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
   );
+  const total = safeNumber(monitoringState?.total_lines ?? 0);
 
   return {
-    totalRecords,
-    reviewedCount,
-    draftCount,
-    approvedCount,
-    disputedCount,
-    averageAgreement:
-      agreementCount > 0
-        ? Math.round((agreementSum / agreementCount) * 100)
-        : 100,
-    perMetricAgreement,
+    runId: normalizedRunId,
+    monitoringStatus: projection.monitoringStatus,
+    progress: {
+      completed,
+      total,
+      percent: clampPercent(completed, total),
+    },
+    evaluationFingerprint: monitoringState?.evaluation_fingerprint
+      ? String(monitoringState.evaluation_fingerprint)
+      : undefined,
+    progressMarkdown,
+    state: monitoringState,
+    hasMonitoringScores: hasScores,
+    updatedAt: monitoringState?.updated_at ? String(monitoringState.updated_at) : undefined,
   };
 }
+
+export async function getMonitoringEvaluations(
+  runId: string,
+  from?: string,
+  to?: string,
+  limit = DEFAULT_LIMIT
+): Promise<EvaluationsResponse | null> {
+  const runDir = runDirPath(runId);
+  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
+  if (!(await fileExists(runDir))) {
+    return null;
+  }
+  if (!(await fileExists(scoresPath))) {
+    return {
+      evaluations: [],
+      total: 0,
+      from: from || "",
+      to: to || "",
+    };
+  }
+
+  const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
+  const filtered = rows
+    .filter((row) => {
+      if (!row.timestamp) {
+        return false;
+      }
+      if (from && row.timestamp < from) {
+        return false;
+      }
+      if (to && row.timestamp > to) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .slice(0, limit)
+    .map((row) => ({
+      ...row,
+      run_id: runId,
+      variant: row.variant || "raw",
+    }));
+
+  return {
+    evaluations: filtered,
+    total: filtered.length,
+    from: from || "",
+    to: to || "",
+  };
+}
+
+function sameTurnId(left: unknown, right: unknown): boolean {
+  return String(left ?? "") === String(right ?? "");
+}
+
+function sameConversationId(left: unknown, right: unknown): boolean {
+  return String(left ?? "") === String(right ?? "");
+}
+
+export async function getMonitoringTraceDetails(
+  point: MetricPointIdentity
+): Promise<TraceDetailsResponse | null> {
+  const runDir = runDirPath(point.runId);
+  if (!(await fileExists(runDir))) {
+    return null;
+  }
+
+  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
+  const chatHistoryPath = path.join(runDir, "chat_history.jsonl");
+  const turnsPath = path.join(runDir, "turns.jsonl");
+
+  const evaluationRows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(
+    scoresPath
+  );
+
+  const matchedEvaluation =
+    evaluationRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) ||
+    evaluationRows.find(
+      (row) =>
+        row.timestamp === point.timestamp &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) ||
+    null;
+
+  const chatHistoryRows = await readJsonLines<Record<string, unknown>>(chatHistoryPath);
+  const matchedChatHistory =
+    chatHistoryRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) || null;
+
+  const turnRows = await readJsonLines<Record<string, unknown>>(turnsPath);
+  const matchedTurn =
+    turnRows.find(
+      (row) =>
+        sameConversationId(row.conversation_id, point.conversationId) &&
+        sameTurnId(row.turn_id, point.turnId)
+    ) || null;
+
+  return {
+    point,
+    evaluationRecord: matchedEvaluation,
+    chatHistoryRecord: matchedChatHistory,
+    turnRecord: matchedTurn,
+    notFoundReason:
+      matchedEvaluation || matchedChatHistory || matchedTurn
+        ? undefined
+        : "No matching records were found for this chart point in monitoring/chat artifacts.",
+  };
+}
+
+export { startMonitoringRun };
