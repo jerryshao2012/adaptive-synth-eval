@@ -11,6 +11,7 @@ Adversarial Adaptive Synthetic Evaluation (ASE) is a contract-driven Python CLI 
 - Exercise API, browser, and AWS Bedrock AgentCore targets.
 - Score response quality and safety, then persist machine-readable and human-readable artifacts.
 - Re-evaluate existing run artifacts for monitoring and review them in a local dashboard.
+- Serve the packaged metric catalog and evaluate independent payload tuples through an authenticated Python API.
 - Coordinate repeat evaluations with guarded L0-L3 loop profiles, budgets, and kill switches.
 
 ## Quick start
@@ -70,9 +71,21 @@ For recovery flags, realtime controls, and the full command reference, see the [
 | Mix benign traffic with safety probes | `unified` mode | [Unified evaluation](docs/unified_evaluation.md) |
 | Understand or extend adaptive attacks | Adversarial response engine | [Adversarial agent walkthrough](docs/adversarial_agent_walkthrough.md) |
 | Re-score completed run artifacts | Monitoring | [Monitoring guide](docs/monitoring.md) |
+| Score independent payloads over REST | Metrics API | [Standalone metrics API](docs/metrics_api.md) |
 | Schedule guarded repeat evaluations | Loop execution | [Loop architecture](docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) and [operations runbook](docs/loop_operations_runbook.md) |
 
 Contracts auto-select the execution mode: top-level `simulation_suite` selects `synth`, while top-level `suite` selects `unified`.
+
+## Standalone metrics API
+
+Set a service API key plus one supported judge-provider configuration, then launch the Python server:
+
+```bash
+export ASE_METRICS_API_KEY="replace-with-a-secret"
+uv run ase metrics serve --host 127.0.0.1 --port 8000 --workers 1
+```
+
+The service exposes the ten packaged YAML specifications and stateless single or batch evaluation. It does not use the dashboard Node server or write run artifacts. See the [standalone metrics API guide](docs/metrics_api.md) for endpoints, request examples, provider requirements, and concurrency controls.
 
 ## Compact architecture
 

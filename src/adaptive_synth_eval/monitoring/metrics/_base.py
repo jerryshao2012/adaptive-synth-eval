@@ -50,12 +50,14 @@ def parse_judge_spec(value: Any, *, metric_key: str) -> JudgeSpec | None:
     for field_name in ("model", "api_key_env"):
         field_value = value.get(field_name)
         if field_value is not None and (
-                not isinstance(field_value, str) or not field_value.strip()
+            not isinstance(field_value, str) or not field_value.strip()
         ):
             raise ValueError(
                 f"Metric '{metric_key}' judge.{field_name} must be non-empty when provided."
             )
-        optional[field_name] = field_value.strip() if isinstance(field_value, str) else None
+        optional[field_name] = (
+            field_value.strip() if isinstance(field_value, str) else None
+        )
 
     return JudgeSpec(provider=provider, **optional)
 
@@ -91,3 +93,27 @@ class MetricSpec:
     heuristic: dict[str, Any] | None = None
     content_fingerprint: str | None = None
     judge: JudgeSpec | None = None
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the declarative specification without credential selectors."""
+        judge = None
+        if self.judge is not None:
+            judge = {
+                "provider": self.judge.provider,
+                "model": self.judge.model,
+            }
+        return {
+            "key": self.key,
+            "evaluation_group": self.evaluation_group,
+            "label": self.label,
+            "description": self.description,
+            "detail": self.detail,
+            "eval_input_key": self.eval_input_key,
+            "warn_below": self.warn_below,
+            "fail_below": self.fail_below,
+            "invert_llm_score": self.invert_llm_score,
+            "prompt_template": self.prompt_template,
+            "heuristic": dict(self.heuristic) if self.heuristic is not None else None,
+            "content_fingerprint": self.content_fingerprint,
+            "judge": judge,
+        }

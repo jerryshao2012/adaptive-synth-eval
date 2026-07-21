@@ -428,6 +428,19 @@ def main(argv: list[str] | None = None) -> int:
             print(summary_path.read_text(encoding="utf-8"))
             return 0
 
+        if args.command == "metrics":
+            if args.metrics_command == "serve":
+                import uvicorn
+
+                uvicorn.run(
+                    "adaptive_synth_eval.metrics_api.app:create_app",
+                    factory=True,
+                    host=args.host,
+                    port=args.port,
+                    workers=args.workers,
+                )
+                return 0
+
         if args.command == "monitor":
             if args.monitor_command == "run":
                 run_dir = Path(args.run_folder)
@@ -474,7 +487,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="commands",
         description="Available operations",
-        metavar="{validate-contract,run,summarize,loop,monitor}",
+        metavar="{validate-contract,run,summarize,loop,monitor,metrics}",
     )
     validate = sub.add_parser(
         "validate-contract",
@@ -551,6 +564,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default="outputs",
         help="Base output directory that contains runs/<run_id>/run_summary.json (default: outputs)",
     )
+
+    metrics = sub.add_parser(
+        "metrics",
+        help="Serve packaged metric specifications and standalone evaluation",
+        description="Run the authenticated stateless metrics REST API.",
+    )
+    metrics_sub = metrics.add_subparsers(
+        dest="metrics_command",
+        required=True,
+        title="metrics commands",
+        metavar="{serve}",
+    )
+    metrics_serve = metrics_sub.add_parser(
+        "serve",
+        help="Launch the standalone metrics FastAPI service",
+    )
+    metrics_serve.add_argument("--host", default="127.0.0.1")
+    metrics_serve.add_argument("--port", type=int, default=8000)
+    metrics_serve.add_argument("--workers", type=int, default=1)
 
     monitor = sub.add_parser(
         "monitor",

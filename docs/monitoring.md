@@ -6,6 +6,7 @@ This is distinct from loop orchestration:
 
 - `ase monitor run` performs post-hoc scoring of existing chat history. It does not create conversations or invoke the configured target.
 - `ase loop` schedules and safeguards recurring evaluation runs from loop profiles. Start with the [Loop operations runbook](loop_operations_runbook.md) when the goal is to generate new runs repeatedly.
+- `ase metrics serve` exposes the same packaged evaluator definitions for stateless payload scoring without reading or writing run artifacts. See the [Standalone metrics API](metrics_api.md).
 
 See [Output artifacts](output_artifacts.md) for the monitoring record and state schemas, and [Dashboard setup](../ai-eval-dashboard/README.md) to view the results.
 

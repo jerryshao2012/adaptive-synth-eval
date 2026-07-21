@@ -238,15 +238,15 @@ def test_explicit_rescan_refreshes_only_stale_judge_batch(tmp_path, monkeypatch)
     scores_path.write_text(json.dumps(score) + "\n", encoding="utf-8")
 
     evaluated_batch_ids = []
-    real_evaluate_judge_batches = monitoring_runner._evaluate_judge_batches
+    real_evaluate = monitoring_runner.MetricEvaluator.evaluate
 
-    def record_evaluated_batches(*args, **kwargs):
+    def record_evaluated_batches(self, *args, **kwargs):
         evaluated_batch_ids.append(kwargs.get("batch_ids"))
-        return real_evaluate_judge_batches(*args, **kwargs)
+        return real_evaluate(self, *args, **kwargs)
 
     monkeypatch.setattr(
-        monitoring_runner,
-        "_evaluate_judge_batches",
+        monitoring_runner.MetricEvaluator,
+        "evaluate",
         record_evaluated_batches,
     )
     assert main([*args, "--rescan"]) == 0

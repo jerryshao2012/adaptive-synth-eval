@@ -414,6 +414,299 @@ heuristic:
         MetricRegistry(metrics_dir=metrics_dir)
 
 
+def test_registry_rejects_empty_metrics_directory(tmp_path):
+    with pytest.raises(ValueError, match="No metric specifications found"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_duplicate_metric_keys(tmp_path):
+    metric_yaml = """
+key: duplicate
+evaluation_group: performance
+label: Duplicate
+description: Description.
+detail: Detail.
+eval_input_key: duplicate
+warn_below: 80
+fail_below: 50
+invert_llm_score: false
+prompt_template: Evaluate this response on a normalized scale.
+heuristic:
+  type: overlap
+""".strip()
+    (tmp_path / "first.yaml").write_text(metric_yaml, encoding="utf-8")
+    (tmp_path / "second.yaml").write_text(metric_yaml, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate metric key 'duplicate'"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_reports_missing_required_field(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        "key: broken\nevaluation_group: performance\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="broken.yaml.*missing required field 'label'",
+    ):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_non_mapping_heuristic(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+invert_llm_score: false
+prompt_template: Evaluate this response on a normalized scale.
+heuristic: invalid
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="broken.yaml.*heuristic must be a mapping"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_metric_spec_public_dict_redacts_credential_selector(tmp_path):
+    (tmp_path / "metric.yaml").write_text(
+        """
+key: relevance
+evaluation_group: performance
+label: Relevance
+description: Relevant response.
+detail: Measures relevance.
+eval_input_key: relevance
+warn_below: 85
+fail_below: 60
+invert_llm_score: false
+prompt_template: Evaluate relevance on a normalized 0.0-1.0 scale.
+judge:
+  provider: openai
+  model: judge-model
+  api_key_env: SECRET_JUDGE_KEY
+heuristic:
+  type: overlap
+""".strip(),
+        encoding="utf-8",
+    )
+
+    public = MetricRegistry(tmp_path).get("relevance").to_public_dict()
+
+    assert public["judge"] == {"provider": "openai", "model": "judge-model"}
+    assert "api_key_env" not in json.dumps(public)
+
+
+def test_registry_rejects_non_mapping_yaml_document(tmp_path):
+    (tmp_path / "broken.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="broken.yaml must contain a mapping"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_blank_required_string(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: "   "
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+prompt_template: Evaluate this response.
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="broken.yaml.*label must be a non-empty string"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_out_of_range_threshold(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 101
+fail_below: 50
+prompt_template: Evaluate this response.
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="broken.yaml.*thresholds must be between 0 and 100"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_default_registry_uses_package_resources(monkeypatch):
+    from adaptive_synth_eval.monitoring.metrics import registry as registry_module
+
+    metrics_dir = Path(registry_module.__file__).resolve().parent
+    calls: list[str] = []
+
+    class FakeResources:
+        @staticmethod
+        def files(package: str):
+            calls.append(package)
+            return metrics_dir
+
+    monkeypatch.setattr(registry_module, "resources", FakeResources, raising=False)
+
+    loaded = registry_module.MetricRegistry()
+
+    assert len(loaded.all_specs()) == 10
+    assert calls == ["adaptive_synth_eval.monitoring.metrics"]
+
+
+def test_registry_rejects_non_boolean_score_direction(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+invert_llm_score: "false"
+prompt_template: Evaluate this response.
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invert_llm_score must be a boolean"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_zero_length_ratio_divisor(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+prompt_template: Evaluate this response.
+heuristic:
+  type: length_ratio
+  base: 0.5
+  divisor: 0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="length_ratio divisor must be greater than zero"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_malformed_keyword_penalty(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: safety
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+prompt_template: Evaluate this response.
+heuristic:
+  default_score: 1.0
+  keyword_penalties:
+    - keywords: password
+      score: 0.25
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="keyword_penalties.*keywords must be a list"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_unknown_heuristic_field(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+prompt_template: Evaluate this response.
+heuristic:
+  type: length_ratio
+  base: 0.5
+  divisro: 0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown fields.*divisro"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_boolean_threshold(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: true
+fail_below: 0
+prompt_template: Evaluate this response.
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="thresholds must be numeric"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
+def test_registry_rejects_unknown_top_level_field(tmp_path):
+    (tmp_path / "broken.yaml").write_text(
+        """
+key: broken
+evaluation_group: performance
+label: Broken
+description: Description.
+detail: Detail.
+eval_input_key: broken
+warn_below: 80
+fail_below: 50
+prompt_template: Evaluate this response.
+invert_llm_socre: true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown fields.*invert_llm_socre"):
+        MetricRegistry(metrics_dir=tmp_path)
+
+
 def test_custom_path_override():
     """Verify load_metrics_config accepts a custom path."""
     with tempfile.TemporaryDirectory() as tmp:

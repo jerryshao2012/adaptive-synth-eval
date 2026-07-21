@@ -53,6 +53,37 @@ def _monitor_args(run_dir: str | Path, **overrides) -> list[str]:
     return base
 
 
+def test_metrics_serve_launches_uvicorn_app_factory(monkeypatch):
+    calls = []
+
+    def fake_run(app, **kwargs):
+        calls.append((app, kwargs))
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+
+    exit_code = main([
+        "metrics",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9000",
+        "--workers",
+        "3",
+    ])
+
+    assert exit_code == 0
+    assert calls == [(
+        "adaptive_synth_eval.metrics_api.app:create_app",
+        {
+            "factory": True,
+            "host": "0.0.0.0",
+            "port": 9000,
+            "workers": 3,
+        },
+    )]
+
+
 def test_monitoring_cli_dry_run_writes_scores_and_state(tmp_path, capsys):
     run_dir = tmp_path / "outputs" / "runs" / "run_a"
     _write_chat_history(run_dir, total_rows=3)
