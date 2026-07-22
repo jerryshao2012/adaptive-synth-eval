@@ -1,6 +1,7 @@
 """Top-level fan-out: plans conversations from a UnifiedContract, runs them concurrently,
 writes unified artifacts.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,20 +18,34 @@ from pathlib import Path
 from typing import Any, Callable
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
-from adaptive_synth_eval.adversarial_response_engine.core.token_budget import TokenBudgetManager
-from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
+from adaptive_synth_eval.adversarial_response_engine.core.token_budget import (
+    TokenBudgetManager,
+)
+from adaptive_synth_eval.artifacts.run_state import (
+    load_run_state,
+    now_iso,
+    write_run_state,
+)
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.unified_eval.config.schemas import UnifiedContract
-from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import make_conversation_rng
+from adaptive_synth_eval.unified_eval.orchestrator.artifact_actor import ArtifactActor
+from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import (
+    make_conversation_rng,
+)
 from adaptive_synth_eval.unified_eval.orchestrator.conversation import (
     ConversationResult,
     run_conversation,
 )
-from adaptive_synth_eval.unified_eval.orchestrator.memory_registry import AttackMemoryRegistry
+from adaptive_synth_eval.unified_eval.orchestrator.memory_registry import (
+    AttackMemoryRegistry,
+)
+from adaptive_synth_eval.unified_eval.orchestrator.persona_memory_actor import (
+    PersonaMemoryActor,
+)
 from adaptive_synth_eval.unified_eval.output.writer import UnifiedArtifactWriter
 from adaptive_synth_eval.unified_eval.providers.budget_meter import BudgetMeter
 from adaptive_synth_eval.unified_eval.providers.llm_factory import build_component_llms
@@ -49,11 +64,11 @@ def _secret_safe_payload(value: Any, *, redact: bool = False) -> Any:
         for key, item in value.items():
             lowered = str(key).lower()
             sensitive = (
-                    lowered == "auth"
-                    or "password" in lowered
-                    or "secret" in lowered
-                    or ("token" in lowered and lowered != "max_tokens")
-                    or ("api_key" in lowered and lowered != "api_key_env")
+                lowered == "auth"
+                or "password" in lowered
+                or "secret" in lowered
+                or ("token" in lowered and lowered != "max_tokens")
+                or ("api_key" in lowered and lowered != "api_key_env")
             )
             out[str(key)] = _secret_safe_payload(item, redact=sensitive)
         return out
@@ -64,13 +79,16 @@ def _secret_safe_payload(value: Any, *, redact: bool = False) -> Any:
 
 def _fingerprint_payload(payload: Any) -> str:
     canonical = json.dumps(
-        _secret_safe_payload(payload), sort_keys=True, separators=(",", ":"), default=str
+        _secret_safe_payload(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _validate_resume_fingerprints(
-        state: dict[str, Any], *, contract_fingerprint: str, plan_fingerprint: str
+    state: dict[str, Any], *, contract_fingerprint: str, plan_fingerprint: str
 ) -> None:
     version = int(state.get("version", 1) or 1)
     if version > 2:
@@ -94,11 +112,11 @@ def _validate_resume_fingerprints(
 
 
 async def _run_sliding_window(
-        items: list[Any],
-        *,
-        worker,
-        max_concurrency: int,
-        can_admit,
+    items: list[Any],
+    *,
+    worker,
+    max_concurrency: int,
+    can_admit,
 ) -> None:
     """Run a bounded task window, rechecking admission after every completion."""
     iterator = iter(items)
@@ -106,23 +124,48 @@ async def _run_sliding_window(
     exhausted = False
     limit = max(1, int(max_concurrency))
 
-    while pending or not exhausted:
-        while len(pending) < limit and not exhausted and can_admit():
-            try:
-                item = next(iterator)
-            except StopIteration:
-                exhausted = True
+    try:
+        while pending or not exhausted:
+            while len(pending) < limit and not exhausted and can_admit():
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                    break
+                pending.add(asyncio.create_task(worker(item)))
+
+            if not pending:
                 break
-            pending.add(asyncio.create_task(worker(item)))
 
-        if not pending:
-            break
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            failure: BaseException | None = None
+            for task in done:
+                try:
+                    await task
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
 
-        done, pending = await asyncio.wait(
-            pending, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in done:
-            await task
+            if failure is not None:
+                raise failure
+    finally:
+        # Work already admitted may be executing in asyncio.to_thread(), which
+        # cancellation cannot stop. Drain it on worker failure, supervisor
+        # cancellation, or any other exceptional exit before resources close.
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _prepare_client(client: Any) -> None:
+    """Finish lazy shared-client construction before concurrent workers start."""
+    prepare_async = getattr(client, "prepare_async", None)
+    if callable(prepare_async):
+        await prepare_async()
+        return
+    prepare = getattr(client, "prepare", None)
+    if callable(prepare):
+        await asyncio.to_thread(prepare)
 
 
 def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory:
@@ -132,12 +175,16 @@ def _seed_attack_memory(spec: str | list[str], max_entries: int) -> AttackMemory
     memory = AttackMemory(max_entries=max_entries)
     for path in paths:
         try:
-            loaded = AttackMemory.from_dict(json.loads(Path(path).read_text()), max_entries)
+            loaded = AttackMemory.from_dict(
+                json.loads(Path(path).read_text()), max_entries
+            )
             memory.merge(loaded.snapshot())
         except (OSError, ValueError) as exc:
             logger.warning("Skipping attack-memory seed %s: %s", path, exc)
     logger.info(
-        "Seeded attack memory from %d file(s): %d entries", len(paths), len(memory.snapshot())
+        "Seeded attack memory from %d file(s): %d entries",
+        len(paths),
+        len(memory.snapshot()),
     )
     return memory
 
@@ -146,11 +193,11 @@ class _RunProgressTracker:
     """Emit periodic run progress as conversations complete."""
 
     def __init__(
-            self,
-            *,
-            total: int | None,
-            enabled: bool = True,
-            progress_sink: Callable[[dict[str, Any]], None] | None = None,
+        self,
+        *,
+        total: int | None,
+        enabled: bool = True,
+        progress_sink: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.total = total
         self.enabled = enabled
@@ -160,28 +207,32 @@ class _RunProgressTracker:
         self._lock = asyncio.Lock()
 
     def _emit_progress_snapshot(
-            self,
-            *,
-            conversation_id: str,
-            completed: int,
-            elapsed_seconds: float,
-            remaining: int | None = None,
-            eta_seconds: float | None = None,
+        self,
+        *,
+        conversation_id: str,
+        completed: int,
+        elapsed_seconds: float,
+        remaining: int | None = None,
+        eta_seconds: float | None = None,
     ) -> None:
         if self._progress_sink is None:
             return
         try:
-            self._progress_sink({
-                "phase": "running",
-                "completed": completed,
-                "total": self.total,
-                "last_item": conversation_id,
-                "elapsed_seconds": elapsed_seconds,
-                "eta_seconds": eta_seconds,
-                "details": {"remaining": remaining},
-            })
+            self._progress_sink(
+                {
+                    "phase": "running",
+                    "completed": completed,
+                    "total": self.total,
+                    "last_item": conversation_id,
+                    "elapsed_seconds": elapsed_seconds,
+                    "eta_seconds": eta_seconds,
+                    "details": {"remaining": remaining},
+                }
+            )
         except Exception:  # noqa: BLE001
-            logger.exception("Progress sink failed; continuing without live status updates.")
+            logger.exception(
+                "Progress sink failed; continuing without live status updates."
+            )
 
     async def mark_completed(self, conversation_id: str) -> None:
         async with self._lock:
@@ -217,7 +268,9 @@ class _RunProgressTracker:
                 return
 
             step = max(1, self.total // 100)
-            should_emit = completed == 1 or completed == self.total or completed % step == 0
+            should_emit = (
+                completed == 1 or completed == self.total or completed % step == 0
+            )
             if not should_emit:
                 return
 
@@ -261,54 +314,56 @@ class _RunProgressTracker:
 
 
 def run_unified(
-        contract: UnifiedContract,
-        *,
-        dry_run: bool = False,
-        persona_filter: str | None = None,
-        scenario_filter: str | None = None,
-        adversarial_filter: str | None = None,
-        max_concurrency_override: int | None = None,
-        run_id_override: str | None = None,
-        realtime_chat: bool = False,
-        output_conversations: bool = False,
-        interactive_realtime_controls: bool = False,
-        resume_incomplete: bool = False,
-        progress_sink: Callable[[dict[str, Any]], None] | None = None,
-        realtime_status_provider: Any | None = None,
+    contract: UnifiedContract,
+    *,
+    dry_run: bool = False,
+    persona_filter: str | None = None,
+    scenario_filter: str | None = None,
+    adversarial_filter: str | None = None,
+    max_concurrency_override: int | None = None,
+    run_id_override: str | None = None,
+    realtime_chat: bool = False,
+    output_conversations: bool = False,
+    interactive_realtime_controls: bool = False,
+    resume_incomplete: bool = False,
+    progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    realtime_status_provider: Any | None = None,
 ) -> dict[str, Any]:
     """Synchronous entry — wraps the async runner for the CLI."""
-    return asyncio.run(run_unified_async(
-        contract,
-        dry_run=dry_run,
-        persona_filter=persona_filter,
-        scenario_filter=scenario_filter,
-        adversarial_filter=adversarial_filter,
-        max_concurrency_override=max_concurrency_override,
-        run_id_override=run_id_override,
-        realtime_chat=realtime_chat,
-        output_conversations=output_conversations,
-        interactive_realtime_controls=interactive_realtime_controls,
-        resume_incomplete=resume_incomplete,
-        progress_sink=progress_sink,
-        realtime_status_provider=realtime_status_provider,
-    ))
+    return asyncio.run(
+        run_unified_async(
+            contract,
+            dry_run=dry_run,
+            persona_filter=persona_filter,
+            scenario_filter=scenario_filter,
+            adversarial_filter=adversarial_filter,
+            max_concurrency_override=max_concurrency_override,
+            run_id_override=run_id_override,
+            realtime_chat=realtime_chat,
+            output_conversations=output_conversations,
+            interactive_realtime_controls=interactive_realtime_controls,
+            resume_incomplete=resume_incomplete,
+            progress_sink=progress_sink,
+            realtime_status_provider=realtime_status_provider,
+        )
+    )
 
 
 async def run_unified_async(
-        contract: UnifiedContract,
-        *,
-        dry_run: bool = False,
-        persona_filter: str | None = None,
-        scenario_filter: str | None = None,
-        adversarial_filter: str | None = None,
-        max_concurrency_override: int | None = None,
-        run_id_override: str | None = None,
-        realtime_chat: bool = False,
-        output_conversations: bool = False,
-        interactive_realtime_controls: bool = False,
-        resume_incomplete: bool = False,
-        progress_sink: Callable[[dict[str, Any]], None] | None = None,
-        realtime_status_provider: Any | None = None,
+    contract: UnifiedContract,
+    *,
+    dry_run: bool = False,
+    persona_filter: str | None = None,
+    scenario_filter: str | None = None,
+    adversarial_filter: str | None = None,
+    max_concurrency_override: int | None = None,
+    run_id_override: str | None = None,
+    realtime_chat: bool = False,
+    output_conversations: bool = False,
+    interactive_realtime_controls: bool = False,
+    resume_incomplete: bool = False,
+    progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    realtime_status_provider: Any | None = None,
 ) -> dict[str, Any]:
     persona_filter = _resolve_persona_filter(contract, persona_filter)
     if run_id_override:
@@ -327,7 +382,9 @@ async def run_unified_async(
     resumed_state = load_run_state(writer.run_dir) if resume_incomplete else None
     started_at = (resumed_state or {}).get("started_at") or now_iso()
     completed_conversation_ids = {
-        str(cid) for cid in ((resumed_state or {}).get("completed_conversation_ids") or []) if cid
+        str(cid)
+        for cid in ((resumed_state or {}).get("completed_conversation_ids") or [])
+        if cid
     }
 
     # Initialize / clean slate for progressive artifact writing.
@@ -342,19 +399,26 @@ async def run_unified_async(
         if output_conversations:
             (writer.run_dir / "conversations.txt").write_text("", encoding="utf-8")
     else:
-        _ensure_progressive_artifacts_exist(writer=writer, output_conversations=output_conversations)
+        _ensure_progressive_artifacts_exist(
+            writer=writer, output_conversations=output_conversations
+        )
 
     # Build LLM clients for each component (mock when dry_run regardless of contract.llm.provider).
     if dry_run:
         contract = _force_mock_providers(contract)
     llms = build_component_llms(contract)
+    await asyncio.gather(
+        *(asyncio.to_thread(provided.prepare) for provided in llms.values())
+    )
 
     # Shared resources (built BEFORE target so the meter can hook into the target client).
     state_version = int((resumed_state or {}).get("version", 1) or 1)
     restored_meter = (resumed_state or {}).get("meter") if state_version == 2 else None
     if isinstance(restored_meter, dict):
         stored_max = int(
-            (restored_meter.get("budget") or {}).get("max_total_tokens", contract.run.budget)
+            (restored_meter.get("budget") or {}).get(
+                "max_total_tokens", contract.run.budget
+            )
         )
         if stored_max != contract.run.budget:
             raise ContractError(
@@ -394,16 +458,23 @@ async def run_unified_async(
         target = create_chatbot_client(
             contract.target,
             dry_run=dry_run,
-            max_concurrency=max_concurrency_override or _effective_max_concurrency(contract),
+            max_concurrency=max_concurrency_override
+            or _effective_max_concurrency(contract),
         )
+    await _prepare_client(target)
 
-    restored_memory = (resumed_state or {}).get("attack_memory") if state_version == 2 else None
+    restored_memory = (
+        (resumed_state or {}).get("attack_memory") if state_version == 2 else None
+    )
     if isinstance(restored_memory, dict):
         if restored_memory.get("mode") != contract.eval_plan.attack_memory:
             raise ContractError(
                 "Cannot resume: eval_plan.attack_memory differs from the v2 checkpoint."
             )
-        if int(restored_memory.get("max_entries", 50)) != contract.eval_plan.attack_memory_max_entries:
+        if (
+            int(restored_memory.get("max_entries", 50))
+            != contract.eval_plan.attack_memory_max_entries
+        ):
             raise ContractError(
                 "Cannot resume: attack_memory_max_entries differs from the v2 checkpoint."
             )
@@ -415,8 +486,8 @@ async def run_unified_async(
     else:
         shared_seed = None
         if (
-                contract.eval_plan.attack_memory == "shared"
-                and contract.eval_plan.seed_attack_memory_path
+            contract.eval_plan.attack_memory == "shared"
+            and contract.eval_plan.seed_attack_memory_path
         ):
             shared_seed = _seed_attack_memory(
                 contract.eval_plan.seed_attack_memory_path,
@@ -427,8 +498,6 @@ async def run_unified_async(
             max_entries=contract.eval_plan.attack_memory_max_entries,
             shared_memory=shared_seed,
         )
-    attack_memory_lock = asyncio.Lock()
-    writer_lock = asyncio.Lock()
     tracker = _RunningStatsTracker.from_dict(
         threshold=contract.scoring.adversarial_failure_threshold,
         payload=(resumed_state or {}).get("metrics"),
@@ -440,12 +509,16 @@ async def run_unified_async(
     #   so weights are honored even when the budget runs out before the safety cap.
     # Auto-enable budget mode when the contract omits total_conversations.
     budget_mode = (
-            contract.run.until_budget_exhausted
-            or contract.eval_plan.total_conversations is None
+        contract.run.until_budget_exhausted
+        or contract.eval_plan.total_conversations is None
     )
     sequential = budget_mode
     if budget_mode:
-        plan = list(_lazy_weighted_plan(contract, persona_filter, scenario_filter, adversarial_filter))
+        plan = list(
+            _lazy_weighted_plan(
+                contract, persona_filter, scenario_filter, adversarial_filter
+            )
+        )
     else:
         plan = _build_plan(
             contract,
@@ -466,11 +539,14 @@ async def run_unified_async(
 
     for idx, planned in enumerate(plan, start=1):
         planned["conversation_id"] = f"conv_{idx:06d}"
+        planned["sequence"] = idx
 
     full_plan = list(plan)
     planned_conversations_total = len(plan)
     if completed_conversation_ids:
-        plan = [p for p in plan if p["conversation_id"] not in completed_conversation_ids]
+        plan = [
+            p for p in plan if p["conversation_id"] not in completed_conversation_ids
+        ]
 
     normalized_contract = contract_to_dict(contract)
     serialized_plan = _serialize_plan(full_plan)
@@ -512,25 +588,80 @@ async def run_unified_async(
     else:
         progress_total = len(plan)
     if progress_sink is not None:
-        progress_sink({
-            "phase": "running",
-            "completed": len(completed_conversation_ids),
-            "total": progress_total,
-            "last_item": None,
-            "elapsed_seconds": 0.0,
-            "eta_seconds": None,
-            "details": {
-                "remaining": (progress_total - len(completed_conversation_ids)) if progress_total is not None else None,
-            },
-        })
-    progress = _RunProgressTracker(total=progress_total, enabled=not realtime_chat, progress_sink=progress_sink)
+        progress_sink(
+            {
+                "phase": "running",
+                "completed": len(completed_conversation_ids),
+                "total": progress_total,
+                "last_item": None,
+                "elapsed_seconds": 0.0,
+                "eta_seconds": None,
+                "details": {
+                    "remaining": (progress_total - len(completed_conversation_ids))
+                    if progress_total is not None
+                    else None,
+                },
+            }
+        )
+    progress = _RunProgressTracker(
+        total=progress_total, enabled=not realtime_chat, progress_sink=progress_sink
+    )
     processed_conversation_ids = set(completed_conversation_ids)
     personas_by_id = contract.persona_by_id()
     scenarios_by_id = contract.scenario_by_id()
     adversarial_by_id = contract.adversarial_by_id()
+    persona_memory_actors = {
+        persona_id: PersonaMemoryActor(
+            persona=personas_by_id[persona_id],
+            markdown_path=writer.persona_memory_path(persona_id),
+        )
+        for persona_id in sorted({planned["persona_id"] for planned in full_plan})
+    }
+    await asyncio.gather(*(actor.start() for actor in persona_memory_actors.values()))
+
+    async def _persist_result(
+        sequence: int,
+        persona_id: str,
+        res: ConversationResult,
+    ) -> None:
+        await asyncio.to_thread(
+            _append_result_to_artifacts, writer, res, output_conversations
+        )
+        memory_registry.commit(persona_id, res.memory_session)
+        tracker.update(res)
+        processed_conversation_ids.add(
+            str(res.conversation_row.get("conversation_id") or "")
+        )
+        await asyncio.to_thread(
+            write_run_state,
+            writer.run_dir,
+            {
+                "version": 2,
+                "mode": "unified",
+                "status": "in_progress",
+                "run_id": run_id,
+                "started_at": started_at,
+                "updated_at": now_iso(),
+                "total_planned_conversations": planned_conversations_total,
+                "completed_conversations": len(
+                    [cid for cid in processed_conversation_ids if cid]
+                ),
+                "completed_conversation_ids": sorted(
+                    [cid for cid in processed_conversation_ids if cid]
+                ),
+                "metrics": tracker.to_dict(),
+                "meter": meter.snapshot(),
+                "attack_memory": memory_registry.to_dict(),
+                "contract_fingerprint": contract_fingerprint,
+                "plan_fingerprint": plan_fingerprint,
+            },
+        )
+
+    artifact_actor = ArtifactActor(_persist_result)
 
     effective_max_concurrency = (
-        1 if sequential
+        1
+        if sequential
         else (max_concurrency_override or _effective_max_concurrency(contract))
     )
     if realtime_chat and persona_filter:
@@ -554,7 +685,9 @@ async def run_unified_async(
         single_persona_mode = (len(personas_dict) <= 1) or (persona_filter is not None)
         persona_total_convos: dict[str, int] = {}
         for p in plan:
-            persona_total_convos[p["persona_id"]] = persona_total_convos.get(p["persona_id"], 0) + 1
+            persona_total_convos[p["persona_id"]] = (
+                persona_total_convos.get(p["persona_id"], 0) + 1
+            )
         realtime_controller = RealtimeChatController(
             personas=personas_dict,
             single_persona_mode=single_persona_mode,
@@ -571,7 +704,11 @@ async def run_unified_async(
             realtime_controller.set_active_persona(persona_filter)
         elif contract.persona_pool:
             realtime_controller.set_active_persona(contract.persona_pool[0].persona_id)
-        realtime_controller.start()
+        start_async = getattr(realtime_controller, "start_async", None)
+        if callable(start_async):
+            await start_async()
+        else:
+            realtime_controller.start()
 
     async def _one(planned):
         async with semaphore:
@@ -583,20 +720,33 @@ async def run_unified_async(
                 )
             started = time.perf_counter()
             try:
+                conversation_llms = {
+                    name: provided.for_conversation(
+                        make_conversation_rng(
+                            contract.run.random_seed,
+                            f"{planned['conversation_key']}:{name}",
+                        ).getrandbits(32)
+                    )
+                    for name, provided in llms.items()
+                }
+                memory_snapshot = await persona_memory_actors[
+                    planned["persona_id"]
+                ].snapshot()
                 res = await run_conversation(
                     entry=planned["entry"],
                     persona=personas_by_id[planned["persona_id"]],
                     synth_scenario=scenarios_by_id[planned["synth_scenario_id"]],
                     adv_scenario=adversarial_by_id[planned["adversarial_scenario_id"]],
                     contract=contract,
-                    llms=llms,
+                    llms=conversation_llms,
                     target=target,
-                    writer=writer,
                     conversation_id=planned["conversation_id"],
-                    rng=make_conversation_rng(contract.run.random_seed, planned["conversation_key"]),
+                    rng=make_conversation_rng(
+                        contract.run.random_seed, planned["conversation_key"]
+                    ),
                     token_budget=token_budget,
                     attack_memory=memory_registry.for_persona(planned["persona_id"]),
-                    attack_memory_lock=attack_memory_lock,
+                    persona_memory_snapshot=memory_snapshot,
                     turn_count=planned["turn_count"],
                     realtime_chat=realtime_chat,
                     realtime_controller=realtime_controller,
@@ -621,60 +771,43 @@ async def run_unified_async(
             if res.termination_reason == "budget_exhausted" and not res.chat_history:
                 return
 
-            # Write progressively under a lock
-            async with writer_lock:
-                await asyncio.to_thread(_append_result_to_artifacts, writer, res, output_conversations)
-                memory_registry.commit(planned["persona_id"], res.memory_session)
-                tracker.update(res)
-                processed_conversation_ids.add(str(res.conversation_row.get("conversation_id") or ""))
-                await asyncio.to_thread(
-                    write_run_state,
-                    writer.run_dir,
-                    {
-                        "version": 2,
-                        "mode": "unified",
-                        "status": "in_progress",
-                        "run_id": run_id,
-                        "started_at": started_at,
-                        "updated_at": now_iso(),
-                        "total_planned_conversations": planned_conversations_total,
-                        "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
-                        "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
-                        "metrics": tracker.to_dict(),
-                        "meter": meter.snapshot(),
-                        "attack_memory": memory_registry.to_dict(),
-                        "contract_fingerprint": contract_fingerprint,
-                        "plan_fingerprint": plan_fingerprint,
-                    },
+            if res.persona_memory_delta is not None:
+                await persona_memory_actors[planned["persona_id"]].commit(
+                    planned["conversation_id"],
+                    planned["sequence"],
+                    res.persona_memory_delta,
                 )
+
+            await artifact_actor.submit(planned["sequence"], planned["persona_id"], res)
             await progress.mark_completed(planned["conversation_id"])
 
     budget_stopped = False
     start_time = time.time()
     try:
-        if sequential:
-            for planned in plan:
-                if realtime_controller and realtime_controller.stop_requested:
-                    budget_stopped = True
-                    break
-                if not token_budget.can_continue(contract.run.reserve_tokens):
-                    budget_stopped = True
-                    break
-                await _one(planned)
-        else:
-            await _run_sliding_window(
-                plan,
-                worker=_one,
-                max_concurrency=effective_max_concurrency,
-                can_admit=lambda: (
-                        not (realtime_controller and realtime_controller.stop_requested)
-                        and token_budget.can_continue(contract.run.reserve_tokens)
-                ),
-            )
-            budget_stopped = not token_budget.can_continue(contract.run.reserve_tokens)
+        await _run_sliding_window(
+            plan,
+            worker=_one,
+            max_concurrency=effective_max_concurrency,
+            can_admit=lambda: (
+                not (realtime_controller and realtime_controller.stop_requested)
+                and token_budget.can_continue(contract.run.reserve_tokens)
+            ),
+        )
+        budget_stopped = bool(
+            (realtime_controller and realtime_controller.stop_requested)
+            or not token_budget.can_continue(contract.run.reserve_tokens)
+        )
     finally:
         if realtime_controller:
-            realtime_controller.stop()
+            stop_async = getattr(realtime_controller, "stop_async", None)
+            if callable(stop_async):
+                await stop_async()
+            else:
+                realtime_controller.stop()
+        await artifact_actor.close()
+        await asyncio.gather(
+            *(actor.close() for actor in persona_memory_actors.values())
+        )
         close_async = getattr(target, "close_async", None)
         close_sync = getattr(target, "close", None)
         if close_async is not None:
@@ -710,8 +843,12 @@ async def run_unified_async(
             "updated_at": now_iso(),
             "completed_at": now_iso(),
             "total_planned_conversations": planned_conversations_total,
-            "completed_conversations": len([cid for cid in processed_conversation_ids if cid]),
-            "completed_conversation_ids": sorted([cid for cid in processed_conversation_ids if cid]),
+            "completed_conversations": len(
+                [cid for cid in processed_conversation_ids if cid]
+            ),
+            "completed_conversation_ids": sorted(
+                [cid for cid in processed_conversation_ids if cid]
+            ),
             "metrics": tracker.to_dict(),
             "meter": meter.snapshot(),
             "attack_memory": memory_registry.to_dict(),
@@ -754,7 +891,9 @@ class _RunningStatsTracker:
         self.conversation_target_seconds: list[float] = []
 
     @classmethod
-    def from_dict(cls, *, threshold: int, payload: dict[str, Any] | None) -> _RunningStatsTracker:
+    def from_dict(
+        cls, *, threshold: int, payload: dict[str, Any] | None
+    ) -> _RunningStatsTracker:
         tracker = cls(threshold)
         if not payload:
             return tracker
@@ -767,10 +906,14 @@ class _RunningStatsTracker:
         tracker.max_failure_score = int(payload.get("max_failure_score") or 0)
         tracker.failures_at_threshold = int(payload.get("failures_at_threshold") or 0)
         # back-compat: older checkpoints stored this as "near_misses"
-        tracker.partials = int(payload.get("partials", payload.get("near_misses", 0)) or 0)
+        tracker.partials = int(
+            payload.get("partials", payload.get("near_misses", 0)) or 0
+        )
 
         tracker.failure_scores = [float(v) for v in payload.get("failure_scores") or []]
-        tracker.turns_to_failure = [int(v) for v in payload.get("turns_to_failure") or []]
+        tracker.turns_to_failure = [
+            int(v) for v in payload.get("turns_to_failure") or []
+        ]
         tracker.trace_severity_scores = [
             float(v) for v in payload.get("trace_severity_scores") or []
         ]
@@ -781,14 +924,28 @@ class _RunningStatsTracker:
             str(key): int(value)
             for key, value in (payload.get("failure_surface_counts") or {}).items()
         }
-        tracker.synth_safety_scores = [float(v) for v in payload.get("synth_safety_scores") or []]
-        tracker.synth_relevance_scores = [float(v) for v in payload.get("synth_relevance_scores") or []]
-        tracker.synth_groundedness_scores = [float(v) for v in payload.get("synth_groundedness_scores") or []]
+        tracker.synth_safety_scores = [
+            float(v) for v in payload.get("synth_safety_scores") or []
+        ]
+        tracker.synth_relevance_scores = [
+            float(v) for v in payload.get("synth_relevance_scores") or []
+        ]
+        tracker.synth_groundedness_scores = [
+            float(v) for v in payload.get("synth_groundedness_scores") or []
+        ]
         tracker.chatbot_prompt_tokens = int(payload.get("chatbot_prompt_tokens") or 0)
-        tracker.chatbot_completion_tokens = int(payload.get("chatbot_completion_tokens") or 0)
-        tracker.target_latencies_ms = [float(v) for v in payload.get("target_latencies_ms") or []]
-        tracker.conversation_elapsed_seconds = [float(v) for v in payload.get("conversation_elapsed_seconds") or []]
-        tracker.conversation_target_seconds = [float(v) for v in payload.get("conversation_target_seconds") or []]
+        tracker.chatbot_completion_tokens = int(
+            payload.get("chatbot_completion_tokens") or 0
+        )
+        tracker.target_latencies_ms = [
+            float(v) for v in payload.get("target_latencies_ms") or []
+        ]
+        tracker.conversation_elapsed_seconds = [
+            float(v) for v in payload.get("conversation_elapsed_seconds") or []
+        ]
+        tracker.conversation_target_seconds = [
+            float(v) for v in payload.get("conversation_target_seconds") or []
+        ]
         return tracker
 
     def to_dict(self) -> dict[str, Any]:
@@ -847,9 +1004,9 @@ class _RunningStatsTracker:
                     effective = row.get("effective_failure_score", fail_score)
                     row_threshold = row.get("failure_threshold", self.threshold)
                     if (
-                            isinstance(effective, (int, float))
-                            and isinstance(row_threshold, (int, float))
-                            and 0 < effective < row_threshold
+                        isinstance(effective, (int, float))
+                        and isinstance(row_threshold, (int, float))
+                        and 0 < effective < row_threshold
                     ):
                         self.partials += 1
                 trace_score = row.get("trace_severity_score")
@@ -859,7 +1016,7 @@ class _RunningStatsTracker:
                 surface = row.get("failure_surface")
                 if isinstance(surface, str) and surface and surface != "none":
                     self.failure_surface_counts[surface] = (
-                            self.failure_surface_counts.get(surface, 0) + 1
+                        self.failure_surface_counts.get(surface, 0) + 1
                     )
         if conversation_has_trajectory_signal:
             self.trajectory_signal_sessions += 1
@@ -878,8 +1035,12 @@ class _RunningStatsTracker:
 
         for rec in res.chat_history:
             if rec.generation_metadata:
-                self.chatbot_prompt_tokens += rec.generation_metadata.get("chatbot_prompt_tokens", 0)
-                self.chatbot_completion_tokens += rec.generation_metadata.get("chatbot_completion_tokens", 0)
+                self.chatbot_prompt_tokens += rec.generation_metadata.get(
+                    "chatbot_prompt_tokens", 0
+                )
+                self.chatbot_completion_tokens += rec.generation_metadata.get(
+                    "chatbot_completion_tokens", 0
+                )
 
         # Performance stats
         for row in res.turn_rows:
@@ -897,9 +1058,9 @@ class _RunningStatsTracker:
 
 
 def _append_result_to_artifacts(
-        writer: UnifiedArtifactWriter,
-        res: ConversationResult,
-        output_conversations: bool,
+    writer: UnifiedArtifactWriter,
+    res: ConversationResult,
+    output_conversations: bool,
 ) -> None:
     """Append a single conversation's outputs to the artifact files in real time."""
     writer.append_jsonl("conversations.jsonl", [res.conversation_row])
@@ -918,7 +1079,9 @@ def _append_result_to_artifacts(
             writer.append_conversation_txt(res.chat_history, overwrite=False)
 
 
-def _ensure_progressive_artifacts_exist(*, writer: UnifiedArtifactWriter, output_conversations: bool) -> None:
+def _ensure_progressive_artifacts_exist(
+    *, writer: UnifiedArtifactWriter, output_conversations: bool
+) -> None:
     required_jsonl = (
         "conversations.jsonl",
         "turns.jsonl",
@@ -946,15 +1109,18 @@ def _ensure_progressive_artifacts_exist(*, writer: UnifiedArtifactWriter, output
 # Helpers
 # --------------------------------------------------------------------------- #
 
+
 def _resolve_persona_filter(
-        contract: UnifiedContract,
-        persona_filter: str | None,
+    contract: UnifiedContract,
+    persona_filter: str | None,
 ) -> str | None:
     """Resolve persona_filter to canonical persona_id (case-insensitive)."""
     if not persona_filter:
         return None
 
-    personas_by_lower = {p.persona_id.lower(): p.persona_id for p in contract.persona_pool}
+    personas_by_lower = {
+        p.persona_id.lower(): p.persona_id for p in contract.persona_pool
+    }
     matched = personas_by_lower.get(persona_filter.lower())
     if matched is None:
         raise ContractError(
@@ -965,10 +1131,10 @@ def _resolve_persona_filter(
 
 
 def _lazy_weighted_plan(
-        contract: UnifiedContract,
-        persona_filter: str | None,
-        scenario_filter: str | None,
-        adversarial_filter: str | None,
+    contract: UnifiedContract,
+    persona_filter: str | None,
+    scenario_filter: str | None,
+    adversarial_filter: str | None,
 ):
     """Yield plan rows by per-iteration weighted draw.
 
@@ -981,7 +1147,9 @@ def _lazy_weighted_plan(
     if scenario_filter:
         entries = [e for e in entries if e.synth_scenario_id == scenario_filter]
     if adversarial_filter:
-        entries = [e for e in entries if e.adversarial_scenario_id == adversarial_filter]
+        entries = [
+            e for e in entries if e.adversarial_scenario_id == adversarial_filter
+        ]
     if not entries:
         return
 
@@ -1005,12 +1173,12 @@ def _lazy_weighted_plan(
 
 
 def _build_plan(
-        contract: UnifiedContract,
-        *,
-        persona_filter: str | None,
-        scenario_filter: str | None,
-        adversarial_filter: str | None,
-        unlimited: bool = False,
+    contract: UnifiedContract,
+    *,
+    persona_filter: str | None,
+    scenario_filter: str | None,
+    adversarial_filter: str | None,
+    unlimited: bool = False,
 ) -> list[dict[str, Any]]:
     entries = list(contract.eval_plan.entries)
     if persona_filter:
@@ -1018,7 +1186,9 @@ def _build_plan(
     if scenario_filter:
         entries = [e for e in entries if e.synth_scenario_id == scenario_filter]
     if adversarial_filter:
-        entries = [e for e in entries if e.adversarial_scenario_id == adversarial_filter]
+        entries = [
+            e for e in entries if e.adversarial_scenario_id == adversarial_filter
+        ]
     if not entries:
         return []
 
@@ -1035,7 +1205,9 @@ def _build_plan(
     counts = [int(x) for x in raw]
     leftovers = total - sum(counts)
     fractional = sorted(
-        range(len(entries)), key=lambda i: raw[i] - counts[i], reverse=True,
+        range(len(entries)),
+        key=lambda i: raw[i] - counts[i],
+        reverse=True,
     )
     for i in fractional[:leftovers]:
         counts[i] += 1
@@ -1048,20 +1220,22 @@ def _build_plan(
     for entry, count in zip(entries, counts):
         for k in range(count):
             turn_count = entry.max_turns or rng.randint(turn_min, turn_max)
-            plan.append({
-                "entry": entry,
-                "persona_id": entry.persona_id,
-                "synth_scenario_id": entry.synth_scenario_id,
-                "adversarial_scenario_id": entry.adversarial_scenario_id,
-                "turn_count": int(turn_count),
-                "conversation_key": f"{entry.persona_id}:{entry.synth_scenario_id}:{entry.adversarial_scenario_id}:{k}",
-            })
+            plan.append(
+                {
+                    "entry": entry,
+                    "persona_id": entry.persona_id,
+                    "synth_scenario_id": entry.synth_scenario_id,
+                    "adversarial_scenario_id": entry.adversarial_scenario_id,
+                    "turn_count": int(turn_count),
+                    "conversation_key": f"{entry.persona_id}:{entry.synth_scenario_id}:{entry.adversarial_scenario_id}:{k}",
+                }
+            )
     return plan
 
 
 def _round_robin_plan_by_persona(
-        plan: list[dict[str, Any]],
-        persona_order: list[str],
+    plan: list[dict[str, Any]],
+    persona_order: list[str],
 ) -> list[dict[str, Any]]:
     """Interleave conversations by persona while preserving per-persona order.
 
@@ -1101,10 +1275,10 @@ def _effective_max_concurrency(contract: UnifiedContract) -> int:
 
 
 def _failed_conversation_result(
-        *,
-        planned: dict[str, Any],
-        error: str,
-        elapsed_seconds: float,
+    *,
+    planned: dict[str, Any],
+    error: str,
+    elapsed_seconds: float,
 ) -> ConversationResult:
     conv_id = planned["conversation_id"]
     return ConversationResult(
@@ -1151,9 +1325,14 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
     from adaptive_synth_eval.unified_eval.config.schemas import (
         ComponentOverrides,
         LLMSpec,
+    )
+    from adaptive_synth_eval.unified_eval.config.schemas import (
         UnifiedContract as _UC,
     )
-    mock_spec = LLMSpec(provider="mock", model="mock", max_tokens=contract.llm.max_tokens)
+
+    mock_spec = LLMSpec(
+        provider="mock", model="mock", max_tokens=contract.llm.max_tokens
+    )
     return _UC(
         suite=contract.suite,
         run=contract.run,
@@ -1167,7 +1346,9 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
         eval_plan=contract.eval_plan,
         scoring=contract.scoring,
         output=contract.output,
-        target_llm=(LLMSpec(provider="mock", model="mock") if contract.target_llm else None),
+        target_llm=(
+            LLMSpec(provider="mock", model="mock") if contract.target_llm else None
+        ),
         target_system_prompt=contract.target_system_prompt,
         trajectory=contract.trajectory,
         warnings=list(contract.warnings) + ["dry_run: forced mock LLM providers"],
@@ -1175,20 +1356,20 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
 
 
 def _persist_and_summarize(
-        *,
-        contract: UnifiedContract,
-        writer: UnifiedArtifactWriter,
-        tracker: _RunningStatsTracker,
-        plan: list[dict[str, Any]],
-        run_id: str,
-        dry_run: bool,
-        memory_registry: AttackMemoryRegistry,
-        output_conversations: bool = False,
-        meter: BudgetMeter | None = None,
-        budget_stopped: bool = False,
-        elapsed_seconds: float = 0.0,
-        effective_max_concurrency: int = 1,
-        planned_conversations_total: int | None = None,
+    *,
+    contract: UnifiedContract,
+    writer: UnifiedArtifactWriter,
+    tracker: _RunningStatsTracker,
+    plan: list[dict[str, Any]],
+    run_id: str,
+    dry_run: bool,
+    memory_registry: AttackMemoryRegistry,
+    output_conversations: bool = False,
+    meter: BudgetMeter | None = None,
+    budget_stopped: bool = False,
+    elapsed_seconds: float = 0.0,
+    effective_max_concurrency: int = 1,
+    planned_conversations_total: int | None = None,
 ) -> dict[str, Any]:
     errors = tracker.errors
     synth_turns = tracker.synth_turns
@@ -1212,7 +1393,9 @@ def _persist_and_summarize(
         writer.write_attack_memory(memory_registry.to_dict())
 
     budget_summary = (
-        meter.summary(stopped_due_to_budget=budget_stopped) if meter is not None else None
+        meter.summary(stopped_due_to_budget=budget_stopped)
+        if meter is not None
+        else None
     )
 
     # Calculate token usage statistics from meter (simulator tokens only)
@@ -1226,18 +1409,30 @@ def _persist_and_summarize(
     simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
 
     convo_count = tracker.total_conversations
-    avg_prompt_tokens_convo = round(simulator_prompt_tokens / convo_count, 2) if convo_count else 0.0
-    avg_completion_tokens_convo = round(simulator_completion_tokens / convo_count, 2) if convo_count else 0.0
-    avg_total_tokens_convo = round(simulator_total_tokens / convo_count, 2) if convo_count else 0.0
+    avg_prompt_tokens_convo = (
+        round(simulator_prompt_tokens / convo_count, 2) if convo_count else 0.0
+    )
+    avg_completion_tokens_convo = (
+        round(simulator_completion_tokens / convo_count, 2) if convo_count else 0.0
+    )
+    avg_total_tokens_convo = (
+        round(simulator_total_tokens / convo_count, 2) if convo_count else 0.0
+    )
 
     # Calculate estimated chatbot token usage
     chatbot_prompt_tokens = tracker.chatbot_prompt_tokens
     chatbot_completion_tokens = tracker.chatbot_completion_tokens
     chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
 
-    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / convo_count, 2) if convo_count else 0.0
-    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / convo_count, 2) if convo_count else 0.0
-    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / convo_count, 2) if convo_count else 0.0
+    avg_chatbot_prompt_tokens_convo = (
+        round(chatbot_prompt_tokens / convo_count, 2) if convo_count else 0.0
+    )
+    avg_chatbot_completion_tokens_convo = (
+        round(chatbot_completion_tokens / convo_count, 2) if convo_count else 0.0
+    )
+    avg_chatbot_total_tokens_convo = (
+        round(chatbot_total_tokens / convo_count, 2) if convo_count else 0.0
+    )
 
     tokens_stats = {
         "simulator_prompt_tokens": simulator_prompt_tokens,
@@ -1258,19 +1453,30 @@ def _persist_and_summarize(
     conversation_elapsed_seconds = tracker.conversation_elapsed_seconds
     conversation_target_seconds = tracker.conversation_target_seconds
     performance_stats = {
-        "target_latency_total_seconds": round(sum(target_latencies_ms) / 1000, 2) if target_latencies_ms else 0.0,
-        "avg_target_latency_per_turn_seconds": round(sum(target_latencies_ms) / len(target_latencies_ms) / 1000, 2)
-        if target_latencies_ms else 0.0,
-        "max_target_latency_per_turn_seconds": round(max(target_latencies_ms) / 1000,
-                                                     2) if target_latencies_ms else 0.0,
-        "avg_conversation_elapsed_seconds": round(sum(conversation_elapsed_seconds) / len(conversation_elapsed_seconds),
-                                                  2)
-        if conversation_elapsed_seconds else 0.0,
+        "target_latency_total_seconds": round(sum(target_latencies_ms) / 1000, 2)
+        if target_latencies_ms
+        else 0.0,
+        "avg_target_latency_per_turn_seconds": round(
+            sum(target_latencies_ms) / len(target_latencies_ms) / 1000, 2
+        )
+        if target_latencies_ms
+        else 0.0,
+        "max_target_latency_per_turn_seconds": round(max(target_latencies_ms) / 1000, 2)
+        if target_latencies_ms
+        else 0.0,
+        "avg_conversation_elapsed_seconds": round(
+            sum(conversation_elapsed_seconds) / len(conversation_elapsed_seconds), 2
+        )
+        if conversation_elapsed_seconds
+        else 0.0,
         "max_conversation_elapsed_seconds": round(max(conversation_elapsed_seconds), 2)
-        if conversation_elapsed_seconds else 0.0,
+        if conversation_elapsed_seconds
+        else 0.0,
         "avg_target_latency_per_conversation_seconds": round(
             sum(conversation_target_seconds) / len(conversation_target_seconds), 2
-        ) if conversation_target_seconds else 0.0,
+        )
+        if conversation_target_seconds
+        else 0.0,
     }
 
     # Scale Projections
@@ -1288,12 +1494,20 @@ def _persist_and_summarize(
     avg_conversation_elapsed = performance_stats["avg_conversation_elapsed_seconds"]
     if avg_conversation_elapsed > 0:
         steady_rate = max(1, int(effective_max_concurrency)) / avg_conversation_elapsed
-        scale_projections.update({
-            "steady_state_conversations_per_second": round(steady_rate, 4),
-            "steady_state_time_for_1k_conversations_seconds": round(1000 / steady_rate, 2),
-            "steady_state_time_for_10k_conversations_seconds": round(10000 / steady_rate, 2),
-            "steady_state_time_for_100k_conversations_seconds": round(100000 / steady_rate, 2),
-        })
+        scale_projections.update(
+            {
+                "steady_state_conversations_per_second": round(steady_rate, 4),
+                "steady_state_time_for_1k_conversations_seconds": round(
+                    1000 / steady_rate, 2
+                ),
+                "steady_state_time_for_10k_conversations_seconds": round(
+                    10000 / steady_rate, 2
+                ),
+                "steady_state_time_for_100k_conversations_seconds": round(
+                    100000 / steady_rate, 2
+                ),
+            }
+        )
 
     summary = {
         "run_id": run_id,
@@ -1324,11 +1538,14 @@ def _persist_and_summarize(
         summary["trajectory"] = {
             "max_trace_severity_score": (
                 max(tracker.trace_severity_scores)
-                if tracker.trace_severity_scores else 0
+                if tracker.trace_severity_scores
+                else 0
             ),
             "mean_trace_severity_score": _mean(tracker.trace_severity_scores),
             "sessions_with_signal": tracker.trajectory_signal_sessions,
-            "failure_surface_counts": dict(sorted(tracker.failure_surface_counts.items())),
+            "failure_surface_counts": dict(
+                sorted(tracker.failure_surface_counts.items())
+            ),
         }
     writer.write_unified_summary(summary)
     writer.write_unified_report(summary)
@@ -1367,21 +1584,25 @@ def _percentiles(values):
 def _serialize_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for p in plan:
-        rows.append({
-            "persona_id": p["persona_id"],
-            "conversation_id": p["conversation_id"],
-            "synth_scenario_id": p["synth_scenario_id"],
-            "adversarial_scenario_id": p["adversarial_scenario_id"],
-            "turn_count": p["turn_count"],
-            "conversation_key": p["conversation_key"],
-            "weight": p["entry"].weight,
-            "schedule": p["entry"].schedule.__dict__,
-            "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
-        })
+        rows.append(
+            {
+                "persona_id": p["persona_id"],
+                "conversation_id": p["conversation_id"],
+                "synth_scenario_id": p["synth_scenario_id"],
+                "adversarial_scenario_id": p["adversarial_scenario_id"],
+                "turn_count": p["turn_count"],
+                "conversation_key": p["conversation_key"],
+                "weight": p["entry"].weight,
+                "schedule": p["entry"].schedule.__dict__,
+                "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
+            }
+        )
     return rows
 
 
-def _estimate_remaining_seconds(*, completed: int, total: int | None, elapsed_seconds: float) -> float | None:
+def _estimate_remaining_seconds(
+    *, completed: int, total: int | None, elapsed_seconds: float
+) -> float | None:
     if total is None:
         return None
     if completed <= 0 or elapsed_seconds <= 0:

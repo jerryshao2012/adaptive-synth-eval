@@ -1,8 +1,59 @@
+import asyncio
+import threading
+from contextlib import nullcontext
+from types import SimpleNamespace
+
+import pytest
+
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 
 
+@pytest.mark.asyncio
+async def test_async_listener_is_cancelled_awaited_and_restartable(monkeypatch):
+    import adaptive_synth_eval.engines.realtime_controls as controls
+
+    prompts_started = 0
+
+    class FakePromptSession:
+        def __init__(self, **kwargs):
+            self.app = SimpleNamespace(invalidate=lambda: None)
+
+        async def prompt_async(self, prompt):
+            nonlocal prompts_started
+            prompts_started += 1
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(controls, "PromptSession", FakePromptSession)
+    monkeypatch.setattr(controls, "patch_stdout", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(controls.sys.stdin, "isatty", lambda: True)
+
+    controller = RealtimeChatController(initial_delay_seconds=0)
+    assert await controller.start_async() is True
+    await asyncio.sleep(0)
+    listener = controller._input_task
+    controller.stop()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert listener is not None and listener.done()
+    await controller.stop_async()
+
+    assert prompts_started == 1
+    assert controller._input_task is None
+    assert not any(
+        thread.name == "realtime-chat-controls" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+    assert await controller.start_async() is True
+    await asyncio.sleep(0)
+    await controller.stop_async()
+    assert prompts_started == 2
+
+
 def test_realtime_controller_speed_commands_adjust_delay():
-    controller = RealtimeChatController(initial_delay_seconds=1.0, delay_step_seconds=0.25)
+    controller = RealtimeChatController(
+        initial_delay_seconds=1.0, delay_step_seconds=0.25
+    )
 
     controller.apply_command("+")
     assert controller.current_delay_seconds == 0.75
@@ -233,7 +284,11 @@ def test_realtime_controller_list_and_switching():
 def test_realtime_command_completer():
     try:
         from prompt_toolkit.document import Document
-        from adaptive_synth_eval.engines.realtime_controls import RealtimeCommandCompleter, RealtimeChatController
+
+        from adaptive_synth_eval.engines.realtime_controls import (
+            RealtimeChatController,
+            RealtimeCommandCompleter,
+        )
     except ImportError:
         return  # Skip if prompt_toolkit is not installed
 
@@ -284,6 +339,7 @@ def test_realtime_command_completer():
 
 def test_realtime_controller_single_persona_mode():
     from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
+
     personas = {
         "P1": {"role": "tester"},
         "P2": {"role": "manager"},
@@ -311,7 +367,10 @@ def test_realtime_controller_single_persona_mode():
     # 3. Test autocomplete does not suggest persona commands
     try:
         from prompt_toolkit.document import Document
-        from adaptive_synth_eval.engines.realtime_controls import RealtimeCommandCompleter
+
+        from adaptive_synth_eval.engines.realtime_controls import (
+            RealtimeCommandCompleter,
+        )
 
         if RealtimeCommandCompleter is not None:
             completer = RealtimeCommandCompleter(controller)
@@ -366,7 +425,9 @@ def test_realtime_controller_prompt_text_shows_persona():
 
 
 def test_switch_without_active_sessions_returns_clear_message():
-    controller = RealtimeChatController(initial_delay_seconds=0.5, personas={"P1": {}, "P2": {}})
+    controller = RealtimeChatController(
+        initial_delay_seconds=0.5, personas={"P1": {}, "P2": {}}
+    )
 
     msg = controller.apply_command("switch P2-conv_000002")
 

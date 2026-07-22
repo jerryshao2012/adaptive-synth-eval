@@ -4,6 +4,7 @@ Maintains a per-conversation message history so the bot has full context for eac
 turn. Exposes send() and send_async() with the same shape as ASE's ChatbotClient
 so the orchestrator doesn't care which backend it's talking to.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,15 +21,15 @@ class LLMTargetClient:
     """Claude-as-target chatbot. One client per run, conversation-keyed history."""
 
     def __init__(
-            self,
-            spec: LLMSpec,
-            system_prompt: str,
-            dry_run: bool = False,
-            meter=None,  # BudgetMeter | None
-            component_label: str = "target_bot",
-            retry_max_attempts: int = 3,
-            retry_initial_backoff: float = 1.0,
-            retry_max_backoff: float = 30.0,
+        self,
+        spec: LLMSpec,
+        system_prompt: str,
+        dry_run: bool = False,
+        meter=None,  # BudgetMeter | None
+        component_label: str = "target_bot",
+        retry_max_attempts: int = 3,
+        retry_initial_backoff: float = 1.0,
+        retry_max_backoff: float = 30.0,
     ):
         self.spec = spec
         self.system_prompt = system_prompt or "You are a helpful assistant."
@@ -64,18 +65,25 @@ class LLMTargetClient:
             )
         return self._client
 
+    def prepare(self) -> None:
+        """Construct the shared provider client before conversation fan-out."""
+        self._get_client()
+
     def send(
-            self,
-            *,
-            conversation_id: str,
-            session_id: str,
-            turn_id: int,
-            user_message: str,
-            metadata: dict[str, Any] | None = None,
+        self,
+        *,
+        conversation_id: str,
+        session_id: str,
+        turn_id: int,
+        user_message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
         if self.dry_run:
             return ChatbotResponse.from_payload(
-                {"mock": True, "response": f"[dry-run claude-target reply for turn {turn_id}]"},
+                {
+                    "mock": True,
+                    "response": f"[dry-run claude-target reply for turn {turn_id}]",
+                },
                 latency_ms=0.0,
                 status_code=0,
             )
@@ -110,7 +118,9 @@ class LLMTargetClient:
                 "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
             }
             return ChatbotResponse.from_payload(
-                payload, latency_ms=latency_ms, status_code=200,
+                payload,
+                latency_ms=latency_ms,
+                status_code=200,
             )
         except Exception as exc:  # noqa: BLE001
             latency_ms = (time.perf_counter() - start) * 1000

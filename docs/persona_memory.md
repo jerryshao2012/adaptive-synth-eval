@@ -72,18 +72,21 @@ Before an LLM-backed synth turn, the simulator renders non-empty demographics, p
 
 ## Concurrency and writes
 
-A process-wide registry supplies one `threading.Lock` per absolute memory-file path. Reads and writes use that lock. Saves write to a thread-specific temporary file and atomically replace the destination, retrying transient Windows `PermissionError` failures.
+The legacy synth runner serializes conversations per persona with an `asyncio.Lock`.
+Its Markdown reads and writes also use a process-wide file lock and atomic replacement.
 
-This prevents torn/corrupt individual in-process reads and writes, but the lock does not
-cover an entire load-modify-save lifecycle and does not merge independently loaded
-states. Two simulators writing the same persona file can still use stale snapshots,
-overwrite one another, and lose updates (last writer wins).
+Unified runs instead create one run-scoped persona-memory actor per persona. Each
+conversation receives a snapshot when it starts and returns only its delta. The actor
+merges deltas in deterministic plan order and persists a versioned JSON source of truth
+before rendering the Markdown compatibility view. Concurrent same-persona
+conversations therefore do not overwrite one another. They do not see one another's
+in-flight changes; a newly starting conversation sees the durable state available at
+that time.
 
-The synth runner serializes its conversations per persona with an `asyncio.Lock`.
-Unified orchestration does not currently provide equivalent per-persona conversation
-serialization. Avoid concurrent same-persona writers in unified runs, or externally
-serialize them when logical memory continuity matters. The file lock is also not a
-cross-process lock, so do not point multiple ASE processes at the same run directory.
+The JSON sidecar retains every conversation update for resume and audit. The merged
+prompt/Markdown view preserves the existing limits of ten summary notes and twenty
+long-term recall entries. These safeguards are process-local, so do not point multiple
+ASE processes at the same run directory.
 
 ## Privacy considerations
 

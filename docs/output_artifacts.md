@@ -30,12 +30,16 @@ outputs/runs/<run_id>/
 ├── eval_progress.md            # Monitoring progress/status markdown
 ├── monitoring.log              # Append-only dashboard-launched CLI output
 └── personas/
-	└── <persona_id>_memory.md  # Synth and unified persona memory files
+	├── <persona_id>_memory.json # Unified authoritative, versioned actor state
+	└── <persona_id>_memory.md   # Synth state / unified compatibility view
 ```
 
 Notes:
 - `synth` mode produces the common simulation artifacts and omits unified-only files.
 - `unified` mode produces common artifacts plus unified-specific files listed above.
+- In unified mode, persona-memory JSON is the resumable source of truth. The adjacent
+  Markdown file is regenerated as a human-readable compatibility view. Legacy Markdown
+  is imported automatically when no JSON sidecar exists.
 - Score, state, and progress artifacts (`monitoring_scores.jsonl`,
   `monitoring_state.json`, and `eval_progress.md`) are created by
   `ase monitor run` against the run folder. `monitoring.log` is created when the

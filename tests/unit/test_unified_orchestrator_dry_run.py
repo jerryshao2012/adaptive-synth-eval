@@ -1,6 +1,7 @@
 """End-to-end dry-run: confirms both turn types are produced and persona voice flows
 to the adversarial planner.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,7 +14,12 @@ from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
+EXAMPLE = (
+    Path(__file__).resolve().parents[2]
+    / "contracts"
+    / "examples"
+    / "unified_evaluation_demo.yaml"
+)
 
 
 def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
@@ -48,16 +54,20 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
     # synth rows have safety_score; adv rows have failure_score
     assert any(r.get("safety_score") is not None for r in synth_rows)
     assert any(r.get("failure_score") is not None for r in adv_rows)
-    assert all({
-                   "best_failure_score",
-                   "effective_failure_score",
-                   "best_effective_failure_score",
-                   "failure_threshold",
-                   "is_breach",
-                   "confidence",
-                   "reasoning",
-                   "judge_error",
-               } <= row.keys() for row in adv_rows)
+    assert all(
+        {
+            "best_failure_score",
+            "effective_failure_score",
+            "best_effective_failure_score",
+            "failure_threshold",
+            "is_breach",
+            "confidence",
+            "reasoning",
+            "judge_error",
+        }
+        <= row.keys()
+        for row in adv_rows
+    )
 
     adversarial_turns = [
         json.loads(line)
@@ -71,9 +81,10 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
         for line in (run_dir / "conversations.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    assert all({
-                   "best_effective_failure_score", "failure_threshold", "is_breach"
-               } <= row.keys() for row in conversation_rows)
+    assert all(
+        {"best_effective_failure_score", "failure_threshold", "is_breach"} <= row.keys()
+        for row in conversation_rows
+    )
     assert summary["failure_percentiles"]["failure_score"]["count"] == len(adv_rows)
 
     # attack_memory.json has cross-conversation entries
@@ -89,14 +100,29 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
         for line in (run_dir / "adversarial_sessions.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    assert all({
-                   "best_failure_score", "best_effective_failure_score",
-                   "failure_threshold", "is_breach",
-               } <= session.keys() for session in sessions)
-    assert all({
-                   "failure_score", "best_failure_score", "effective_failure_score",
-                   "best_effective_failure_score", "failure_threshold", "is_breach",
-               } <= turn.keys() for session in sessions for turn in session["turns"])
+    assert all(
+        {
+            "best_failure_score",
+            "best_effective_failure_score",
+            "failure_threshold",
+            "is_breach",
+        }
+        <= session.keys()
+        for session in sessions
+    )
+    assert all(
+        {
+            "failure_score",
+            "best_failure_score",
+            "effective_failure_score",
+            "best_effective_failure_score",
+            "failure_threshold",
+            "is_breach",
+        }
+        <= turn.keys()
+        for session in sessions
+        for turn in session["turns"]
+    )
 
     run_state = json.loads((run_dir / "run_state.json").read_text())
     assert run_state["version"] == 2
@@ -109,6 +135,45 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
     run_plan = json.loads((run_dir / "run_plan.json").read_text())
     assert normalized["schema_version"] == 2
     assert all("schedule" in row for row in run_plan)
+
+
+def test_dry_run_results_do_not_depend_on_concurrency(tmp_path: Path):
+    from adaptive_synth_eval.config.schemas import ConversationTurns
+
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(
+        contract,
+        eval_plan=replace(
+            contract.eval_plan,
+            total_conversations=8,
+            conversation_turns=ConversationTurns(min=2, max=2),
+        ),
+    )
+
+    for concurrency, base_dir in (
+        (1, tmp_path / "serial"),
+        (16, tmp_path / "parallel"),
+    ):
+        run_unified(
+            _with_output_dir(contract, base_dir),
+            dry_run=True,
+            max_concurrency_override=concurrency,
+            run_id_override="deterministic",
+        )
+
+    def rows(base_dir: Path, filename: str) -> list[dict]:
+        path = base_dir / "runs" / "deterministic" / filename
+        loaded = [json.loads(line) for line in path.read_text().splitlines() if line]
+        for row in loaded:
+            row.pop("latency_ms", None)
+        return sorted(loaded, key=lambda row: (row["conversation_id"], row["turn_id"]))
+
+    assert rows(tmp_path / "serial", "turns.jsonl") == rows(
+        tmp_path / "parallel", "turns.jsonl"
+    )
+    assert rows(tmp_path / "serial", "scores.jsonl") == rows(
+        tmp_path / "parallel", "scores.jsonl"
+    )
 
 
 def test_unified_persona_filter_is_case_insensitive(tmp_path: Path):
@@ -157,7 +222,9 @@ def test_unified_persona_filter_raises_for_unknown_persona(tmp_path: Path):
     contract = load_unified_contract(EXAMPLE)
     contract = _with_output_dir(contract, tmp_path)
 
-    with pytest.raises(ContractError, match="Specified persona 'DOES_NOT_EXIST' not found"):
+    with pytest.raises(
+        ContractError, match="Specified persona 'DOES_NOT_EXIST' not found"
+    ):
         run_unified(
             contract,
             dry_run=True,
@@ -168,25 +235,36 @@ def test_unified_persona_filter_raises_for_unknown_persona(tmp_path: Path):
 
 def test_effective_concurrency_reports_requested_value(tmp_path: Path):
     contract = load_unified_contract(EXAMPLE)
-    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=16))
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        run=replace(contract.run, max_concurrency=16),
+    )
 
-    summary = run_unified(contract, dry_run=True, run_id_override="orchestrator_concurrency")
+    summary = run_unified(
+        contract, dry_run=True, run_id_override="orchestrator_concurrency"
+    )
 
     assert summary["configured_max_concurrency"] == 16
     assert summary["effective_max_concurrency"] == 16
 
 
-def test_concurrent_budget_admission_does_not_persist_zero_turn_conversations(tmp_path: Path):
+def test_concurrent_budget_admission_does_not_persist_zero_turn_conversations(
+    tmp_path: Path,
+):
     contract = load_unified_contract(EXAMPLE)
     contract = replace(
         _with_output_dir(contract, tmp_path),
-        run=replace(contract.run, budget=1_500, reserve_tokens=1_500, max_concurrency=8),
+        run=replace(
+            contract.run, budget=1_500, reserve_tokens=1_500, max_concurrency=8
+        ),
     )
 
     summary = run_unified(contract, dry_run=True, run_id_override="bounded_budget")
     rows = [
         json.loads(line)
-        for line in (tmp_path / "runs" / "bounded_budget" / "conversations.jsonl").read_text().splitlines()
+        for line in (tmp_path / "runs" / "bounded_budget" / "conversations.jsonl")
+        .read_text()
+        .splitlines()
         if line.strip()
     ]
 
@@ -195,7 +273,45 @@ def test_concurrent_budget_admission_does_not_persist_zero_turn_conversations(tm
     assert all(row["turn_count"] > 0 for row in rows)
 
 
-def test_v2_resume_restores_usage_memory_and_skips_completed_conversations(tmp_path: Path):
+def test_concurrent_same_persona_conversations_keep_every_memory_update(tmp_path: Path):
+    from adaptive_synth_eval.config.schemas import ConversationTurns
+    from adaptive_synth_eval.unified_eval.config.schemas import Schedule
+
+    contract = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
+    entry = replace(
+        contract.eval_plan.entries[0],
+        schedule=Schedule(mode="phased", warmup_turns=1),
+        max_turns=1,
+        weight=1.0,
+    )
+    contract = replace(
+        contract,
+        run=replace(contract.run, max_concurrency=8),
+        eval_plan=replace(
+            contract.eval_plan,
+            total_conversations=8,
+            conversation_turns=ConversationTurns(min=1, max=1),
+            entries=[entry],
+        ),
+    )
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="same_persona_memory",
+    )
+
+    run_dir = tmp_path / "runs" / "same_persona_memory"
+    state = json.loads((run_dir / "personas" / "DEMO_P1_memory.json").read_text())
+    markdown = (run_dir / "personas" / "DEMO_P1_memory.md").read_text()
+    assert summary["total_conversations"] == 8
+    assert list(state["updates"]) == [f"conv_{index:06d}" for index in range(1, 9)]
+    assert markdown.count("Interacted regarding") == 8
+
+
+def test_v2_resume_restores_usage_memory_and_skips_completed_conversations(
+    tmp_path: Path,
+):
     contract = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
     first = run_unified(contract, dry_run=True, run_id_override="resume_v2")
     run_dir = tmp_path / "runs" / "resume_v2"
@@ -211,17 +327,26 @@ def test_v2_resume_restores_usage_memory_and_skips_completed_conversations(tmp_p
 
     after_rows = (run_dir / "conversations.jsonl").read_text().splitlines()
     after_memory = json.loads((run_dir / "attack_memory.json").read_text())
-    assert resumed["budget"]["used_total_tokens"] == first["budget"]["used_total_tokens"]
+    assert (
+        resumed["budget"]["used_total_tokens"] == first["budget"]["used_total_tokens"]
+    )
     assert after_rows == before_rows
     assert len(after_memory["entries"]) == len(before_memory["entries"])
 
 
-def test_enabled_trajectory_with_empty_target_trace_skips_summarizer_call(tmp_path: Path):
+def test_enabled_trajectory_with_empty_target_trace_skips_summarizer_call(
+    tmp_path: Path,
+):
     from adaptive_synth_eval.config.schemas import ConversationTurns
-    from adaptive_synth_eval.unified_eval.config.schemas import Schedule, TrajectoryConfig
+    from adaptive_synth_eval.unified_eval.config.schemas import (
+        Schedule,
+        TrajectoryConfig,
+    )
 
     contract = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
-    entry = replace(contract.eval_plan.entries[0], schedule=Schedule(mode="phased", warmup_turns=0))
+    entry = replace(
+        contract.eval_plan.entries[0], schedule=Schedule(mode="phased", warmup_turns=0)
+    )
     contract = replace(
         contract,
         trajectory=TrajectoryConfig(enabled=True),
@@ -234,9 +359,7 @@ def test_enabled_trajectory_with_empty_target_trace_skips_summarizer_call(tmp_pa
     )
 
     summary = run_unified(contract, dry_run=True, run_id_override="empty_trace")
-    components = {
-        row["component"]: row for row in summary["budget"]["per_component"]
-    }
+    components = {row["component"]: row for row in summary["budget"]["per_component"]}
 
     assert summary["adversarial_turns"] == 2
     assert components["judge"]["calls"] == 2
@@ -245,7 +368,10 @@ def test_enabled_trajectory_with_empty_target_trace_skips_summarizer_call(tmp_pa
 
 def test_run_logs_startup_conversation_batch(tmp_path: Path, caplog):
     contract = load_unified_contract(EXAMPLE)
-    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=4))
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        run=replace(contract.run, max_concurrency=4),
+    )
 
     with caplog.at_level("INFO"):
         run_unified(contract, dry_run=True, run_id_override="orchestrator_startup_log")
@@ -257,7 +383,10 @@ def test_run_logs_startup_conversation_batch(tmp_path: Path, caplog):
 
 def test_realtime_persona_filter_runs_single_conversation(tmp_path: Path):
     contract = load_unified_contract(EXAMPLE)
-    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=16))
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        run=replace(contract.run, max_concurrency=16),
+    )
 
     summary = run_unified(
         contract,
@@ -275,7 +404,10 @@ def test_realtime_persona_filter_runs_single_conversation(tmp_path: Path):
 
 def test_realtime_run_emits_progress_sink_updates(tmp_path: Path):
     contract = load_unified_contract(EXAMPLE)
-    contract = replace(_with_output_dir(contract, tmp_path), run=replace(contract.run, max_concurrency=2))
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        run=replace(contract.run, max_concurrency=2),
+    )
 
     updates = []
 
@@ -299,7 +431,9 @@ def test_realtime_run_emits_progress_sink_updates(tmp_path: Path):
 
 
 def test_round_robin_plan_by_persona_interleaves_order():
-    from adaptive_synth_eval.unified_eval.orchestrator.runner import _round_robin_plan_by_persona
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import (
+        _round_robin_plan_by_persona,
+    )
 
     plan = [
         {"persona_id": "P1", "conversation_key": "k1"},
@@ -315,7 +449,9 @@ def test_round_robin_plan_by_persona_interleaves_order():
 
 
 def test_estimate_remaining_seconds_returns_expected_value():
-    from adaptive_synth_eval.unified_eval.orchestrator.runner import _estimate_remaining_seconds
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import (
+        _estimate_remaining_seconds,
+    )
 
     eta = _estimate_remaining_seconds(completed=10, total=50, elapsed_seconds=20.0)
 
@@ -323,10 +459,17 @@ def test_estimate_remaining_seconds_returns_expected_value():
 
 
 def test_estimate_remaining_seconds_handles_unknown_or_empty_progress():
-    from adaptive_synth_eval.unified_eval.orchestrator.runner import _estimate_remaining_seconds
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import (
+        _estimate_remaining_seconds,
+    )
 
-    assert _estimate_remaining_seconds(completed=0, total=50, elapsed_seconds=20.0) is None
-    assert _estimate_remaining_seconds(completed=10, total=None, elapsed_seconds=20.0) is None
+    assert (
+        _estimate_remaining_seconds(completed=0, total=50, elapsed_seconds=20.0) is None
+    )
+    assert (
+        _estimate_remaining_seconds(completed=10, total=None, elapsed_seconds=20.0)
+        is None
+    )
 
 
 def test_resume_fingerprints_are_stable_and_reject_changed_plan():
@@ -391,6 +534,112 @@ async def test_sliding_window_bounds_concurrency_and_stops_new_admission():
     assert len(started) < 10
 
 
+@pytest.mark.asyncio
+async def test_sliding_window_drains_admitted_workers_before_raising():
+    import asyncio
+
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _run_sliding_window
+
+    admitted = asyncio.Event()
+    failed = asyncio.Event()
+    release = asyncio.Event()
+    started: list[int] = []
+    finished: list[int] = []
+
+    async def worker(item: int) -> None:
+        started.append(item)
+        if len(started) == 3:
+            admitted.set()
+        await admitted.wait()
+        if item == 0:
+            failed.set()
+            raise RuntimeError("persist failed")
+        await release.wait()
+        finished.append(item)
+
+    run = asyncio.create_task(
+        _run_sliding_window(
+            list(range(8)),
+            worker=worker,
+            max_concurrency=3,
+            can_admit=lambda: True,
+        )
+    )
+    await admitted.wait()
+    await failed.wait()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert not run.done()
+    assert started == [0, 1, 2]
+
+    release.set()
+    with pytest.raises(RuntimeError, match="persist failed"):
+        await run
+
+    assert sorted(finished) == [1, 2]
+    assert started == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_drains_admitted_workers_when_cancelled():
+    import asyncio
+
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _run_sliding_window
+
+    admitted = asyncio.Event()
+    release = asyncio.Event()
+    started: list[int] = []
+    finished: list[int] = []
+
+    async def worker(item: int) -> None:
+        started.append(item)
+        if len(started) == 3:
+            admitted.set()
+        await release.wait()
+        finished.append(item)
+
+    run = asyncio.create_task(
+        _run_sliding_window(
+            list(range(8)),
+            worker=worker,
+            max_concurrency=3,
+            can_admit=lambda: True,
+        )
+    )
+    await admitted.wait()
+    run.cancel()
+    await asyncio.sleep(0)
+
+    assert not run.done()
+    assert started == [0, 1, 2]
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert sorted(finished) == [0, 1, 2]
+    assert started == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_prepare_shared_client_completes_before_use():
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import _prepare_client
+
+    calls: list[str] = []
+
+    class Client:
+        def prepare(self) -> None:
+            calls.append("prepare")
+
+    await _prepare_client(Client())
+
+    assert calls == ["prepare"]
+
+
 def _with_output_dir(contract, base_dir: Path):
     from adaptive_synth_eval.unified_eval.config.schemas import OutputConfig
-    return replace(contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id))
+
+    return replace(
+        contract, output=OutputConfig(base_dir=base_dir, run_id=contract.output.run_id)
+    )

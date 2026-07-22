@@ -41,7 +41,9 @@ class PersonaMarkdownMemory:
         self.settings: dict[str, Any] = {}
         self.summary_notes: list[str] = []
         self.long_term_recall: list[str] = []
-        self.recent_window: list[dict[str, str]] = []  # list of {"role": "user"/"assistant", "text": "..."}
+        self.recent_window: list[
+            dict[str, str]
+        ] = []  # list of {"role": "user"/"assistant", "text": "..."}
 
     @classmethod
     def load_from_file(cls, path: Path, persona_id: str) -> PersonaMarkdownMemory:
@@ -77,15 +79,21 @@ class PersonaMarkdownMemory:
                 if current_section == "demographics":
                     if ":" in val:
                         k, v = val.split(":", 1)
-                        self.demographics[k.strip().lower()] = v.strip() if v.strip() != "None" else None
+                        self.demographics[k.strip().lower()] = (
+                            v.strip() if v.strip() != "None" else None
+                        )
                 elif current_section == "preferences":
                     if ":" in val:
                         k, v = val.split(":", 1)
-                        self.preferences[k.strip().lower()] = v.strip() if v.strip() != "None" else None
+                        self.preferences[k.strip().lower()] = (
+                            v.strip() if v.strip() != "None" else None
+                        )
                 elif current_section == "settings":
                     if ":" in val:
                         k, v = val.split(":", 1)
-                        self.settings[k.strip().lower()] = v.strip() if v.strip() != "None" else None
+                        self.settings[k.strip().lower()] = (
+                            v.strip() if v.strip() != "None" else None
+                        )
                 elif current_section == "summary notes":
                     self.summary_notes.append(val)
                 elif current_section == "long term recall":
@@ -94,8 +102,14 @@ class PersonaMarkdownMemory:
                     if ":" in val:
                         role, text = val.split(":", 1)
                         role_str = role.strip().lower()
-                        role_normalized = "user" if "user" in role_str or "human" in role_str else "assistant"
-                        self.recent_window.append({"role": role_normalized, "text": text.strip()})
+                        role_normalized = (
+                            "user"
+                            if "user" in role_str or "human" in role_str
+                            else "assistant"
+                        )
+                        self.recent_window.append(
+                            {"role": role_normalized, "text": text.strip()}
+                        )
 
     def save_to_file(self, path: Path) -> None:
         lock = _get_memory_lock(path)
@@ -179,9 +193,17 @@ class UserSimulator:
         r"\bgiven our (recent|previous) discussion\b",
     )
 
-    def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None,
-                 memory_file: Path | None = None, llm_client: Any | None = None,
-                 llm_config: Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        persona: Persona,
+        scenario: Scenario,
+        turn_count: int,
+        seed: int | None = None,
+        memory_file: Path | None = None,
+        llm_client: Any | None = None,
+        llm_config: Mapping[str, Any] | None = None,
+        memory: PersonaMarkdownMemory | None = None,
+    ):
         self.persona = persona
         self.scenario = scenario
         self.turn_count = turn_count
@@ -193,16 +215,21 @@ class UserSimulator:
         else:
             # Enable LLM client if a provider is configured in environment variables
             config = dict(llm_config or {})
-            _llm_client = LLMClient(enabled=False, config=config)  # Check if provider is available
+            _llm_client = LLMClient(
+                enabled=False, config=config
+            )  # Check if provider is available
             self.llm_client = LLMClient(
                 enabled=_llm_client.model_provider is not None,
                 config=config,
             )
         self.memory_file = memory_file
-        self.memory = None
+        self.memory = memory
 
-        if self.memory_file:
-            self.memory = PersonaMarkdownMemory.load_from_file(self.memory_file, persona.persona_id)
+        if self.memory_file and self.memory is None:
+            self.memory = PersonaMarkdownMemory.load_from_file(
+                self.memory_file, persona.persona_id
+            )
+        if self.memory is not None:
             # Sync demographics/preferences from persona if empty
             if not self.memory.demographics:
                 self.memory.demographics["role"] = persona.role
@@ -210,7 +237,9 @@ class UserSimulator:
                 self.memory.demographics["seniority"] = persona.seniority
                 self.memory.demographics["style"] = persona.communication_style
                 self.memory.demographics["hr_familiarity"] = persona.hr_familiarity
-                self.memory.demographics["privacy_sensitivity"] = persona.privacy_sensitivity
+                self.memory.demographics["privacy_sensitivity"] = (
+                    persona.privacy_sensitivity
+                )
             # Start each conversation as fresh contact. Keep long-term profile memory,
             # but never carry short-term dialogue context across conversations.
             if self.memory.recent_window:
@@ -222,43 +251,60 @@ class UserSimulator:
         """Dynamically update the active persona mid-conversation and sync its memory state."""
         self.persona = new_persona
         if self.memory_file:
-            self.memory_file = self.memory_file.parent / f"{new_persona.persona_id}_memory.md"
-            self.memory = PersonaMarkdownMemory.load_from_file(self.memory_file, new_persona.persona_id)
+            self.memory_file = (
+                self.memory_file.parent / f"{new_persona.persona_id}_memory.md"
+            )
+            self.memory = PersonaMarkdownMemory.load_from_file(
+                self.memory_file, new_persona.persona_id
+            )
             if not self.memory.demographics:
                 self.memory.demographics["role"] = new_persona.role
                 self.memory.demographics["location"] = new_persona.location
                 self.memory.demographics["seniority"] = new_persona.seniority
                 self.memory.demographics["style"] = new_persona.communication_style
                 self.memory.demographics["hr_familiarity"] = new_persona.hr_familiarity
-                self.memory.demographics["privacy_sensitivity"] = new_persona.privacy_sensitivity
+                self.memory.demographics["privacy_sensitivity"] = (
+                    new_persona.privacy_sensitivity
+                )
 
             # Sync recent window to current conversation history
             self.memory.recent_window = []
             for turn in self.history:
                 role_lbl = "assistant" if turn["role"] == "agent" else "user"
-                self.memory.recent_window.append({"role": role_lbl, "text": turn["content"]})
+                self.memory.recent_window.append(
+                    {"role": role_lbl, "text": turn["content"]}
+                )
             self.memory.save_to_file(self.memory_file)
 
     def generate_turn(
-            self,
-            turn_id: int,
-            previous_bot_response: str | None = None,
-            *,
-            behavior_override: str | None = None,
+        self,
+        turn_id: int,
+        previous_bot_response: str | None = None,
+        *,
+        behavior_override: str | None = None,
     ) -> GeneratedTurn:
-        applied = choose_failure_modes(self.scenario.failure_injection, self.rng) if turn_id == 1 else []
+        applied = (
+            choose_failure_modes(self.scenario.failure_injection, self.rng)
+            if turn_id == 1
+            else []
+        )
 
         if previous_bot_response:
             self.history.append({"role": "agent", "content": previous_bot_response})
             if self.memory:
-                self.memory.recent_window.append({"role": "assistant", "text": previous_bot_response})
+                self.memory.recent_window.append(
+                    {"role": "assistant", "text": previous_bot_response}
+                )
                 self._prune_history_if_needed()
                 delta = self._extract_profile_delta(previous_bot_response)
                 if delta:
                     for section in ("preferences", "demographics", "settings"):
                         if section in delta:
-                            self.memory.demographics.update(delta[section]) if section == "demographics" else getattr(
-                                self.memory, section).update(delta[section])
+                            self.memory.demographics.update(
+                                delta[section]
+                            ) if section == "demographics" else getattr(
+                                self.memory, section
+                            ).update(delta[section])
                 if self.memory_file:
                     self.memory.save_to_file(self.memory_file)
 
@@ -288,7 +334,9 @@ class UserSimulator:
         else:
             message = result.content
 
-        message = self._sanitize_opening_message(turn_id, message, behavior_mode=behavior_mode)
+        message = self._sanitize_opening_message(
+            turn_id, message, behavior_mode=behavior_mode
+        )
 
         if "ambiguity" in applied:
             message += " I am not totally sure what details matter."
@@ -313,8 +361,11 @@ class UserSimulator:
             if delta:
                 for section in ("preferences", "demographics", "settings"):
                     if section in delta:
-                        self.memory.demographics.update(delta[section]) if section == "demographics" else getattr(
-                            self.memory, section).update(delta[section])
+                        self.memory.demographics.update(
+                            delta[section]
+                        ) if section == "demographics" else getattr(
+                            self.memory, section
+                        ).update(delta[section])
             if self.memory_file:
                 self.memory.save_to_file(self.memory_file)
 
@@ -334,11 +385,11 @@ class UserSimulator:
         )
 
     async def generate_turn_async(
-            self,
-            turn_id: int,
-            previous_bot_response: str | None = None,
-            *,
-            behavior_override: str | None = None,
+        self,
+        turn_id: int,
+        previous_bot_response: str | None = None,
+        *,
+        behavior_override: str | None = None,
     ) -> GeneratedTurn:
         """Async wrapper around generate_turn() for the async simulation pipeline."""
         return await asyncio.to_thread(
@@ -408,7 +459,9 @@ class UserSimulator:
                 break
 
         # Capture age
-        age_match = re.search(r"\b(?:i am|i'm)\s+(\d{1,3})\s*(?:years? old|yo)?\b", lower)
+        age_match = re.search(
+            r"\b(?:i am|i'm)\s+(\d{1,3})\s*(?:years? old|yo)?\b", lower
+        )
         if age_match:
             delta["demographics"]["age"] = int(age_match.group(1))
 
@@ -418,7 +471,9 @@ class UserSimulator:
             delta["demographics"]["location"] = location_match.group(1).strip().title()
 
         # Capture favorites
-        fav_match = re.search(r"\bmy favorite ([a-zA-Z ]{2,20}) is ([a-zA-Z0-9 ]{1,30})\b", lower)
+        fav_match = re.search(
+            r"\bmy favorite ([a-zA-Z ]{2,20}) is ([a-zA-Z0-9 ]{1,30})\b", lower
+        )
         if fav_match:
             key = f"favorite_{fav_match.group(1).strip().replace(' ', '_')}"
             delta["preferences"][key] = fav_match.group(2).strip()
@@ -434,31 +489,47 @@ class UserSimulator:
             delta["settings"]["language"] = language_match.group(1).strip()
 
         # Capture email
-        email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", t)
+        email_match = re.search(
+            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", t
+        )
         if email_match:
             delta["demographics"]["email"] = email_match.group(0)
 
         # Capture phone
-        phone_match = re.search(r"\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b", t)
+        phone_match = re.search(
+            r"\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b", t
+        )
         if phone_match:
             delta["demographics"]["phone"] = phone_match.group(0)
 
-        return delta if any(delta[key] for key in ("preferences", "demographics", "settings")) else {}
+        return (
+            delta
+            if any(delta[key] for key in ("preferences", "demographics", "settings"))
+            else {}
+        )
 
     def _score_importance(self, text: str) -> float:
         """Score turn importance from 0.0 to 1.0."""
         score = 0.5  # Base score
         lower = text.lower()
 
-        personal_keywords = ['name', 'prefer', 'like', 'live', 'work', 'family', 'home']
+        personal_keywords = ["name", "prefer", "like", "live", "work", "family", "home"]
         if any(kw in lower for kw in personal_keywords):
             score += 0.3
 
-        financial_keywords = ['account', 'transfer', 'payment', 'balance', 'loan', 'mortgage', 'card']
+        financial_keywords = [
+            "account",
+            "transfer",
+            "payment",
+            "balance",
+            "loan",
+            "mortgage",
+            "card",
+        ]
         if any(kw in lower for kw in financial_keywords):
             score += 0.2
 
-        action_keywords = ['decide', 'choose', 'want', 'need', 'should', 'recommend']
+        action_keywords = ["decide", "choose", "want", "need", "should", "recommend"]
         if any(kw in lower for kw in action_keywords):
             score += 0.1
 
@@ -469,7 +540,10 @@ class UserSimulator:
         if len(self.history) > 10:
             if len(self.history) > 2:
                 old_turns = self.history[:-2]
-                min_idx = min(range(len(old_turns)), key=lambda i: self._score_importance(old_turns[i]["content"]))
+                min_idx = min(
+                    range(len(old_turns)),
+                    key=lambda i: self._score_importance(old_turns[i]["content"]),
+                )
                 evicted_turn = self.history.pop(min_idx)
 
                 role_label = "User" if evicted_turn["role"] == "user" else "Assistant"
@@ -487,7 +561,9 @@ class UserSimulator:
                     self.memory.recent_window = []
                     for turn in self.history:
                         role_lbl = "assistant" if turn["role"] == "agent" else "user"
-                        self.memory.recent_window.append({"role": role_lbl, "text": turn["content"]})
+                        self.memory.recent_window.append(
+                            {"role": role_lbl, "text": turn["content"]}
+                        )
 
     def _render_memory_context_block(self) -> str:
         if not self.memory:
@@ -543,7 +619,9 @@ class UserSimulator:
             return
 
         user_msgs = [turn["content"] for turn in self.history if turn["role"] == "user"]
-        summary = f"Interacted regarding {self.scenario.domain} to {self.scenario.intent}."
+        summary = (
+            f"Interacted regarding {self.scenario.domain} to {self.scenario.intent}."
+        )
         if user_msgs:
             summary += f" Key message: '{user_msgs[0]}'"
 
@@ -599,7 +677,9 @@ class UserSimulator:
             return f"I am really worried about this timeline. {message}"
         return message
 
-    def _sanitize_opening_message(self, turn_id: int, message: str, *, behavior_mode: str) -> str:
+    def _sanitize_opening_message(
+        self, turn_id: int, message: str, *, behavior_mode: str
+    ) -> str:
         if turn_id != 1:
             return message
         lowered = message.lower()
@@ -609,13 +689,12 @@ class UserSimulator:
 
 
 def generate_turns(
-        persona: Persona,
-        scenario: Scenario,
-        turn_count: int,
-        seed: int | None = None,
-        llm_config: Mapping[str, Any] | None = None,
-) -> list[
-    GeneratedTurn]:
+    persona: Persona,
+    scenario: Scenario,
+    turn_count: int,
+    seed: int | None = None,
+    llm_config: Mapping[str, Any] | None = None,
+) -> list[GeneratedTurn]:
     """Convenience function to generate all turns for a conversation.
 
     Args:
@@ -638,7 +717,9 @@ def generate_turns(
     previous_bot_response = None
 
     for turn_id in range(1, turn_count + 1):
-        turn = simulator.generate_turn(turn_id=turn_id, previous_bot_response=previous_bot_response)
+        turn = simulator.generate_turn(
+            turn_id=turn_id, previous_bot_response=previous_bot_response
+        )
         turns.append(turn)
         # Simulate a generic bot response for context in next turn
         previous_bot_response = f"I understand you're asking about turn {turn_id}."

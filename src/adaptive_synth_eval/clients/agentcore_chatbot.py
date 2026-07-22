@@ -9,7 +9,10 @@ from typing import Any
 
 from adaptive_synth_eval.clients.chatbot import ChatbotResponse
 from adaptive_synth_eval.clients.logger_utils import setup_logger
-from adaptive_synth_eval.clients.retry_utils import is_transient_error, retry_on_exception
+from adaptive_synth_eval.clients.retry_utils import (
+    is_transient_error,
+    retry_on_exception,
+)
 
 logger = setup_logger(__name__)
 
@@ -42,7 +45,7 @@ def _join_sse(raw: str) -> str:
         line = line.strip()
         if not line.startswith("data:"):
             continue
-        chunk = line[len("data:"):].strip()
+        chunk = line[len("data:") :].strip()
         if not chunk or chunk == "[DONE]":
             continue
         try:
@@ -54,8 +57,18 @@ def _join_sse(raw: str) -> str:
             parts.append(decoded)
         elif isinstance(decoded, dict):  # structured event — best-effort text delta
             text = next(
-                (decoded[k] for k in ("text", "delta", "content", "output", "response", "answer")
-                 if isinstance(decoded.get(k), str)),
+                (
+                    decoded[k]
+                    for k in (
+                        "text",
+                        "delta",
+                        "content",
+                        "output",
+                        "response",
+                        "answer",
+                    )
+                    if isinstance(decoded.get(k), str)
+                ),
                 None,
             )
             parts.append(text if text is not None else json.dumps(decoded))
@@ -66,20 +79,20 @@ def _join_sse(raw: str) -> str:
 
 class AgentCoreChatbotClient:
     def __init__(
-            self,
-            *,
-            enabled: bool = True,
-            region: str = "us-east-1",
-            agent_runtime_arn: str | None = None,
-            qualifier: str | None = None,
-            payload_prompt_key: str = "prompt",
-            runtime_session_id_prefix: str = "ase_",
-            retry_max_retries: int | None = None,
-            retry_initial_backoff: float | None = None,
-            retry_max_backoff: float | None = None,
-            retry_backoff_multiplier: float | None = None,
-            retry_jitter: bool | None = None,
-            max_pool_connections: int = 10,
+        self,
+        *,
+        enabled: bool = True,
+        region: str = "us-east-1",
+        agent_runtime_arn: str | None = None,
+        qualifier: str | None = None,
+        payload_prompt_key: str = "prompt",
+        runtime_session_id_prefix: str = "ase_",
+        retry_max_retries: int | None = None,
+        retry_initial_backoff: float | None = None,
+        retry_max_backoff: float | None = None,
+        retry_backoff_multiplier: float | None = None,
+        retry_jitter: bool | None = None,
+        max_pool_connections: int = 10,
     ):
         self.enabled = enabled
         self.region = region
@@ -117,8 +130,14 @@ class AgentCoreChatbotClient:
         # Size the HTTP connection pool to the configured concurrency so batch
         # runs aren't capped by botocore's default of 10 simultaneous connections.
         cfg = Config(max_pool_connections=self.max_pool_connections)
-        self._client = boto3.client("bedrock-agentcore", region_name=self.region, config=cfg)
+        self._client = boto3.client(
+            "bedrock-agentcore", region_name=self.region, config=cfg
+        )
         return self._client
+
+    def prepare(self) -> None:
+        """Construct the shared SDK client before conversation fan-out."""
+        self._get_client()
 
     def _is_retryable_agentcore_error(self, error: Exception) -> bool:
         if isinstance(error, AgentCoreEmptyResponseError):
@@ -151,28 +170,32 @@ class AgentCoreChatbotClient:
             digest = uuid.uuid5(uuid.NAMESPACE_DNS, key).hex
             candidate = f"{self.runtime_session_id_prefix}{digest}"
             if len(candidate) < _MIN_RUNTIME_SESSION_ID_LEN:
-                candidate = f"{candidate}{'0' * (_MIN_RUNTIME_SESSION_ID_LEN - len(candidate))}"
+                candidate = (
+                    f"{candidate}{'0' * (_MIN_RUNTIME_SESSION_ID_LEN - len(candidate))}"
+                )
             self._runtime_session_ids[key] = candidate
             return candidate
 
     def _invoke_once(
-            self,
-            *,
-            conversation_id: str,
-            session_id: str,
-            message_id: str,
-            user_message: str,
+        self,
+        *,
+        conversation_id: str,
+        session_id: str,
+        message_id: str,
+        user_message: str,
     ) -> tuple[dict[str, Any], int, float]:
         client = self._get_client()
         runtime_session_id = self._runtime_session_id_for(conversation_id, session_id)
         # Forward the harness session_id and a per-message UUID alongside the prompt
         # so the TFSA agent can correlate turns; runtimeSessionId remains AgentCore's
         # own opaque session handle.
-        payload = json.dumps({
-            self.payload_prompt_key: user_message,
-            "session_id": session_id,
-            "message_id": message_id,
-        })
+        payload = json.dumps(
+            {
+                self.payload_prompt_key: user_message,
+                "session_id": session_id,
+                "message_id": message_id,
+            }
+        )
 
         request: dict[str, Any] = {
             "agentRuntimeArn": self.agent_runtime_arn,
@@ -219,13 +242,13 @@ class AgentCoreChatbotClient:
         return body, status_code, latency_ms
 
     def send(
-            self,
-            *,
-            conversation_id: str,
-            session_id: str,
-            turn_id: int,
-            user_message: str,
-            metadata: dict[str, Any] | None = None,
+        self,
+        *,
+        conversation_id: str,
+        session_id: str,
+        turn_id: int,
+        user_message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
         if not self.enabled:
             return ChatbotResponse.from_payload(
@@ -241,17 +264,25 @@ class AgentCoreChatbotClient:
 
         if not self.agent_runtime_arn:
             error = "AgentCore runtime ARN is not configured"
-            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
+            return ChatbotResponse.from_payload(
+                {}, latency_ms=None, status_code=0, error=error
+            )
 
         arn = self.agent_runtime_arn
-        if "${" in arn or not arn.startswith("arn:aws:bedrock-agentcore:") or ":runtime/" not in arn:
+        if (
+            "${" in arn
+            or not arn.startswith("arn:aws:bedrock-agentcore:")
+            or ":runtime/" not in arn
+        ):
             error = (
                 f"target.agentcore.agent_runtime_arn is not a full AgentCore runtime ARN: {arn!r}. "
                 "Expected arn:aws:bedrock-agentcore:<region>:<account-id>:runtime/<runtime-id>. "
                 "A bare id/name is treated as agentId by InvokeAgentRuntime and fails. "
                 "Export the env var so it resolves to the deployed runtime ARN."
             )
-            return ChatbotResponse.from_payload({}, latency_ms=None, status_code=0, error=error)
+            return ChatbotResponse.from_payload(
+                {}, latency_ms=None, status_code=0, error=error
+            )
 
         # One message_id per logical message; reused across retries of this send().
         message_id = str(uuid.uuid4())
@@ -279,13 +310,13 @@ class AgentCoreChatbotClient:
             )
 
     async def send_async(
-            self,
-            *,
-            conversation_id: str,
-            session_id: str,
-            turn_id: int,
-            user_message: str,
-            metadata: dict[str, Any] | None = None,
+        self,
+        *,
+        conversation_id: str,
+        session_id: str,
+        turn_id: int,
+        user_message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> ChatbotResponse:
         return await asyncio.to_thread(
             self.send,

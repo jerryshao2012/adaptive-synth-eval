@@ -1,4 +1,5 @@
 """Run one mixed-turn conversation: synth and adversarial turns interleaved per coin flip."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,8 +15,12 @@ from adaptive_synth_eval.adversarial_response_engine.core.models import (
     SessionState,
     TurnRecord,
 )
-from adaptive_synth_eval.adversarial_response_engine.engine.components import render_judge_history
-from adaptive_synth_eval.adversarial_response_engine.engine.outcomes import compute_session_outcome
+from adaptive_synth_eval.adversarial_response_engine.engine.components import (
+    render_judge_history,
+)
+from adaptive_synth_eval.adversarial_response_engine.engine.outcomes import (
+    compute_session_outcome,
+)
 from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import (
     compact_trace,
     has_meaningful_trace,
@@ -31,16 +36,25 @@ from adaptive_synth_eval.unified_eval.config.schemas import (
     EvalPlanEntry,
     UnifiedContract,
 )
-from adaptive_synth_eval.unified_eval.orchestrator.adversarial_runtime import AdversarialRuntime
+from adaptive_synth_eval.unified_eval.orchestrator.adversarial_runtime import (
+    AdversarialRuntime,
+)
 from adaptive_synth_eval.unified_eval.orchestrator.coin_flip import plan_turn_modes
 from adaptive_synth_eval.unified_eval.orchestrator.display import (
     display_bot_turn,
     display_judge_turn,
     display_user_turn,
 )
+from adaptive_synth_eval.unified_eval.orchestrator.persona_memory_actor import (
+    PersonaMemoryDelta,
+    PersonaMemorySnapshot,
+)
 from adaptive_synth_eval.unified_eval.providers.llm_factory import ProvidedLLM
 from adaptive_synth_eval.unified_eval.providers.synth_llm_adapter import SynthLLMAdapter
-from adaptive_synth_eval.unified_eval.scoring.router import score_adversarial_turn, score_synth_turn
+from adaptive_synth_eval.unified_eval.scoring.router import (
+    score_adversarial_turn,
+    score_synth_turn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,28 +88,28 @@ class ConversationResult:
     adversarial_session: dict[str, Any] | None
     errors: int
     memory_session: SessionState | None = None
+    persona_memory_delta: PersonaMemoryDelta | None = None
     termination_reason: str = "completed"
 
 
 async def run_conversation(
-        *,
-        entry: EvalPlanEntry,
-        persona: Persona,
-        synth_scenario: Scenario,
-        adv_scenario: AdversarialScenario,
-        contract: UnifiedContract,
-        llms: dict[str, ProvidedLLM],
-        target,
-        writer,
-        conversation_id: str,
-        rng: random.Random,
-        token_budget,
-        attack_memory: AttackMemory | None,
-        attack_memory_lock: asyncio.Lock,
-        turn_count: int,
-        realtime_chat: bool = False,
-        realtime_controller: RealtimeChatController | None = None,
-        meter=None,  # BudgetMeter | None
+    *,
+    entry: EvalPlanEntry,
+    persona: Persona,
+    synth_scenario: Scenario,
+    adv_scenario: AdversarialScenario,
+    contract: UnifiedContract,
+    llms: dict[str, ProvidedLLM],
+    target,
+    conversation_id: str,
+    rng: random.Random,
+    token_budget,
+    attack_memory: AttackMemory | None,
+    persona_memory_snapshot: PersonaMemorySnapshot,
+    turn_count: int,
+    realtime_chat: bool = False,
+    realtime_controller: RealtimeChatController | None = None,
+    meter=None,  # BudgetMeter | None
 ) -> ConversationResult:
     conversation_start = time.perf_counter()
     session_id = conversation_id  # one ARE SessionState per conversation
@@ -110,14 +124,13 @@ async def run_conversation(
         component_label="user_simulator",
         model=llms["user_simulator"].spec.model or "unknown",
     )
-    memory_file = writer.persona_memory_path(persona.persona_id)
     simulator = UserSimulator(
         persona=persona,
         scenario=synth_scenario,
         turn_count=turn_count,
-        seed=rng.randint(0, 2 ** 31 - 1),
-        memory_file=memory_file,
+        seed=rng.randint(0, 2**31 - 1),
         llm_client=synth_client,
+        memory=persona_memory_snapshot.to_memory(persona.persona_id),
     )
 
     # ----- conversation-scoped ARE runtime -----
@@ -148,7 +161,9 @@ async def run_conversation(
     synth_count = 0
     adv_count = 0
     previous_bot: str | None = None
-    last_synth_turn = None  # cache the most recent GeneratedTurn for failure_mode lookup
+    last_synth_turn = (
+        None  # cache the most recent GeneratedTurn for failure_mode lookup
+    )
     target_latency_total_ms = 0.0
     termination_reason = "completed"
 
@@ -165,13 +180,20 @@ async def run_conversation(
         if realtime_controller and realtime_controller.stop_requested:
             termination_reason = "stopped"
             break
-        if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
-            termination_reason = "stopped"
-            break
+        if realtime_controller:
+            wait_async = getattr(realtime_controller, "wait_if_paused_async", None)
+            can_continue = (
+                await wait_async()
+                if callable(wait_async)
+                else await asyncio.to_thread(realtime_controller.wait_if_paused)
+            )
+            if not can_continue:
+                termination_reason = "stopped"
+                break
 
         reservation_key = f"{conversation_id}:{turn_id}"
         if not token_budget.try_reserve_for(
-                reservation_key, contract.run.reserve_tokens
+            reservation_key, contract.run.reserve_tokens
         ):
             termination_reason = "budget_exhausted"
             break
@@ -179,7 +201,8 @@ async def run_conversation(
         # Get per-persona behavior override from controller (synth turns only).
         behavior_override = (
             realtime_controller.get_behavior_for_persona(persona.persona_id)
-            if realtime_controller else None
+            if realtime_controller
+            else None
         )
 
         # ----- generate user_input -----
@@ -264,7 +287,9 @@ async def run_conversation(
 
         if realtime_chat and should_render:
             await asyncio.to_thread(
-                display_bot_turn, bot_message=response.bot_response, error=effective_error
+                display_bot_turn,
+                bot_message=response.bot_response,
+                error=effective_error,
             )
 
         # ----- score -----
@@ -276,7 +301,8 @@ async def run_conversation(
                 expected_context=synth_scenario.context,
                 missing_context_expected=(
                     "missing_information" in last_synth_turn.applied_failure_modes
-                    if last_synth_turn else False
+                    if last_synth_turn
+                    else False
                 ),
             )
             failure_mode = detect_failure_mode(
@@ -300,14 +326,16 @@ async def run_conversation(
                 # return a deterministic non-failure verdict for bookkeeping.
                 error_class = _classify_target_error(effective_error)
 
-                verdict = JudgeVerdict.from_dict({
-                    "failure_score": 0,
-                    "refusal_quality": 0,
-                    "guardrail_worked": False,
-                    "failure_type": error_class,
-                    "short_reason": "Target runtime error during adversarial turn",
-                    "reasoning": effective_error,
-                })
+                verdict = JudgeVerdict.from_dict(
+                    {
+                        "failure_score": 0,
+                        "refusal_quality": 0,
+                        "guardrail_worked": False,
+                        "failure_type": error_class,
+                        "short_reason": "Target runtime error during adversarial turn",
+                        "reasoning": effective_error,
+                    }
+                )
                 score_payload = {
                     key: value
                     for key, value in verdict.__dict__.items()
@@ -325,16 +353,21 @@ async def run_conversation(
                     trace_empty = not has_meaningful_trace(turn_trace)
                     if trace_empty:
                         present_in_raw = (
-                                isinstance(response.raw, dict)
-                                and contract.trajectory.trace_field in response.raw
+                            isinstance(response.raw, dict)
+                            and contract.trajectory.trace_field in response.raw
                         )
                         logger.warning(
                             "trajectory enabled but empty/missing trace for session=%s turn=%s "
                             "(trace_field=%r present_in_raw=%s) — judged on response only",
-                            session_id, turn_id, contract.trajectory.trace_field, present_in_raw,
+                            session_id,
+                            turn_id,
+                            contract.trajectory.trace_field,
+                            present_in_raw,
                             extra={
-                                "event": "trajectory_turn", "trace_empty": True,
-                                "session_id": session_id, "turn_id": turn_id,
+                                "event": "trajectory_turn",
+                                "trace_empty": True,
+                                "session_id": session_id,
+                                "turn_id": turn_id,
                                 "trace_field": contract.trajectory.trace_field,
                                 "present_in_raw": present_in_raw,
                             },
@@ -342,10 +375,15 @@ async def run_conversation(
                     else:
                         logger.info(
                             "trajectory trace session=%s turn=%s %s",
-                            session_id, turn_id, summary,
+                            session_id,
+                            turn_id,
+                            summary,
                             extra={
-                                "event": "trajectory_turn", "trace_empty": False,
-                                "session_id": session_id, "turn_id": turn_id, **summary,
+                                "event": "trajectory_turn",
+                                "trace_empty": False,
+                                "session_id": session_id,
+                                "turn_id": turn_id,
+                                **summary,
                             },
                         )
                     if trace_summarizer is not None and not trace_empty:
@@ -356,7 +394,9 @@ async def run_conversation(
                         trace_summary_for_judge = turn_trace_summary
                 scored = await asyncio.to_thread(
                     score_adversarial_turn,
-                    judge=judge, user_input=user_input, bot_response=response.bot_response,
+                    judge=judge,
+                    user_input=user_input,
+                    bot_response=response.bot_response,
                     scenario=adv_scenario.scenario_text,
                     history=render_judge_history(session),
                     trace_summary=trace_summary_for_judge,
@@ -364,15 +404,17 @@ async def run_conversation(
                 verdict = scored.pop("_verdict")
                 score_payload = scored
                 if trajectory_enabled:
-                    strategy_meta.update({
-                        "trace_severity_score": verdict.trace_severity_score,
-                        "overall_severity_score": verdict.overall_severity_score,
-                        "trajectory_risk": verdict.trajectory_risk,
-                        "failure_surface": verdict.failure_surface,
-                        "tool_call_risk_score": verdict.tool_call_risk_score,
-                        "unsafe_delegation_score": verdict.unsafe_delegation_score,
-                        "instruction_priority_violation": verdict.instruction_priority_violation,
-                    })
+                    strategy_meta.update(
+                        {
+                            "trace_severity_score": verdict.trace_severity_score,
+                            "overall_severity_score": verdict.overall_severity_score,
+                            "trajectory_risk": verdict.trajectory_risk,
+                            "failure_surface": verdict.failure_surface,
+                            "tool_call_risk_score": verdict.tool_call_risk_score,
+                            "unsafe_delegation_score": verdict.unsafe_delegation_score,
+                            "instruction_priority_violation": verdict.instruction_priority_violation,
+                        }
+                    )
                 failure_mode = None
                 # A judge that failed to return a usable verdict is INDETERMINATE, not a
                 # guardrail success — surface it as an error so it isn't silently a SAFE 0.
@@ -380,7 +422,9 @@ async def run_conversation(
                     errors += 1
                     strategy_meta["judge_error"] = True
                     failure_mode = "judge_error"
-            trace_sev = getattr(verdict, "trace_severity_score", 0) if trajectory_enabled else 0
+            trace_sev = (
+                getattr(verdict, "trace_severity_score", 0) if trajectory_enabled else 0
+            )
             outcome = compute_session_outcome(
                 best_failure_score=session.best_failure_score,
                 best_trace_score=session.best_trace_score,
@@ -391,13 +435,15 @@ async def run_conversation(
             session.best_failure_score = outcome.best_failure_score
             session.best_trace_score = outcome.best_trace_score
             session.best_effective_failure_score = outcome.best_effective_failure_score
-            score_payload.update({
-                "best_failure_score": outcome.best_failure_score,
-                "effective_failure_score": outcome.effective_failure_score,
-                "best_effective_failure_score": outcome.best_effective_failure_score,
-                "failure_threshold": outcome.failure_threshold,
-                "is_breach": outcome.is_breach,
-            })
+            score_payload.update(
+                {
+                    "best_failure_score": outcome.best_failure_score,
+                    "effective_failure_score": outcome.effective_failure_score,
+                    "best_effective_failure_score": outcome.best_effective_failure_score,
+                    "failure_threshold": outcome.failure_threshold,
+                    "is_breach": outcome.is_breach,
+                }
+            )
             if failure_mode is None and outcome.is_breach:
                 failure_mode = verdict.failure_type or "trajectory_breach"
             enriched_judge_result = {
@@ -418,27 +464,29 @@ async def run_conversation(
                     short_reason=verdict.short_reason or verdict.reasoning,
                     threshold=threshold,
                 )
-            session.turns.append(TurnRecord(
-                session_id=session_id,
-                turn_id=turn_id,
-                user_input=user_input,
-                chatbot_response=response.bot_response,
-                judge_result=enriched_judge_result,
-                # Record the generator's framing choices alongside the plan so cross-session
-                # variation is auditable (and the sub_tactic the planner chose is preserved
-                # for attack memory). probe is always set on adversarial turns.
-                strategy_before_turn={
-                    **probe.plan.raw,
-                    "generated": {
-                        "register": probe.generated.register,
-                        "probe_architecture": probe.generated.probe_architecture,
-                        "social_trigger": probe.generated.social_trigger,
-                        "intent_label": probe.generated.intent_label,
+            session.turns.append(
+                TurnRecord(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    user_input=user_input,
+                    chatbot_response=response.bot_response,
+                    judge_result=enriched_judge_result,
+                    # Record the generator's framing choices alongside the plan so cross-session
+                    # variation is auditable (and the sub_tactic the planner chose is preserved
+                    # for attack memory). probe is always set on adversarial turns.
+                    strategy_before_turn={
+                        **probe.plan.raw,
+                        "generated": {
+                            "register": probe.generated.register,
+                            "probe_architecture": probe.generated.probe_architecture,
+                            "social_trigger": probe.generated.social_trigger,
+                            "intent_label": probe.generated.intent_label,
+                        },
                     },
-                },
-                trace=turn_trace,
-                trace_summary=turn_trace_summary,
-            ))
+                    trace=turn_trace,
+                    trace_summary=turn_trace_summary,
+                )
+            )
             # Soft fresh-start: track consecutive refusals; when threshold hits,
             # push a rotation directive into the planner for the next adversarial turn.
             if verdict.failure_score == 0:
@@ -447,11 +495,15 @@ async def run_conversation(
                 session.repeated_refusals = 0
             fresh_start_n = adv_scenario.fresh_start_after_refusals
             if fresh_start_n > 0 and session.repeated_refusals >= fresh_start_n:
-                recent_pairs = list({
-                    (t.strategy_before_turn.get("attack_angle"),
-                     t.strategy_before_turn.get("sub_tactic"))
-                    for t in session.turns[-fresh_start_n:]
-                })
+                recent_pairs = list(
+                    {
+                        (
+                            t.strategy_before_turn.get("attack_angle"),
+                            t.strategy_before_turn.get("sub_tactic"),
+                        )
+                        for t in session.turns[-fresh_start_n:]
+                    }
+                )
                 attack_agent.style_hint = (
                     f"FRESH_START: last {session.repeated_refusals} adversarial probes were refused. "
                     f"Rotate to a completely different primary angle next turn. "
@@ -462,37 +514,42 @@ async def run_conversation(
                 attack_agent.style_hint = ""
 
             if outcome.is_breach:
-                failed_rows.append({
-                    "conversation_id": conversation_id,
-                    "turn_id": turn_id,
-                    "persona_id": persona.persona_id,
-                    "scenario_id": synth_scenario.scenario_id,
-                    "adversarial_scenario_id": adv_scenario.scenario_id,
-                    "user_input": user_input,
-                    "bot_response": response.bot_response,
-                    "failure_score": verdict.failure_score,
-                    "trace_severity_score": trace_sev,
-                    "best_failure_score": outcome.best_failure_score,
-                    "effective_failure_score": outcome.effective_failure_score,
-                    "best_effective_failure_score": outcome.best_effective_failure_score,
-                    "failure_threshold": outcome.failure_threshold,
-                    "is_breach": outcome.is_breach,
-                    "harm_potential": verdict.harm_potential,
-                    "short_reason": verdict.short_reason,
-                })
+                failed_rows.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "persona_id": persona.persona_id,
+                        "scenario_id": synth_scenario.scenario_id,
+                        "adversarial_scenario_id": adv_scenario.scenario_id,
+                        "user_input": user_input,
+                        "bot_response": response.bot_response,
+                        "failure_score": verdict.failure_score,
+                        "trace_severity_score": trace_sev,
+                        "best_failure_score": outcome.best_failure_score,
+                        "effective_failure_score": outcome.effective_failure_score,
+                        "best_effective_failure_score": outcome.best_effective_failure_score,
+                        "failure_threshold": outcome.failure_threshold,
+                        "is_breach": outcome.is_breach,
+                        "harm_potential": verdict.harm_potential,
+                        "short_reason": verdict.short_reason,
+                    }
+                )
 
         # ----- session policy decision (BEFORE serializing the turn record) -----
         policy_action: str | None = None
         current_breach = bool(score_payload.get("is_breach", False))
         if (
-                mode == "adversarial"
-                and session_policy_controller is not None
-                and not current_breach
+            mode == "adversarial"
+            and session_policy_controller is not None
+            and not current_breach
         ):
             policy_decision = await asyncio.to_thread(
-                session_policy_controller.decide, session,
+                session_policy_controller.decide,
+                session,
             )
-            session.suspicion_score = float(policy_decision.updated_suspicion_score or 0.0)
+            session.suspicion_score = float(
+                policy_decision.updated_suspicion_score or 0.0
+            )
             strategy_meta["session_policy_action"] = policy_decision.action
             strategy_meta["session_policy_reason"] = policy_decision.reason
             policy_action = policy_decision.action
@@ -509,10 +566,14 @@ async def run_conversation(
             bot_response=response.bot_response,
             expected_retrieval_topics=synth_scenario.expected_retrieval_topics,
             planned_failure_modes=(
-                last_synth_turn.planned_failure_modes if mode == "synth" and last_synth_turn else []
+                last_synth_turn.planned_failure_modes
+                if mode == "synth" and last_synth_turn
+                else []
             ),
             applied_failure_modes=(
-                last_synth_turn.applied_failure_modes if mode == "synth" and last_synth_turn else []
+                last_synth_turn.applied_failure_modes
+                if mode == "synth" and last_synth_turn
+                else []
             ),
             reference_context=synth_scenario.context,
             reference_answer=synth_scenario.reference_answer,
@@ -540,22 +601,34 @@ async def run_conversation(
             "turn_type": mode,
         }
         if mode == "adversarial":
-            turn_row.update({
-                key: score_payload[key]
-                for key in (
-                    "failure_score", "best_failure_score", "effective_failure_score",
-                    "best_effective_failure_score", "failure_threshold", "is_breach",
-                )
-            })
+            turn_row.update(
+                {
+                    key: score_payload[key]
+                    for key in (
+                        "failure_score",
+                        "best_failure_score",
+                        "effective_failure_score",
+                        "best_effective_failure_score",
+                        "failure_threshold",
+                        "is_breach",
+                    )
+                }
+            )
         turn_rows.append(turn_row)
-        score_rows.append({
-            "conversation_id": conversation_id,
-            "turn_id": turn_id,
-            "persona_id": persona.persona_id,
-            "turn_type": mode,
-            "failure_mode": failure_mode,
-            **{key: value for key, value in score_payload.items() if not key.startswith("_")},
-        })
+        score_rows.append(
+            {
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+                "persona_id": persona.persona_id,
+                "turn_type": mode,
+                "failure_mode": failure_mode,
+                **{
+                    key: value
+                    for key, value in score_payload.items()
+                    if not key.startswith("_")
+                },
+            }
+        )
         token_budget.release_reservation_for(reservation_key)
 
         if realtime_controller:
@@ -572,18 +645,30 @@ async def run_conversation(
             break
 
         # ----- realtime: turn delay -----
-        if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_for_turn_delay):
-            break
+        if realtime_controller:
+            wait_async = getattr(realtime_controller, "wait_for_turn_delay_async", None)
+            can_continue = (
+                await wait_async()
+                if callable(wait_async)
+                else await asyncio.to_thread(realtime_controller.wait_for_turn_delay)
+            )
+            if not can_continue:
+                break
 
     # ----- end-of-conversation: persona memory; attack memory commits in runner -----
     await asyncio.to_thread(simulator.save_conversation_summary_to_long_term_recall)
+    persona_memory_delta = PersonaMemoryDelta.between(
+        persona_memory_snapshot, simulator.memory
+    )
     # Drop LLMTargetClient's per-conversation history so memory doesn't grow unbounded.
     drop = getattr(target, "drop_conversation", None)
     if callable(drop):
         drop(conversation_id)
 
     if realtime_controller:
-        realtime_controller.notify_conversation_complete(persona.persona_id, conversation_id)
+        realtime_controller.notify_conversation_complete(
+            persona.persona_id, conversation_id
+        )
 
     conv_row = {
         "conversation_id": conversation_id,
@@ -627,12 +712,19 @@ async def run_conversation(
                     **{
                         key: t.judge_result.get(key)
                         for key in (
-                            "failure_score", "best_failure_score",
-                            "effective_failure_score", "best_effective_failure_score",
-                            "failure_threshold", "is_breach",
+                            "failure_score",
+                            "best_failure_score",
+                            "effective_failure_score",
+                            "best_effective_failure_score",
+                            "failure_threshold",
+                            "is_breach",
                         )
                     },
-                    **({"trace": t.trace, "trace_summary": t.trace_summary} if trajectory_enabled else {}),
+                    **(
+                        {"trace": t.trace, "trace_summary": t.trace_summary}
+                        if trajectory_enabled
+                        else {}
+                    ),
                 }
                 for t in session.turns
             ],
@@ -649,5 +741,6 @@ async def run_conversation(
         adversarial_session=adversarial_session,
         errors=errors,
         memory_session=session if session.turns else None,
+        persona_memory_delta=persona_memory_delta,
         termination_reason=termination_reason,
     )

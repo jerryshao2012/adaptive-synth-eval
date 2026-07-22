@@ -3,14 +3,22 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import asdict
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
-from adaptive_synth_eval.artifacts.run_state import load_run_state, now_iso, write_run_state
+from adaptive_synth_eval.artifacts.run_state import (
+    load_run_state,
+    now_iso,
+    write_run_state,
+)
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
-from adaptive_synth_eval.clients.utils import count_tokens, display_bot_message, display_persona_message
+from adaptive_synth_eval.clients.utils import (
+    count_tokens,
+    display_bot_message,
+    display_persona_message,
+)
 from adaptive_synth_eval.config.contract import ContractError, contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
@@ -46,17 +54,56 @@ UNAVAILABLE_BODY_MARKERS = (
 )
 
 
+async def _bounded_results(
+    items: list[Any],
+    *,
+    worker: Callable[[Any], Awaitable[Any]],
+    max_concurrency: int,
+    can_admit: Callable[[], bool],
+) -> AsyncIterator[Any]:
+    """Yield completed work while bounding admission and draining on close."""
+    iterator = iter(items)
+    pending: set[asyncio.Task[Any]] = set()
+    unconsumed: set[asyncio.Task[Any]] = set()
+    exhausted = False
+    limit = max(1, int(max_concurrency))
+    try:
+        while pending or not exhausted:
+            while len(pending) < limit and not exhausted and can_admit():
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                    break
+                pending.add(asyncio.create_task(worker(item)))
+
+            if not pending:
+                break
+
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            unconsumed = set(done)
+            while unconsumed:
+                task = unconsumed.pop()
+                yield await task
+    finally:
+        # Closing this generator after result persistence fails must not abandon
+        # already-admitted work, including non-cancellable to_thread calls.
+        await asyncio.gather(*(pending | unconsumed), return_exceptions=True)
+
+
 def run_simulation(
-        contract: SimulationContract,
-        *,
-        dry_run: bool = False,
-        output_conversations: bool = False,
-        realtime_chat: bool = False,
-        interactive_realtime_controls: bool = False,
-        persona_filter: str | None = None,
-        resume_incomplete: bool = False,
-        progress_sink: Callable[[dict[str, Any]], None] | None = None,
-        realtime_status_provider: Any | None = None,
+    contract: SimulationContract,
+    *,
+    dry_run: bool = False,
+    output_conversations: bool = False,
+    realtime_chat: bool = False,
+    interactive_realtime_controls: bool = False,
+    persona_filter: str | None = None,
+    resume_incomplete: bool = False,
+    progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    realtime_status_provider: Any | None = None,
 ) -> dict:
     """Synchronously run the async simulation pipeline for CLI/backwards compatibility."""
     return asyncio.run(
@@ -75,16 +122,16 @@ def run_simulation(
 
 
 async def run_simulation_async(
-        contract: SimulationContract,
-        *,
-        dry_run: bool = False,
-        output_conversations: bool = False,
-        realtime_chat: bool = False,
-        interactive_realtime_controls: bool = False,
-        persona_filter: str | None = None,
-        resume_incomplete: bool = False,
-        progress_sink: Callable[[dict[str, Any]], None] | None = None,
-        realtime_status_provider: Any | None = None,
+    contract: SimulationContract,
+    *,
+    dry_run: bool = False,
+    output_conversations: bool = False,
+    realtime_chat: bool = False,
+    interactive_realtime_controls: bool = False,
+    persona_filter: str | None = None,
+    resume_incomplete: bool = False,
+    progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    realtime_status_provider: Any | None = None,
 ) -> dict:
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
@@ -99,7 +146,9 @@ async def run_simulation_async(
     completed_conversation_ids = set()
     if resumed_state:
         completed_conversation_ids = {
-            str(cid) for cid in (resumed_state.get("completed_conversation_ids") or []) if cid
+            str(cid)
+            for cid in (resumed_state.get("completed_conversation_ids") or [])
+            if cid
         }
 
     if persona_filter:
@@ -111,38 +160,71 @@ async def run_simulation_async(
             raise ContractError(
                 f"Specified persona '{persona_filter}' not found in contract's persona pool: {list(personas.keys())}"
             )
-        full_plan = [planned for planned in full_plan if planned.persona_id == matched_persona_id]
+        full_plan = [
+            planned for planned in full_plan if planned.persona_id == matched_persona_id
+        ]
         plan = [planned for planned in plan if planned.persona_id == matched_persona_id]
         if not plan:
-            logger.warning("No conversations planned for persona '%s' in this run.", matched_persona_id)
+            logger.warning(
+                "No conversations planned for persona '%s' in this run.",
+                matched_persona_id,
+            )
 
     if completed_conversation_ids:
-        plan = [planned for planned in plan if planned.conversation_id not in completed_conversation_ids]
+        plan = [
+            planned
+            for planned in plan
+            if planned.conversation_id not in completed_conversation_ids
+        ]
 
     planned_conversations_total = len(full_plan)
 
     client = create_chatbot_client(contract.target, dry_run=dry_run)
+    prepare_async = getattr(client, "prepare_async", None)
+    prepare = getattr(client, "prepare", None)
+    if callable(prepare_async):
+        await prepare_async()
+    elif callable(prepare):
+        await asyncio.to_thread(prepare)
 
     resume_metrics = (resumed_state or {}).get("metrics") if resumed_state else {}
     errors = int((resume_metrics or {}).get("errors") or 0)
     total_turns = int((resume_metrics or {}).get("total_turns") or 0)
-    simulator_prompt_tokens = int((resume_metrics or {}).get("simulator_prompt_tokens") or 0)
-    simulator_completion_tokens = int((resume_metrics or {}).get("simulator_completion_tokens") or 0)
-    chatbot_prompt_tokens = int((resume_metrics or {}).get("chatbot_prompt_tokens") or 0)
-    chatbot_completion_tokens = int((resume_metrics or {}).get("chatbot_completion_tokens") or 0)
-    wrote_chat_history = resume_incomplete and (writer.run_dir / "chat_history.jsonl").exists()
-    wrote_conversations = resume_incomplete and (writer.run_dir / "conversations.jsonl").exists()
+    simulator_prompt_tokens = int(
+        (resume_metrics or {}).get("simulator_prompt_tokens") or 0
+    )
+    simulator_completion_tokens = int(
+        (resume_metrics or {}).get("simulator_completion_tokens") or 0
+    )
+    chatbot_prompt_tokens = int(
+        (resume_metrics or {}).get("chatbot_prompt_tokens") or 0
+    )
+    chatbot_completion_tokens = int(
+        (resume_metrics or {}).get("chatbot_completion_tokens") or 0
+    )
+    wrote_chat_history = (
+        resume_incomplete and (writer.run_dir / "chat_history.jsonl").exists()
+    )
+    wrote_conversations = (
+        resume_incomplete and (writer.run_dir / "conversations.jsonl").exists()
+    )
     wrote_turns = resume_incomplete and (writer.run_dir / "turns.jsonl").exists()
     wrote_scores = resume_incomplete and (writer.run_dir / "scores.jsonl").exists()
-    wrote_conversations_txt = resume_incomplete and (writer.run_dir / "conversations.txt").exists()
+    wrote_conversations_txt = (
+        resume_incomplete and (writer.run_dir / "conversations.txt").exists()
+    )
     realtime_chat_enabled = realtime_chat
     stopped_early = False
     realtime_controller: RealtimeChatController | None = None
     stop_all_requested = asyncio.Event()
-    persona_locks = {persona.persona_id: asyncio.Lock() for persona in contract.persona_pool}
+    persona_locks = {
+        persona.persona_id: asyncio.Lock() for persona in contract.persona_pool
+    }
     persona_total_convos: dict[str, int] = {}
     for planned in plan:
-        persona_total_convos[planned.persona_id] = persona_total_convos.get(planned.persona_id, 0) + 1
+        persona_total_convos[planned.persona_id] = (
+            persona_total_convos.get(planned.persona_id, 0) + 1
+        )
 
     if not resume_incomplete:
         write_run_state(
@@ -170,18 +252,22 @@ async def run_simulation_async(
     processed_conversation_ids = set(completed_conversation_ids)
 
     if progress_sink is not None:
-        progress_sink({
-            "phase": "running",
-            "completed": len(processed_conversation_ids),
-            "total": planned_conversations_total,
-            "last_item": None,
-            "elapsed_seconds": 0.0,
-            "eta_seconds": None,
-            "details": {"remaining": len(plan)},
-        })
+        progress_sink(
+            {
+                "phase": "running",
+                "completed": len(processed_conversation_ids),
+                "total": planned_conversations_total,
+                "last_item": None,
+                "elapsed_seconds": 0.0,
+                "eta_seconds": None,
+                "details": {"remaining": len(plan)},
+            }
+        )
 
     if interactive_realtime_controls and not realtime_chat:
-        logger.warning("Interactive realtime controls require --realtime-chat; skipping controls.")
+        logger.warning(
+            "Interactive realtime controls require --realtime-chat; skipping controls."
+        )
 
     if realtime_chat_enabled and interactive_realtime_controls:
         single_persona_mode = (len(personas) <= 1) or (persona_filter is not None)
@@ -195,7 +281,11 @@ async def run_simulation_async(
             realtime_controller.set_active_persona(matched_persona_id)
         elif contract.persona_pool:
             realtime_controller.set_active_persona(contract.persona_pool[0].persona_id)
-        realtime_controller.start()
+        start_async = getattr(realtime_controller, "start_async", None)
+        if callable(start_async):
+            await start_async()
+        else:
+            realtime_controller.start()
 
     def _request_stop_all() -> None:
         if not stop_all_requested.is_set():
@@ -230,27 +320,39 @@ async def run_simulation_async(
 
     async def process_conversation(planned):
         if stop_all_requested.is_set():
-            return {
-                "conversation_id": planned.conversation_id,
-                "session_id": planned.session_id,
-                "persona_id": planned.persona_id,
-                "scenario_id": planned.scenario_id,
-                "synthetic_day": planned.synthetic_day.isoformat(),
-                "turn_count": 0,
-            }, [], [], [], 0
+            return (
+                {
+                    "conversation_id": planned.conversation_id,
+                    "session_id": planned.session_id,
+                    "persona_id": planned.persona_id,
+                    "scenario_id": planned.scenario_id,
+                    "synthetic_day": planned.synthetic_day.isoformat(),
+                    "turn_count": 0,
+                },
+                [],
+                [],
+                [],
+                0,
+            )
         async with persona_locks[planned.persona_id]:
             return await _process_conversation_locked(planned)
 
     async def _process_conversation_locked(planned):
         if stop_all_requested.is_set():
-            return {
-                "conversation_id": planned.conversation_id,
-                "session_id": planned.session_id,
-                "persona_id": planned.persona_id,
-                "scenario_id": planned.scenario_id,
-                "synthetic_day": planned.synthetic_day.isoformat(),
-                "turn_count": 0,
-            }, [], [], [], 0
+            return (
+                {
+                    "conversation_id": planned.conversation_id,
+                    "session_id": planned.session_id,
+                    "persona_id": planned.persona_id,
+                    "scenario_id": planned.scenario_id,
+                    "synthetic_day": planned.synthetic_day.isoformat(),
+                    "turn_count": 0,
+                },
+                [],
+                [],
+                [],
+                0,
+            )
 
         local_records = []
         local_turn_rows = []
@@ -261,10 +363,14 @@ async def run_simulation_async(
         scenario = scenarios[planned.scenario_id]
 
         memory_file = writer.run_dir / "personas" / f"{planned.persona_id}_memory.md"
-        simulator = UserSimulator(persona, scenario, turn_count=planned.turn_count,
-                                  seed=hash(planned.conversation_id) % 10_000,
-                                  memory_file=memory_file,
-                                  llm_config=asdict(contract.llm))
+        simulator = UserSimulator(
+            persona,
+            scenario,
+            turn_count=planned.turn_count,
+            seed=hash(planned.conversation_id) % 10_000,
+            memory_file=memory_file,
+            llm_config=asdict(contract.llm),
+        )
 
         local_conversation_row = {
             "conversation_id": planned.conversation_id,
@@ -282,12 +388,21 @@ async def run_simulation_async(
                 break
             if realtime_controller and realtime_controller.stop_requested:
                 break
-            if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_if_paused):
-                break
+            if realtime_controller:
+                wait_async = getattr(realtime_controller, "wait_if_paused_async", None)
+                can_continue = (
+                    await wait_async()
+                    if callable(wait_async)
+                    else await asyncio.to_thread(realtime_controller.wait_if_paused)
+                )
+                if not can_continue:
+                    break
 
             # Get behavior mode for the current persona (persona-specific or global fallback)
             behavior_override = (
-                realtime_controller.get_behavior_for_persona(simulator.persona.persona_id)
+                realtime_controller.get_behavior_for_persona(
+                    simulator.persona.persona_id
+                )
                 if realtime_controller
                 else None
             )
@@ -315,7 +430,10 @@ async def run_simulation_async(
 
             should_render = True
             if realtime_controller and realtime_controller.active_persona_id:
-                should_render = simulator.persona.persona_id == realtime_controller.active_persona_id
+                should_render = (
+                    simulator.persona.persona_id
+                    == realtime_controller.active_persona_id
+                )
 
             if realtime_chat_enabled:
                 if should_render:
@@ -334,14 +452,19 @@ async def run_simulation_async(
                 turn.turn_id,
             )
             chatbot_wait_start = time.perf_counter()
-            chatbot_prompt_tokens = chatbot_history_tokens + count_tokens(turn.user_message)
+            chatbot_prompt_tokens = chatbot_history_tokens + count_tokens(
+                turn.user_message
+            )
             response = await client.send_async(
                 conversation_id=planned.conversation_id,
                 session_id=planned.session_id,
                 turn_id=turn.turn_id,
                 user_message=turn.user_message,
-                metadata={"persona_id": simulator.persona.persona_id, "scenario_id": planned.scenario_id,
-                          "synthetic": True},
+                metadata={
+                    "persona_id": simulator.persona.persona_id,
+                    "scenario_id": planned.scenario_id,
+                    "synthetic": True,
+                },
             )
             chatbot_wait_ms = (time.perf_counter() - chatbot_wait_start) * 1000
             logger.info(
@@ -354,7 +477,9 @@ async def run_simulation_async(
                 response.error or "none",
             )
             chatbot_completion_tokens = count_tokens(response.bot_response)
-            chatbot_history_tokens += count_tokens(turn.user_message) + chatbot_completion_tokens
+            chatbot_history_tokens += (
+                count_tokens(turn.user_message) + chatbot_completion_tokens
+            )
             if response.error or _is_target_chatbot_unavailable(response):
                 local_errors += 1
                 if _is_target_chatbot_unavailable(response):
@@ -379,10 +504,15 @@ async def run_simulation_async(
                 user_message=turn.user_message,
                 bot_response=response.bot_response,
                 expected_context=scenario.context,
-                missing_context_expected="missing_information" in turn.applied_failure_modes,
+                missing_context_expected="missing_information"
+                in turn.applied_failure_modes,
             )
-            failure_mode = detect_failure_mode(response.bot_response, response.error, score.safety_score)
-            gen_meta = dict(turn.generation_metadata) if turn.generation_metadata else {}
+            failure_mode = detect_failure_mode(
+                response.bot_response, response.error, score.safety_score
+            )
+            gen_meta = (
+                dict(turn.generation_metadata) if turn.generation_metadata else {}
+            )
             gen_meta["chatbot_prompt_tokens"] = chatbot_prompt_tokens
             gen_meta["chatbot_completion_tokens"] = chatbot_completion_tokens
 
@@ -427,8 +557,19 @@ async def run_simulation_async(
                 }
             )
 
-            if realtime_controller and not await asyncio.to_thread(realtime_controller.wait_for_turn_delay):
-                break
+            if realtime_controller:
+                wait_async = getattr(
+                    realtime_controller, "wait_for_turn_delay_async", None
+                )
+                can_continue = (
+                    await wait_async()
+                    if callable(wait_async)
+                    else await asyncio.to_thread(
+                        realtime_controller.wait_for_turn_delay
+                    )
+                )
+                if not can_continue:
+                    break
 
         # Summarize conversation and update long-term recall
         await asyncio.to_thread(simulator.save_conversation_summary_to_long_term_recall)
@@ -436,95 +577,132 @@ async def run_simulation_async(
         if realtime_controller:
             realtime_controller.notify_conversation_complete(planned.persona_id)
 
-        return local_conversation_row, local_records, local_turn_rows, local_score_rows, local_errors
+        return (
+            local_conversation_row,
+            local_records,
+            local_turn_rows,
+            local_score_rows,
+            local_errors,
+        )
 
     try:
         max_concurrency = _effective_max_concurrency(contract)
-        semaphore = asyncio.Semaphore(max_concurrency)
+        completed_results = _bounded_results(
+            plan,
+            worker=process_conversation,
+            max_concurrency=max_concurrency,
+            can_admit=lambda: not stop_all_requested.is_set(),
+        )
+        try:
+            async for completed in completed_results:
+                conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = completed
+                conversation_id = str(conv_row.get("conversation_id") or "")
+                if conversation_id:
+                    processed_conversation_ids.add(conversation_id)
+                errors += loc_errs
+                total_turns += conv_row.get("turn_count", 0)
 
-        async def limited_process(planned):
-            if stop_all_requested.is_set():
-                return await process_conversation(planned)
-            async with semaphore:
-                return await process_conversation(planned)
+                if loc_recs:
+                    chat_rows = [rec.to_dict() for rec in loc_recs]
+                    writer.append_chat_history_rows(
+                        chat_rows, overwrite=not wrote_chat_history
+                    )
+                    wrote_chat_history = True
 
-        tasks = [asyncio.create_task(limited_process(planned)) for planned in plan]
-        for task in asyncio.as_completed(tasks):
-            conv_row, loc_recs, loc_turn_rows, loc_score_rows, loc_errs = await task
-            conversation_id = str(conv_row.get("conversation_id") or "")
-            if conversation_id:
-                processed_conversation_ids.add(conversation_id)
-            errors += loc_errs
-            total_turns += conv_row.get("turn_count", 0)
+                    simulator_prompt_tokens += sum(
+                        (rec.generation_metadata or {}).get(
+                            "simulator_prompt_tokens", 0
+                        )
+                        for rec in loc_recs
+                    )
+                    simulator_completion_tokens += sum(
+                        (rec.generation_metadata or {}).get(
+                            "simulator_completion_tokens", 0
+                        )
+                        for rec in loc_recs
+                    )
+                    chatbot_prompt_tokens += sum(
+                        (rec.generation_metadata or {}).get("chatbot_prompt_tokens", 0)
+                        for rec in loc_recs
+                    )
+                    chatbot_completion_tokens += sum(
+                        (rec.generation_metadata or {}).get(
+                            "chatbot_completion_tokens", 0
+                        )
+                        for rec in loc_recs
+                    )
 
-            if loc_recs:
-                chat_rows = [rec.to_dict() for rec in loc_recs]
-                writer.append_chat_history_rows(chat_rows, overwrite=not wrote_chat_history)
-                wrote_chat_history = True
+                    if output_conversations:
+                        writer.append_conversation_txt(
+                            loc_recs, overwrite=not wrote_conversations_txt
+                        )
+                        wrote_conversations_txt = True
 
-                simulator_prompt_tokens += sum(
-                    (rec.generation_metadata or {}).get("simulator_prompt_tokens", 0) for rec in loc_recs
+                writer.append_jsonl(
+                    "conversations.jsonl", [conv_row], overwrite=not wrote_conversations
                 )
-                simulator_completion_tokens += sum(
-                    (rec.generation_metadata or {}).get("simulator_completion_tokens", 0) for rec in loc_recs
-                )
-                chatbot_prompt_tokens += sum(
-                    (rec.generation_metadata or {}).get("chatbot_prompt_tokens", 0) for rec in loc_recs
-                )
-                chatbot_completion_tokens += sum(
-                    (rec.generation_metadata or {}).get("chatbot_completion_tokens", 0) for rec in loc_recs
-                )
+                wrote_conversations = True
 
-                if output_conversations:
-                    writer.append_conversation_txt(loc_recs, overwrite=not wrote_conversations_txt)
-                    wrote_conversations_txt = True
+                if progress_sink is not None:
+                    completed = len(processed_conversation_ids)
+                    elapsed_seconds = max(0.0, time.perf_counter() - run_start)
+                    progress_sink(
+                        {
+                            "phase": "running",
+                            "completed": completed,
+                            "total": planned_conversations_total,
+                            "last_item": conversation_id,
+                            "elapsed_seconds": elapsed_seconds,
+                            "eta_seconds": None,
+                            "details": {
+                                "remaining": max(
+                                    planned_conversations_total - completed, 0
+                                )
+                            },
+                        }
+                    )
 
-            writer.append_jsonl("conversations.jsonl", [conv_row], overwrite=not wrote_conversations)
-            wrote_conversations = True
+                if loc_turn_rows:
+                    writer.append_jsonl(
+                        "turns.jsonl", loc_turn_rows, overwrite=not wrote_turns
+                    )
+                    wrote_turns = True
 
-            if progress_sink is not None:
-                completed = len(processed_conversation_ids)
-                elapsed_seconds = max(0.0, time.perf_counter() - run_start)
-                progress_sink({
-                    "phase": "running",
-                    "completed": completed,
-                    "total": planned_conversations_total,
-                    "last_item": conversation_id,
-                    "elapsed_seconds": elapsed_seconds,
-                    "eta_seconds": None,
-                    "details": {"remaining": max(planned_conversations_total - completed, 0)},
-                })
+                if loc_score_rows:
+                    writer.append_jsonl(
+                        "scores.jsonl", loc_score_rows, overwrite=not wrote_scores
+                    )
+                    wrote_scores = True
 
-            if loc_turn_rows:
-                writer.append_jsonl("turns.jsonl", loc_turn_rows, overwrite=not wrote_turns)
-                wrote_turns = True
-
-            if loc_score_rows:
-                writer.append_jsonl("scores.jsonl", loc_score_rows, overwrite=not wrote_scores)
-                wrote_scores = True
-
-            write_run_state(
-                writer.run_dir,
-                {
-                    "version": 1,
-                    "mode": "synth",
-                    "status": "in_progress",
-                    "run_id": run_id,
-                    "started_at": started_at,
-                    "updated_at": now_iso(),
-                    "total_planned_conversations": planned_conversations_total,
-                    "completed_conversations": len(processed_conversation_ids),
-                    "completed_conversation_ids": sorted(processed_conversation_ids),
-                    "metrics": {
-                        "errors": errors,
-                        "total_turns": total_turns,
-                        "simulator_prompt_tokens": simulator_prompt_tokens,
-                        "simulator_completion_tokens": simulator_completion_tokens,
-                        "chatbot_prompt_tokens": chatbot_prompt_tokens,
-                        "chatbot_completion_tokens": chatbot_completion_tokens,
+                write_run_state(
+                    writer.run_dir,
+                    {
+                        "version": 1,
+                        "mode": "synth",
+                        "status": "in_progress",
+                        "run_id": run_id,
+                        "started_at": started_at,
+                        "updated_at": now_iso(),
+                        "total_planned_conversations": planned_conversations_total,
+                        "completed_conversations": len(processed_conversation_ids),
+                        "completed_conversation_ids": sorted(
+                            processed_conversation_ids
+                        ),
+                        "metrics": {
+                            "errors": errors,
+                            "total_turns": total_turns,
+                            "simulator_prompt_tokens": simulator_prompt_tokens,
+                            "simulator_completion_tokens": simulator_completion_tokens,
+                            "chatbot_prompt_tokens": chatbot_prompt_tokens,
+                            "chatbot_completion_tokens": chatbot_completion_tokens,
+                        },
                     },
-                },
-            )
+                )
+        except BaseException:
+            stop_all_requested.set()
+            raise
+        finally:
+            await completed_results.aclose()
 
         if realtime_controller and realtime_controller.stop_requested:
             stopped_early = True
@@ -538,7 +716,11 @@ async def run_simulation_async(
         elif callable(close_client):
             await asyncio.to_thread(close_client)
         if realtime_controller:
-            realtime_controller.stop()
+            stop_async = getattr(realtime_controller, "stop_async", None)
+            if callable(stop_async):
+                await stop_async()
+            else:
+                realtime_controller.stop()
 
     elapsed_seconds = round(time.perf_counter() - run_start, 2)
 
@@ -546,22 +728,40 @@ async def run_simulation_async(
     simulator_total_tokens = simulator_prompt_tokens + simulator_completion_tokens
 
     completed_conversations = len(processed_conversation_ids)
-    avg_prompt_tokens_convo = round(simulator_prompt_tokens / completed_conversations,
-                                    2) if completed_conversations else 0.0
-    avg_completion_tokens_convo = round(simulator_completion_tokens / completed_conversations,
-                                        2) if completed_conversations else 0.0
-    avg_total_tokens_convo = round(simulator_total_tokens / completed_conversations,
-                                   2) if completed_conversations else 0.0
+    avg_prompt_tokens_convo = (
+        round(simulator_prompt_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
+    avg_completion_tokens_convo = (
+        round(simulator_completion_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
+    avg_total_tokens_convo = (
+        round(simulator_total_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
 
     # Chatbot LLM Token Statistics
     chatbot_total_tokens = chatbot_prompt_tokens + chatbot_completion_tokens
 
-    avg_chatbot_prompt_tokens_convo = round(chatbot_prompt_tokens / completed_conversations,
-                                            2) if completed_conversations else 0.0
-    avg_chatbot_completion_tokens_convo = round(chatbot_completion_tokens / completed_conversations,
-                                                2) if completed_conversations else 0.0
-    avg_chatbot_total_tokens_convo = round(chatbot_total_tokens / completed_conversations,
-                                           2) if completed_conversations else 0.0
+    avg_chatbot_prompt_tokens_convo = (
+        round(chatbot_prompt_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
+    avg_chatbot_completion_tokens_convo = (
+        round(chatbot_completion_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
+    avg_chatbot_total_tokens_convo = (
+        round(chatbot_total_tokens / completed_conversations, 2)
+        if completed_conversations
+        else 0.0
+    )
 
     tokens_stats = {
         "simulator_prompt_tokens": simulator_prompt_tokens,
@@ -594,11 +794,15 @@ async def run_simulation_async(
 
     # Production Realism
     # 1. Mix Distribution Realism
-    total_mix_weight = sum(item.weight for item in contract.traffic.mix) if contract.traffic.mix else 1.0
+    total_mix_weight = (
+        sum(item.weight for item in contract.traffic.mix)
+        if contract.traffic.mix
+        else 1.0
+    )
     mix_targets = {}
     for item in contract.traffic.mix:
         key = f"{item.persona_id} + {item.scenario_id}"
-        mix_targets[key] = (item.weight / total_mix_weight)
+        mix_targets[key] = item.weight / total_mix_weight
 
     actual_mix_counts = {}
     for planned in full_plan:
@@ -609,59 +813,78 @@ async def run_simulation_async(
     for key, target_pct in mix_targets.items():
         actual_count = actual_mix_counts.get(key, 0)
         actual_pct = actual_count / len(full_plan) if full_plan else 0.0
-        mix_realism.append({
-            "mix": key,
-            "target_pct": round(target_pct * 100, 2),
-            "actual_pct": round(actual_pct * 100, 2),
-            "actual_count": actual_count,
-        })
+        mix_realism.append(
+            {
+                "mix": key,
+                "target_pct": round(target_pct * 100, 2),
+                "actual_pct": round(actual_pct * 100, 2),
+                "actual_count": actual_count,
+            }
+        )
 
     # 2. Persona Distribution Realism
     persona_weights = {}
     for item in contract.traffic.mix:
-        persona_weights[item.persona_id] = persona_weights.get(item.persona_id, 0.0) + item.weight
+        persona_weights[item.persona_id] = (
+            persona_weights.get(item.persona_id, 0.0) + item.weight
+        )
     total_persona_weight = sum(persona_weights.values()) or 1.0
-    persona_targets = {pid: w / total_persona_weight for pid, w in persona_weights.items()}
+    persona_targets = {
+        pid: w / total_persona_weight for pid, w in persona_weights.items()
+    }
 
     actual_persona_counts = {}
     for planned in full_plan:
-        actual_persona_counts[planned.persona_id] = actual_persona_counts.get(planned.persona_id, 0) + 1
+        actual_persona_counts[planned.persona_id] = (
+            actual_persona_counts.get(planned.persona_id, 0) + 1
+        )
 
     persona_realism = []
     for pid, target_pct in persona_targets.items():
         actual_count = actual_persona_counts.get(pid, 0)
         actual_pct = actual_count / len(full_plan) if full_plan else 0.0
-        persona_realism.append({
-            "persona_id": pid,
-            "target_pct": round(target_pct * 100, 2),
-            "actual_pct": round(actual_pct * 100, 2),
-            "actual_count": actual_count,
-        })
+        persona_realism.append(
+            {
+                "persona_id": pid,
+                "target_pct": round(target_pct * 100, 2),
+                "actual_pct": round(actual_pct * 100, 2),
+                "actual_count": actual_count,
+            }
+        )
 
     # 3. Scenario Distribution Realism
     scenario_weights = {}
     for item in contract.traffic.mix:
-        scenario_weights[item.scenario_id] = scenario_weights.get(item.scenario_id, 0.0) + item.weight
+        scenario_weights[item.scenario_id] = (
+            scenario_weights.get(item.scenario_id, 0.0) + item.weight
+        )
     total_scenario_weight = sum(scenario_weights.values()) or 1.0
-    scenario_targets = {sid: w / total_scenario_weight for sid, w in scenario_weights.items()}
+    scenario_targets = {
+        sid: w / total_scenario_weight for sid, w in scenario_weights.items()
+    }
 
     actual_scenario_counts = {}
     for planned in full_plan:
-        actual_scenario_counts[planned.scenario_id] = actual_scenario_counts.get(planned.scenario_id, 0) + 1
+        actual_scenario_counts[planned.scenario_id] = (
+            actual_scenario_counts.get(planned.scenario_id, 0) + 1
+        )
 
     scenario_realism = []
     for sid, target_pct in scenario_targets.items():
         actual_count = actual_scenario_counts.get(sid, 0)
         actual_pct = actual_count / len(full_plan) if full_plan else 0.0
-        scenario_realism.append({
-            "scenario_id": sid,
-            "target_pct": round(target_pct * 100, 2),
-            "actual_pct": round(actual_pct * 100, 2),
-            "actual_count": actual_count,
-        })
+        scenario_realism.append(
+            {
+                "scenario_id": sid,
+                "target_pct": round(target_pct * 100, 2),
+                "actual_pct": round(actual_pct * 100, 2),
+                "actual_count": actual_count,
+            }
+        )
 
     # 4. Temporal Distribution Realism
     from adaptive_synth_eval.generation.traffic import _day_weights
+
     day_weights = _day_weights(contract.traffic, contract.time_window)
     total_day_weight = sum(day_weights) or 1.0
     day_targets = [w / total_day_weight for w in day_weights]
@@ -676,12 +899,14 @@ async def run_simulation_async(
     for idx, target_pct in enumerate(day_targets):
         actual_count = actual_day_counts[idx]
         actual_pct = actual_count / len(full_plan) if full_plan else 0.0
-        temporal_realism.append({
-            "day": idx + 1,
-            "target_pct": round(target_pct * 100, 2),
-            "actual_pct": round(actual_pct * 100, 2),
-            "actual_count": actual_count,
-        })
+        temporal_realism.append(
+            {
+                "day": idx + 1,
+                "target_pct": round(target_pct * 100, 2),
+                "actual_pct": round(actual_pct * 100, 2),
+                "actual_count": actual_count,
+            }
+        )
 
     production_realism = {
         "mix_realism": mix_realism,
@@ -690,7 +915,9 @@ async def run_simulation_async(
         "temporal_realism": temporal_realism,
     }
 
-    configured_max_concurrency = int(getattr(contract.traffic, "max_concurrency", 5) or 5)
+    configured_max_concurrency = int(
+        getattr(contract.traffic, "max_concurrency", 5) or 5
+    )
     effective_max_concurrency = _effective_max_concurrency(contract)
 
     summary = {

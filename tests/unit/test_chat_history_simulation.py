@@ -2,13 +2,63 @@ import asyncio
 import json
 from copy import deepcopy
 
+import pytest
+
 from adaptive_synth_eval.clients.chatbot import ChatbotResponse
 from adaptive_synth_eval.config.contract import load_contract
 from adaptive_synth_eval.engines.chat_history_simulation import (
+    _bounded_results,
     _effective_max_concurrency,
     run_simulation,
     run_simulation_async,
 )
+
+
+@pytest.mark.asyncio
+async def test_bounded_results_stops_admission_and_drains_on_consumer_failure():
+    admitted = asyncio.Event()
+    release = asyncio.Event()
+    started: list[int] = []
+    finished: list[int] = []
+
+    async def worker(item: int) -> int:
+        started.append(item)
+        if len(started) == 3:
+            admitted.set()
+        await admitted.wait()
+        if item == 0:
+            return item
+        await release.wait()
+        finished.append(item)
+        return item
+
+    async def consume() -> None:
+        results = _bounded_results(
+            list(range(8)),
+            worker=worker,
+            max_concurrency=3,
+            can_admit=lambda: True,
+        )
+        try:
+            async for item in results:
+                if item == 0:
+                    raise RuntimeError("artifact failed")
+        finally:
+            await results.aclose()
+
+    run = asyncio.create_task(consume())
+    await admitted.wait()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not run.done()
+    assert started == [0, 1, 2]
+
+    release.set()
+    with pytest.raises(RuntimeError, match="artifact failed"):
+        await run
+
+    assert sorted(finished) == [1, 2]
+    assert started == [0, 1, 2]
 
 
 def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
@@ -52,7 +102,9 @@ def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
                 "traffic_orchestration": {
                     "total_conversations": 2,
                     "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+                    "mix": [
+                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
+                    ],
                     "random_seed": 3,
                 },
                 "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
@@ -241,10 +293,15 @@ def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):
                 "traffic_orchestration": {
                     "total_conversations": 2,
                     "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+                    "mix": [
+                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
+                    ],
                     "random_seed": 3,
                 },
-                "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_async"},
+                "output": {
+                    "base_dir": str(tmp_path / "outputs"),
+                    "run_id": "run_async",
+                },
             }
         )
     )
@@ -253,7 +310,9 @@ def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):
     summary = asyncio.run(run_simulation_async(contract, dry_run=True))
 
     assert summary["total_conversations"] == 2
-    assert (tmp_path / "outputs" / "runs" / "run_async" / "generation_report.md").exists()
+    assert (
+        tmp_path / "outputs" / "runs" / "run_async" / "generation_report.md"
+    ).exists()
 
 
 def test_run_simulation_with_output_conversations(tmp_path):
@@ -297,7 +356,9 @@ def test_run_simulation_with_output_conversations(tmp_path):
                 "traffic_orchestration": {
                     "total_conversations": 2,
                     "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
+                    "mix": [
+                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
+                    ],
                     "random_seed": 3,
                 },
                 "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
@@ -312,7 +373,9 @@ def test_run_simulation_with_output_conversations(tmp_path):
     assert (tmp_path / "outputs" / "runs" / "run1" / "conversations.txt").exists()
 
     # Verify the file contains Persona/Bot labels
-    content = (tmp_path / "outputs" / "runs" / "run1" / "conversations.txt").read_text(encoding="utf-8")
+    content = (tmp_path / "outputs" / "runs" / "run1" / "conversations.txt").read_text(
+        encoding="utf-8"
+    )
     assert "Persona (Turn 1):" in content
     assert "Bot (Turn 1):" in content
     assert "Conversation ID:" in content
@@ -367,8 +430,10 @@ def test_run_simulation_realtime_chat_display_multi_persona(tmp_path, monkeypatc
     def _capture_realtime(*args, **kwargs):
         realtime_calls.append(kwargs)
 
-    monkeypatch.setattr("adaptive_synth_eval.engines.chat_history_simulation.display_persona_message",
-                        _capture_realtime)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.display_persona_message",
+        _capture_realtime,
+    )
 
     single_path = tmp_path / "single_contract.json"
     single_path.write_text(json.dumps(base_contract))
@@ -490,7 +555,9 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
     assert summary["total_turns"] == 1
 
 
-def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(tmp_path, monkeypatch):
+def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(
+    tmp_path, monkeypatch
+):
     contract_payload = {
         "simulation_suite": {
             "suite_id": "suite",
@@ -568,7 +635,9 @@ def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(tmp_
     assert calls["count"] == 1
 
 
-def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(tmp_path, monkeypatch):
+def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(
+    tmp_path, monkeypatch
+):
     """HTTP 200 with an error body (e.g. 403/CosmosDB key expired) must also stop all processes."""
     contract_payload = {
         "simulation_suite": {
@@ -614,7 +683,10 @@ def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(tmp_p
             "max_concurrency": 1,
             "random_seed": 3,
         },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_stop_200_error"},
+        "output": {
+            "base_dir": str(tmp_path / "outputs"),
+            "run_id": "run_stop_200_error",
+        },
     }
     contract_path = tmp_path / "contract_stop_200.json"
     contract_path.write_text(json.dumps(contract_payload))
@@ -623,8 +695,8 @@ def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(tmp_p
     calls = {"count": 0}
     error_body = (
         "Error processing request: Status code: 403 Sub-status: 4018\n"
-        '{\"Errors\":[\"Access to your account is currently revoked because the '
-        'correspondent key is either disabled or expired.\"]}'
+        '{"Errors":["Access to your account is currently revoked because the '
+        'correspondent key is either disabled or expired."]}'
     )
 
     class _FakeClient:
@@ -693,7 +765,10 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
             "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
             "random_seed": 3,
         },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_non_interactive"},
+        "output": {
+            "base_dir": str(tmp_path / "outputs"),
+            "run_id": "run_non_interactive",
+        },
     }
 
     contract_path = tmp_path / "contract_non_interactive.json"
@@ -702,7 +777,9 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
 
     class _ShouldNotBeCreatedController:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("RealtimeChatController should not be created when interactive controls are disabled")
+            raise AssertionError(
+                "RealtimeChatController should not be created when interactive controls are disabled"
+            )
 
     monkeypatch.setattr(
         "adaptive_synth_eval.engines.chat_history_simulation.RealtimeChatController",
@@ -721,8 +798,9 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
 
 
 def test_run_simulation_with_persona_filter(tmp_path):
-    from adaptive_synth_eval.config.contract import ContractError
     import pytest
+
+    from adaptive_synth_eval.config.contract import ContractError
 
     contract_path = tmp_path / "contract_filter.json"
     contract_payload = {
@@ -756,7 +834,7 @@ def test_run_simulation_with_persona_filter(tmp_path):
                 "communication_style": "direct",
                 "hr_familiarity": "high",
                 "privacy_sensitivity": "medium",
-            }
+            },
         ],
         "scenario_catalog": [
             {
@@ -773,7 +851,7 @@ def test_run_simulation_with_persona_filter(tmp_path):
             "conversation_turns": {"min": 3, "max": 3},
             "mix": [
                 {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
-                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5}
+                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
             ],
             "random_seed": 3,
         },
@@ -788,7 +866,9 @@ def test_run_simulation_with_persona_filter(tmp_path):
     # Check that conversations only for P002 were run
     turns_file = tmp_path / "outputs" / "runs" / "run_filter" / "turns.jsonl"
     assert turns_file.exists()
-    lines = [json.loads(line) for line in turns_file.read_text(encoding="utf-8").splitlines()]
+    lines = [
+        json.loads(line) for line in turns_file.read_text(encoding="utf-8").splitlines()
+    ]
     assert len(lines) > 0
     for turn in lines:
         assert turn["persona_id"] == "P002"
@@ -799,7 +879,9 @@ def test_run_simulation_with_persona_filter(tmp_path):
     assert "not found in contract's persona pool" in str(excinfo.value)
 
 
-def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path, monkeypatch):
+def test_realtime_controller_seeded_with_filtered_persona_before_start(
+    tmp_path, monkeypatch
+):
     contract_path = tmp_path / "contract_filter_realtime.json"
     contract_payload = {
         "simulation_suite": {
@@ -853,7 +935,10 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
             ],
             "random_seed": 3,
         },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_filter_realtime"},
+        "output": {
+            "base_dir": str(tmp_path / "outputs"),
+            "run_id": "run_filter_realtime",
+        },
     }
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
@@ -904,7 +989,9 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(tmp_path,
     assert observed["seeded_before_start"] is True
 
 
-def test_realtime_controller_defaults_to_first_contract_persona_before_start(tmp_path, monkeypatch):
+def test_realtime_controller_defaults_to_first_contract_persona_before_start(
+    tmp_path, monkeypatch
+):
     contract_path = tmp_path / "contract_first_persona_realtime.json"
     contract_payload = {
         "simulation_suite": {
@@ -958,7 +1045,10 @@ def test_realtime_controller_defaults_to_first_contract_persona_before_start(tmp
             ],
             "random_seed": 3,
         },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_first_persona_realtime"},
+        "output": {
+            "base_dir": str(tmp_path / "outputs"),
+            "run_id": "run_first_persona_realtime",
+        },
     }
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
@@ -1010,7 +1100,10 @@ def test_realtime_controller_defaults_to_first_contract_persona_before_start(tmp
 
 def test_score_response_returns_nullable_scores_without_context():
     from adaptive_synth_eval.scoring.response_quality import score_response
-    score = score_response(user_message="hello", bot_response="hi", expected_context=None)
+
+    score = score_response(
+        user_message="hello", bot_response="hi", expected_context=None
+    )
 
     assert score.groundedness_score is None
     assert score.relevance_score is not None
@@ -1020,5 +1113,6 @@ def test_score_response_returns_nullable_scores_without_context():
 
 def test_detect_failure_mode_identifies_empty_response():
     from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
+
     assert detect_failure_mode("", error=None) == "empty_response"
     assert detect_failure_mode("ok", error="timeout") == "endpoint_error"
