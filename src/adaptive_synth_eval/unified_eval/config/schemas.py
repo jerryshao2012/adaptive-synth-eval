@@ -1,4 +1,5 @@
 """Unified contract schema. Reuses ASE Persona/Scenario dataclasses verbatim."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,6 +12,14 @@ from adaptive_synth_eval.config.schemas import (
     Scenario,
     TargetChatbot,
     TimeWindow,
+)
+
+DEFAULT_ATTACK_SKILL_TOOLS = (
+    "read_skill_resource",
+    "search_skill_resources",
+    "inspect_target_capabilities",
+    "query_attack_memory",
+    "transform_payload",
 )
 
 
@@ -61,6 +70,7 @@ class RunSettings:
 class LLMSpec:
     """Single LLM spec that the factory turns into both an ARE callable
     and an ASE LangChain chat model."""
+
     provider: str = "mock"
     model: str = ""
     max_tokens: int = 1024
@@ -113,6 +123,7 @@ class Schedule:
                      linearly to 1 across the remaining turns — a gradual hand-off
                      from legitimate context-building to sustained adversarial pressure.
     """
+
     mode: str = "bernoulli"
     p_synth: float = 0.3  # used by bernoulli and min_each (default leans adversarial)
     warmup_turns: int = 2  # used by phased and ramp
@@ -158,15 +169,31 @@ class TrajectoryConfig:
     When disabled (the default, or when the `trajectory:` block is omitted), behavior
     is identical to today's response-only evaluation.
     """
+
     enabled: bool = False
     trace_field: str = "trace"
 
 
 @dataclass(frozen=True)
+class AttackSkillsConfig:
+    """Opt-in configuration for curated Agent Skills attack planning."""
+
+    enabled: bool = False
+    include: tuple[str, ...] = ()
+    allowed_tools: tuple[str, ...] = DEFAULT_ATTACK_SKILL_TOOLS
+    max_tool_calls_per_turn: int = 3
+
+
+@dataclass(frozen=True)
 class ScoringConfig:
-    synth_weights: dict[str, float] = field(default_factory=lambda: {
-        "groundedness": 1.0, "relevance": 1.0, "safety": 1.0, "clarification": 1.0
-    })
+    synth_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "groundedness": 1.0,
+            "relevance": 1.0,
+            "safety": 1.0,
+            "clarification": 1.0,
+        }
+    )
     adversarial_failure_threshold: int = 3
 
 
@@ -187,6 +214,7 @@ class UnifiedContract:
     target_llm: LLMSpec | None = None  # Used when target.mode == "llm"
     target_system_prompt: str = ""  # Bot's behavioral prompt when target.mode == "llm"
     trajectory: TrajectoryConfig = field(default_factory=TrajectoryConfig)
+    attack_skills: AttackSkillsConfig = field(default_factory=AttackSkillsConfig)
     warnings: list[str] = field(default_factory=list)
 
     def persona_by_id(self) -> dict[str, Persona]:

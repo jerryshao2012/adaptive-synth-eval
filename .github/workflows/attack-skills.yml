@@ -1,0 +1,32 @@
+name: Attack skills
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/attack-skills.yml"
+      - "pyproject.toml"
+      - "src/adaptive_synth_eval/adversarial_response_engine/skills/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/attack-skills.yml"
+      - "pyproject.toml"
+      - "src/adaptive_synth_eval/adversarial_response_engine/skills/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Validate ASE profile
+        run: uv run ase skills validate
+      - name: Validate Agent Skills specification
+        run: |
+          for skill in src/adaptive_synth_eval/adversarial_response_engine/skills/catalog/*/; do
+            uvx --from "git+https://github.com/agentskills/agentskills@38a2ff82958afee88dadf4831509e6f7e9d8ef4e#subdirectory=skills-ref" \
+              skills-ref validate "$skill"
+          done

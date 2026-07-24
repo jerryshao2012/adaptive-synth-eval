@@ -1,13 +1,20 @@
 """Smoke tests for unified contract loader."""
+
 from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+import adaptive_synth_eval.unified_eval.config.contract as contract_module
+from adaptive_synth_eval.adversarial_response_engine.skills.registry import (
+    AttackSkillRegistry,
+    get_builtin_registry,
+)
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.unified_eval.config.contract import (
     contract_to_dict,
@@ -15,7 +22,18 @@ from adaptive_synth_eval.unified_eval.config.contract import (
     parse_unified_contract,
 )
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
+EXAMPLE = (
+    Path(__file__).resolve().parents[2]
+    / "contracts"
+    / "examples"
+    / "unified_evaluation_demo.yaml"
+)
+SKILLS_EXAMPLE = (
+    Path(__file__).resolve().parents[2]
+    / "contracts"
+    / "examples"
+    / "unified_agent_skills_demo.yaml"
+)
 
 
 def test_load_example_contract():
@@ -25,6 +43,27 @@ def test_load_example_contract():
     assert len(contract.scenario_catalog) == 4
     assert len(contract.adversarial_scenario_catalog) == 4
     assert len(contract.eval_plan.entries) == 6
+    assert contract.attack_skills.enabled is False
+    assert contract.attack_skills.max_tool_calls_per_turn == 3
+    assert contract.attack_skills.allowed_tools == (
+        "read_skill_resource",
+        "search_skill_resources",
+        "inspect_target_capabilities",
+        "query_attack_memory",
+        "transform_payload",
+    )
+
+
+def test_load_enabled_agent_skills_example_contract():
+    contract = load_unified_contract(SKILLS_EXAMPLE)
+
+    assert contract.suite.suite_id == "unified_agent_skills_demo"
+    assert contract.attack_skills.enabled is True
+    assert contract.attack_skills.include == (
+        "indirect-priming",
+        "semantic-drift",
+    )
+    assert contract.attack_skills.max_tool_calls_per_turn == 2
 
 
 def test_llm_for_inherits_top_level():
@@ -63,31 +102,133 @@ def test_unknown_attack_memory_mode_is_rejected():
         parse_unified_contract(payload)
 
 
+def test_attack_skills_config_round_trips_with_catalog_fingerprint_data():
+    payload = _base_payload()
+    payload["attack_skills"] = {
+        "enabled": True,
+        "include": ["semantic-drift"],
+        "allowed_tools": ["query_attack_memory"],
+        "max_tool_calls_per_turn": 2,
+    }
+
+    contract = parse_unified_contract(payload)
+    normalized = contract_to_dict(contract)
+
+    assert contract.attack_skills.enabled is True
+    assert contract.attack_skills.include == ("semantic-drift",)
+    assert contract.attack_skills.allowed_tools == ("query_attack_memory",)
+    assert normalized["attack_skills"]["max_tool_calls_per_turn"] == 2
+    assert normalized["attack_skills"]["catalog"] == [
+        {
+            "name": "semantic-drift",
+            "version": "1.0.0",
+            "digest": normalized["attack_skills"]["catalog"][0]["digest"],
+        }
+    ]
+    assert len(normalized["attack_skills"]["catalog"][0]["digest"]) == 64
+
+
+def test_enabled_skills_must_cover_active_adversarial_scenarios(monkeypatch):
+    payload = _base_payload()
+    payload["attack_skills"] = {
+        "enabled": True,
+        "include": ["semantic-drift"],
+    }
+    incompatible = replace(
+        get_builtin_registry().get("semantic-drift"),
+        scenario_types=("prompt-injection",),
+    )
+    monkeypatch.setattr(
+        contract_module,
+        "get_builtin_registry",
+        lambda: AttackSkillRegistry([incompatible]),
+    )
+
+    with pytest.raises(ContractError, match="does not support active scenario"):
+        parse_unified_contract(payload)
+
+
+@pytest.mark.parametrize(
+    ("attack_skills", "message"),
+    [
+        ({"enabled": True, "include": ["missing-skill"]}, "unknown attack skill"),
+        ({"enabled": True, "allowed_tools": ["shell"]}, "unknown attack skill tool"),
+        ({"enabled": True, "max_tool_calls_per_turn": -1}, "max_tool_calls_per_turn"),
+        ({"enabled": True, "max_tool_calls_per_turn": 4}, "max_tool_calls_per_turn"),
+        ({"enabled": "false"}, "attack_skills.enabled"),
+        ({"max_tool_calls_per_turn": "many"}, "max_tool_calls_per_turn"),
+    ],
+)
+def test_invalid_attack_skills_config_is_rejected(attack_skills, message):
+    payload = _base_payload()
+    payload["attack_skills"] = attack_skills
+
+    with pytest.raises(ContractError, match=message):
+        parse_unified_contract(payload)
+
+
 def _base_payload() -> dict:
     return {
-        "suite": {"suite_id": "t", "target_application": "tbot", "run_mode": "unified", "synthetic_flag": True},
-        "run": {"random_seed": 0, "max_concurrency": 1, "dry_run": True, "verbose": False},
+        "suite": {
+            "suite_id": "t",
+            "target_application": "tbot",
+            "run_mode": "unified",
+            "synthetic_flag": True,
+        },
+        "run": {
+            "random_seed": 0,
+            "max_concurrency": 1,
+            "dry_run": True,
+            "verbose": False,
+        },
         "llm": {"provider": "mock", "model": "mock"},
         "target": {"enabled": False, "endpoint": "mock", "mode": "api"},
-        "time_window": {"start_day": "2026-06-01", "num_synthetic_days": 1, "compressed_runtime_minutes": 1},
-        "persona_pool": [{
-            "persona_id": "P1", "role": "r", "location": "loc", "seniority": "junior",
-            "communication_style": "x", "domain_familiarity": "low", "data_sensitivity": "low",
-        }],
-        "scenario_catalog": [{
-            "scenario_id": "S1", "domain": "d", "intent": "i",
-            "expected_retrieval_topics": [], "failure_injection": {}, "success_criteria": {},
-        }],
-        "adversarial_scenario_catalog": [{
-            "scenario_id": "A1", "scenario_type": "toxicity", "scenario_text": "probe",
-        }],
+        "time_window": {
+            "start_day": "2026-06-01",
+            "num_synthetic_days": 1,
+            "compressed_runtime_minutes": 1,
+        },
+        "persona_pool": [
+            {
+                "persona_id": "P1",
+                "role": "r",
+                "location": "loc",
+                "seniority": "junior",
+                "communication_style": "x",
+                "domain_familiarity": "low",
+                "data_sensitivity": "low",
+            }
+        ],
+        "scenario_catalog": [
+            {
+                "scenario_id": "S1",
+                "domain": "d",
+                "intent": "i",
+                "expected_retrieval_topics": [],
+                "failure_injection": {},
+                "success_criteria": {},
+            }
+        ],
+        "adversarial_scenario_catalog": [
+            {
+                "scenario_id": "A1",
+                "scenario_type": "toxicity",
+                "scenario_text": "probe",
+            }
+        ],
         "eval_plan": {
             "total_conversations": 1,
             "conversation_turns": {"min": 2, "max": 2},
-            "entries": [{
-                "persona_id": "P1", "synth_scenario_id": "S1", "adversarial_scenario_id": "A1",
-                "weight": 1.0, "synth_to_adversarial_ratio": 0.5, "max_turns": 2,
-            }],
+            "entries": [
+                {
+                    "persona_id": "P1",
+                    "synth_scenario_id": "S1",
+                    "adversarial_scenario_id": "A1",
+                    "weight": 1.0,
+                    "synth_to_adversarial_ratio": 0.5,
+                    "max_turns": 2,
+                }
+            ],
         },
     }
 
@@ -113,63 +254,68 @@ def test_adversarial_scenarios_parsed_from_scenario_catalog():
 def test_load_unified_contract_resolves_env_vars_from_dotenv_file(tmp_path):
     contract_path = tmp_path / "unified_contract.yaml"
     contract_path.write_text(
-        "\n".join([
-            "suite:",
-            "  suite_id: t",
-            "  target_application: tbot",
-            "  run_mode: unified",
-            "  synthetic_flag: true",
-            "run:",
-            "  random_seed: 0",
-            "  max_concurrency: 1",
-            "  dry_run: true",
-            "  verbose: false",
-            "llm:",
-            "  provider: mock",
-            "  model: mock",
-            "target:",
-            "  enabled: true",
-            "  endpoint: \"${ASE_TEST_UNIFIED_ENDPOINT}\"",
-            "  mode: api",
-            "time_window:",
-            "  start_day: \"2026-06-01\"",
-            "  num_synthetic_days: 1",
-            "  compressed_runtime_minutes: 1",
-            "persona_pool:",
-            "  - persona_id: P1",
-            "    role: r",
-            "    location: loc",
-            "    seniority: junior",
-            "    communication_style: x",
-            "    domain_familiarity: low",
-            "    data_sensitivity: low",
-            "scenario_catalog:",
-            "  - scenario_id: S1",
-            "    domain: d",
-            "    intent: i",
-            "    expected_retrieval_topics: []",
-            "    failure_injection: {}",
-            "    success_criteria: {}",
-            "adversarial_scenario_catalog:",
-            "  - scenario_id: A1",
-            "    scenario_type: toxicity",
-            "    scenario_text: probe",
-            "eval_plan:",
-            "  total_conversations: 1",
-            "  conversation_turns:",
-            "    min: 2",
-            "    max: 2",
-            "  entries:",
-            "    - persona_id: P1",
-            "      synth_scenario_id: S1",
-            "      adversarial_scenario_id: A1",
-            "      weight: 1.0",
-        ]),
+        "\n".join(
+            [
+                "suite:",
+                "  suite_id: t",
+                "  target_application: tbot",
+                "  run_mode: unified",
+                "  synthetic_flag: true",
+                "run:",
+                "  random_seed: 0",
+                "  max_concurrency: 1",
+                "  dry_run: true",
+                "  verbose: false",
+                "llm:",
+                "  provider: mock",
+                "  model: mock",
+                "target:",
+                "  enabled: true",
+                '  endpoint: "${ASE_TEST_UNIFIED_ENDPOINT}"',
+                "  mode: api",
+                "time_window:",
+                '  start_day: "2026-06-01"',
+                "  num_synthetic_days: 1",
+                "  compressed_runtime_minutes: 1",
+                "persona_pool:",
+                "  - persona_id: P1",
+                "    role: r",
+                "    location: loc",
+                "    seniority: junior",
+                "    communication_style: x",
+                "    domain_familiarity: low",
+                "    data_sensitivity: low",
+                "scenario_catalog:",
+                "  - scenario_id: S1",
+                "    domain: d",
+                "    intent: i",
+                "    expected_retrieval_topics: []",
+                "    failure_injection: {}",
+                "    success_criteria: {}",
+                "adversarial_scenario_catalog:",
+                "  - scenario_id: A1",
+                "    scenario_type: toxicity",
+                "    scenario_text: probe",
+                "eval_plan:",
+                "  total_conversations: 1",
+                "  conversation_turns:",
+                "    min: 2",
+                "    max: 2",
+                "  entries:",
+                "    - persona_id: P1",
+                "      synth_scenario_id: S1",
+                "      adversarial_scenario_id: A1",
+                "      weight: 1.0",
+            ]
+        ),
         encoding="utf-8",
     )
 
     dotenv_path = tmp_path / ".env"
-    dotenv_path.write_text("ASE_TEST_UNIFIED_ENDPOINT=https://unified-dotenv.example.com\n", encoding="utf-8")
+    dotenv_path.write_text(
+        "ASE_TEST_UNIFIED_ENDPOINT=https://unified-dotenv.example.com\n",
+        encoding="utf-8",
+    )
 
     with patch.dict(os.environ, {"ASE_ENV_FILE": str(dotenv_path)}, clear=False):
         if "ASE_TEST_UNIFIED_ENDPOINT" in os.environ:
@@ -189,7 +335,9 @@ def test_trajectory_and_global_threshold_are_applied_to_adversarial_scenarios():
     assert contract.trajectory.enabled is True
     assert contract.trajectory.trace_field == "execution_trace"
     assert contract.adversarial_scenario_catalog[0].failure_threshold == 4
-    assert contract.adversarial_scenario_catalog[0].judge_overrides == {"rubric": "legacy"}
+    assert contract.adversarial_scenario_catalog[0].judge_overrides == {
+        "rubric": "legacy"
+    }
     assert any("judge_overrides" in warning for warning in contract.warnings)
 
 
@@ -255,7 +403,9 @@ def test_contract_v2_round_trip_preserves_nested_llms_schedule_target_and_trajec
     assert reparsed.components == original.components
     assert reparsed.target_llm == original.target_llm
     assert reparsed.target_system_prompt == "Be safe"
-    assert reparsed.eval_plan.entries[0].schedule == original.eval_plan.entries[0].schedule
+    assert (
+        reparsed.eval_plan.entries[0].schedule == original.eval_plan.entries[0].schedule
+    )
     assert reparsed.trajectory == original.trajectory
 
 

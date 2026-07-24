@@ -13,6 +13,7 @@ Use this page to choose the shortest path for your task. Configuration details l
 - [Synth user simulation](user_simulation_llm.md) — Scenario authors can generate realistic persona-driven benign conversations with templates or an LLM.
 - [Unified evaluation](unified_evaluation.md) — Evaluators can interleave synthetic traffic with adversarial probes and scoring in one run.
 - [Adversarial internals](adversarial_agent_walkthrough.md) — Engineers and data scientists can understand the attack planner, generator, judge, and adaptive memory flow.
+- [Attack skills](attack_skills.md) — Attack-method authors and operators can configure, inspect, validate, and safely extend curated Agent Skills packages.
 - [Realtime chat](cli_usage.md#real-time-chat--interactive-controls) — Operators can watch dry-runs or live evaluations and use terminal session controls.
 
 ## Understand outputs

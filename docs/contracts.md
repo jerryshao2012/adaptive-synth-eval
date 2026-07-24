@@ -78,7 +78,7 @@ Unified contracts interleave synth and adversarial turns within one conversation
 | `scenario_catalog` | Synth scenarios; may also contain inline adversarial scenarios |
 | `eval_plan` | Turn range, weighted conversation recipes, schedules, and attack-memory mode |
 
-Optional blocks are `schema_version`, `run`, `components`, `adversarial_scenario_catalog`, `scoring`, `trajectory`, and `output`. Unified source contracts may omit `schema_version`; the normalized artifact is always canonical schema version 2. Versions 1 and 2 are accepted, and future versions are rejected.
+Optional blocks are `schema_version`, `run`, `components`, `adversarial_scenario_catalog`, `attack_skills`, `scoring`, `trajectory`, and `output`. Unified source contracts may omit `schema_version`; the normalized artifact is always canonical schema version 2. Versions 1 and 2 are accepted, and future versions are rejected.
 
 ```yaml
 schema_version: 2
@@ -138,6 +138,25 @@ output:
 ```
 
 Unified validation requires conversation turns in the inclusive range 1–20, `min <= max`, valid plan references, a target LLM block when `target.mode: llm`, and a supported schedule and memory mode.
+
+### Agent Skills attack methods
+
+Unified evaluation can opt into the curated Agent Skills attack-method runtime:
+
+```yaml
+attack_skills:
+  enabled: true
+  include: [] # Empty means every packaged skill
+  allowed_tools:
+    - read_skill_resource
+    - search_skill_resources
+    - inspect_target_capabilities
+    - query_attack_memory
+    - transform_payload
+  max_tool_calls_per_turn: 3
+```
+
+The block defaults to disabled. Selected skill versions and package digests plus the tool policy enter the normalized contract fingerprint, so resume rejects content or permission changes. See [Attack skills](attack_skills.md) for package validation, security boundaries, provenance, and the enabled example contract.
 
 ### LLM specifications
 

@@ -8,6 +8,7 @@ Adversarial Adaptive Synthetic Evaluation (ASE) is a contract-driven Python CLI 
 
 - Generate persona-driven synthetic conversations with configurable scenarios, traffic, and failure injection.
 - Run unified evaluations that interleave benign turns with adaptive adversarial probes.
+- Plan adversarial turns with opt-in, curated Agent Skills packages and bounded read-only helper tools.
 - Exercise API, browser, and AWS Bedrock AgentCore targets.
 - Score response quality and safety, then persist machine-readable and human-readable artifacts.
 - Re-evaluate existing run artifacts for monitoring and review them in a local dashboard.
@@ -70,6 +71,7 @@ For recovery flags, realtime controls, and the full command reference, see the [
 | Generate realistic benign traffic | `synth` mode | [User simulation](docs/user_simulation_llm.md) and [contracts](docs/contracts.md) |
 | Mix benign traffic with safety probes | `unified` mode | [Unified evaluation](docs/unified_evaluation.md) |
 | Understand or extend adaptive attacks | Adversarial response engine | [Adversarial agent walkthrough](docs/adversarial_agent_walkthrough.md) |
+| Author or operate standard attack methods | Agent Skills attack methods | [Attack skills](docs/attack_skills.md) |
 | Re-score completed run artifacts | Monitoring | [Monitoring guide](docs/monitoring.md) |
 | Score independent payloads over REST | Metrics API | [Standalone metrics API](docs/metrics_api.md) |
 | Schedule guarded repeat evaluations | Loop execution | [Loop architecture](docs/loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) and [operations runbook](docs/loop_operations_runbook.md) |

@@ -10,8 +10,16 @@ from pathlib import Path
 
 import pytest
 
+from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import (
+    AttackAgent,
+)
+from adaptive_synth_eval.adversarial_response_engine.skills.executor import (
+    SkillExecutionError,
+)
 from adaptive_synth_eval.config.contract import ContractError
+from adaptive_synth_eval.config.schemas import ConversationTurns
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
+from adaptive_synth_eval.unified_eval.config.schemas import AttackSkillsConfig, Schedule
 from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
 
 EXAMPLE = (
@@ -86,6 +94,9 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
         for row in conversation_rows
     )
     assert summary["failure_percentiles"]["failure_score"]["count"] == len(adv_rows)
+    assert summary["attack_methods"]["skills_enabled"] is False
+    assert summary["attack_methods"]["unique_angles"] > 0
+    assert summary["attack_methods"]["skill_counts"] == {}
 
     # attack_memory.json has cross-conversation entries
     am = json.loads((run_dir / "attack_memory.json").read_text())
@@ -135,6 +146,184 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
     run_plan = json.loads((run_dir / "run_plan.json").read_text())
     assert normalized["schema_version"] == 2
     assert all("schedule" in row for row in run_plan)
+
+
+def test_skill_enabled_dry_run_records_skill_provenance_and_catalog(tmp_path: Path):
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        attack_skills=AttackSkillsConfig(
+            enabled=True,
+            include=("semantic-drift",),
+            allowed_tools=("query_attack_memory",),
+            max_tool_calls_per_turn=3,
+        ),
+    )
+
+    summary = run_unified(contract, dry_run=True, run_id_override="skill_enabled")
+
+    run_dir = tmp_path / "runs" / "skill_enabled"
+    turns = [
+        json.loads(line)
+        for line in (run_dir / "turns.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    adversarial = [row for row in turns if row["turn_type"] == "adversarial"]
+    assert adversarial
+    for row in adversarial:
+        strategy = row["generation_metadata"]["strategy"]
+        assert strategy["skill_name"] == "semantic-drift"
+        assert strategy["skill_version"] == "1.0.0"
+        assert len(strategy["skill_package_digest"]) == 64
+        assert strategy["skill_tool_events"] == []
+
+    normalized = json.loads((run_dir / "contract.normalized.json").read_text())
+    assert normalized["attack_skills"]["enabled"] is True
+    assert normalized["attack_skills"]["catalog"][0]["name"] == "semantic-drift"
+    assert summary["attack_methods"]["skills_enabled"] is True
+    assert summary["attack_methods"]["skill_counts"] == {
+        "semantic-drift@1.0.0": len(adversarial)
+    }
+    assert summary["attack_methods"]["unique_sub_tactics"] > 0
+    assert sum(summary["attack_methods"]["sub_tactic_counts"].values()) == len(
+        adversarial
+    )
+    assert summary["attack_methods"]["tool_utilization"]["calls"] == 0
+    assert summary["attack_methods"]["planner_usage"]["calls"] == len(adversarial)
+
+
+def test_recorded_mock_comparison_benchmark_meets_opt_in_gate(tmp_path: Path):
+    base = load_unified_contract(EXAMPLE)
+    entry = replace(
+        base.eval_plan.entries[0],
+        schedule=Schedule(mode="phased", warmup_turns=0),
+        max_turns=3,
+    )
+    base = replace(
+        base,
+        eval_plan=replace(
+            base.eval_plan,
+            total_conversations=4,
+            conversation_turns=ConversationTurns(min=3, max=3),
+            entries=[entry],
+        ),
+    )
+    legacy = _with_output_dir(base, tmp_path / "legacy")
+    skill_enabled = replace(
+        _with_output_dir(base, tmp_path / "skills"),
+        attack_skills=AttackSkillsConfig(
+            enabled=True,
+            include=("semantic-drift",),
+            allowed_tools=("query_attack_memory",),
+            max_tool_calls_per_turn=3,
+        ),
+    )
+
+    legacy_summary = run_unified(
+        legacy,
+        dry_run=True,
+        run_id_override="comparison",
+    )
+    skill_summary = run_unified(
+        skill_enabled,
+        dry_run=True,
+        run_id_override="comparison",
+    )
+
+    benchmark_report = {
+        "seed": base.run.random_seed,
+        "target_fixture": "disabled-target deterministic mock response",
+        "judge_score_distribution": {
+            "legacy": legacy_summary["failure_percentiles"]["failure_score"],
+            "skills": skill_summary["failure_percentiles"]["failure_score"],
+        },
+        "coverage": {
+            "legacy": legacy_summary["attack_methods"],
+            "skills": skill_summary["attack_methods"],
+        },
+        "planner_overhead": {
+            "legacy": legacy_summary["attack_methods"]["planner_usage"],
+            "skills": skill_summary["attack_methods"]["planner_usage"],
+        },
+        "tool_utilization": skill_summary["attack_methods"]["tool_utilization"],
+    }
+    report_path = tmp_path / "attack_skills_comparison.json"
+    report_path.write_text(
+        json.dumps(benchmark_report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    assert json.loads(report_path.read_text(encoding="utf-8")) == benchmark_report
+    assert (
+        benchmark_report["judge_score_distribution"]["skills"]["p50"]
+        >= (benchmark_report["judge_score_distribution"]["legacy"]["p50"])
+    )
+    assert (
+        benchmark_report["coverage"]["skills"]["unique_sub_tactics"]
+        >= (benchmark_report["coverage"]["legacy"]["unique_sub_tactics"])
+    )
+
+
+def test_skill_execution_error_is_recorded_without_legacy_fallback(
+    tmp_path: Path, monkeypatch
+):
+    contract = load_unified_contract(EXAMPLE)
+    first_entry = replace(
+        contract.eval_plan.entries[0],
+        schedule=Schedule(mode="phased", warmup_turns=0),
+    )
+    contract = replace(
+        _with_output_dir(contract, tmp_path),
+        eval_plan=replace(
+            contract.eval_plan,
+            total_conversations=1,
+            entries=[first_entry],
+        ),
+        attack_skills=AttackSkillsConfig(
+            enabled=True,
+            include=("semantic-drift",),
+            allowed_tools=("query_attack_memory",),
+        ),
+    )
+
+    def fail_skill(self, session):
+        raise SkillExecutionError(
+            "planner produced malformed actions",
+            events=[{"tool": "query_attack_memory", "status": "error"}],
+            skill_name="semantic-drift",
+            skill_version="1.0.0",
+            skill_package_digest="a" * 64,
+        )
+
+    monkeypatch.setattr(AttackAgent, "next_turn", fail_skill)
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="skill_error",
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "skill_error" / "turns.jsonl")
+        .read_text()
+        .splitlines()
+        if line.strip()
+    ]
+    error_row = next(row for row in rows if row.get("skill_execution_error"))
+    assert error_row["turn_type"] == "adversarial"
+    assert error_row["skill_name"] == "semantic-drift"
+    assert error_row["skill_tool_events"][0]["status"] == "error"
+    assert error_row["failure_mode"] == "skill_execution_error"
+    assert summary["errors"] == 1
+    assert summary["total_turns"] == 1
+    assert summary["adversarial_turns"] == 1
+    conversation = json.loads(
+        (tmp_path / "runs" / "skill_error" / "conversations.jsonl").read_text().strip()
+    )
+    assert conversation["turn_count"] == 1
+    assert conversation["adversarial_turns"] == 1
+    assert conversation["termination_reason"] == "skill_execution_error"
 
 
 def test_dry_run_results_do_not_depend_on_concurrency(tmp_path: Path):

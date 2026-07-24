@@ -26,10 +26,17 @@ from adaptive_synth_eval.config.schemas import (
     Scenario,
     TimeWindow,
 )
+from adaptive_synth_eval.adversarial_response_engine.skills.registry import (
+    BUILTIN_TOOL_NAMES,
+    SkillValidationError,
+    get_builtin_registry,
+)
 from adaptive_synth_eval.unified_eval.config.schemas import (
     AdversarialScenario,
+    AttackSkillsConfig,
     ComponentOverrides,
     ConversationTurns,
+    DEFAULT_ATTACK_SKILL_TOOLS,
     EvalPlan,
     EvalPlanEntry,
     LLMSpec,
@@ -129,9 +136,11 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
     trajectory = TrajectoryConfig(
         **_filter_keys(payload.get("trajectory", {}) or {}, TrajectoryConfig)
     )
+    attack_skills = _parse_attack_skills(payload.get("attack_skills", {}) or {})
 
     _validate_references(personas, scenarios, adv_scenarios, eval_plan)
     _validate_turns(eval_plan.conversation_turns)
+    _validate_attack_skill_coverage(attack_skills, adv_scenarios, eval_plan)
 
     output_payload = payload.get("output", {})
     base_dir = Path(output_payload.get("base_dir", "outputs"))
@@ -160,6 +169,7 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
         target_llm=target_llm,
         target_system_prompt=target_system_prompt,
         trajectory=trajectory,
+        attack_skills=attack_skills,
         warnings=warnings,
     )
 
@@ -202,6 +212,11 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
         target["chatbot_llm"] = _llm_to_dict(contract.target_llm)
     if contract.target_system_prompt:
         target["system_prompt"] = contract.target_system_prompt
+    selected_skills = (
+        get_builtin_registry().selected(contract.attack_skills.include)
+        if contract.attack_skills.enabled
+        else ()
+    )
     return {
         "schema_version": 2,
         "suite": contract.suite.__dict__,
@@ -243,6 +258,20 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "adversarial": {"failure_threshold": contract.scoring.adversarial_failure_threshold},
         },
         "trajectory": contract.trajectory.__dict__,
+        "attack_skills": {
+            "enabled": contract.attack_skills.enabled,
+            "include": list(contract.attack_skills.include),
+            "allowed_tools": list(contract.attack_skills.allowed_tools),
+            "max_tool_calls_per_turn": contract.attack_skills.max_tool_calls_per_turn,
+            "catalog": [
+                {
+                    "name": skill.name,
+                    "version": skill.version,
+                    "digest": skill.package_digest,
+                }
+                for skill in selected_skills
+            ],
+        },
         "output": {"base_dir": str(contract.output.base_dir), "run_id": contract.output.run_id},
     }
 
@@ -250,6 +279,72 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
 def _filter_keys(payload: dict[str, Any], cls) -> dict[str, Any]:
     names = {f.name for f in fields(cls)}
     return {k: payload[k] for k in names if k in payload}
+
+
+def _parse_attack_skills(payload: dict[str, Any]) -> AttackSkillsConfig:
+    if not isinstance(payload, dict):
+        raise ContractError("attack_skills must be a mapping")
+    enabled = payload.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ContractError("attack_skills.enabled must be a boolean")
+    include_raw = payload.get("include", [])
+    tools_raw = payload.get("allowed_tools", list(DEFAULT_ATTACK_SKILL_TOOLS))
+    if not isinstance(include_raw, list) or not all(
+        isinstance(item, str) and item.strip() for item in include_raw
+    ):
+        raise ContractError("attack_skills.include must be a list of skill names")
+    if not isinstance(tools_raw, list) or not all(
+        isinstance(item, str) and item.strip() for item in tools_raw
+    ):
+        raise ContractError("attack_skills.allowed_tools must be a list of tool names")
+    include = tuple(dict.fromkeys(item.strip() for item in include_raw))
+    allowed_tools = tuple(dict.fromkeys(item.strip() for item in tools_raw))
+    unknown_tools = sorted(set(allowed_tools) - BUILTIN_TOOL_NAMES)
+    if unknown_tools:
+        raise ContractError(
+            f"unknown attack skill tool(s): {', '.join(unknown_tools)}"
+        )
+    try:
+        get_builtin_registry().selected(include)
+    except SkillValidationError as exc:
+        raise ContractError(str(exc)) from exc
+    max_calls = payload.get("max_tool_calls_per_turn", 3)
+    if not isinstance(max_calls, int) or isinstance(max_calls, bool):
+        raise ContractError("attack_skills.max_tool_calls_per_turn must be an integer")
+    if max_calls < 0 or max_calls > 3:
+        raise ContractError(
+            "attack_skills.max_tool_calls_per_turn must be within 0-3"
+        )
+    return AttackSkillsConfig(
+        enabled=enabled,
+        include=include,
+        allowed_tools=allowed_tools,
+        max_tool_calls_per_turn=max_calls,
+    )
+
+
+def _validate_attack_skill_coverage(
+    config: AttackSkillsConfig,
+    scenarios: list[AdversarialScenario],
+    eval_plan: EvalPlan,
+) -> None:
+    if not config.enabled:
+        return
+    selected = get_builtin_registry().selected(config.include)
+    by_id = {scenario.scenario_id: scenario for scenario in scenarios}
+    active_ids = {
+        entry.adversarial_scenario_id for entry in eval_plan.entries
+    }
+    for scenario_id in sorted(active_ids):
+        scenario = by_id[scenario_id]
+        if not any(
+            skill.supports_scenario(scenario.scenario_type)
+            for skill in selected
+        ):
+            raise ContractError(
+                "enabled attack skill selection does not support active scenario "
+                f"{scenario_id!r} ({scenario.scenario_type!r})"
+            )
 
 
 def _provider_value(

@@ -878,6 +878,13 @@ class _RunningStatsTracker:
         self.trace_severity_scores: list[float] = []
         self.trajectory_signal_sessions = 0
         self.failure_surface_counts: dict[str, int] = {}
+        self.attack_angle_counts: dict[str, int] = {}
+        self.attack_sub_tactic_counts: dict[str, int] = {}
+        self.attack_skill_counts: dict[str, int] = {}
+        self.attack_tool_counts: dict[str, int] = {}
+        self.attack_tool_successes = 0
+        self.attack_tool_errors = 0
+        self.skill_execution_errors = 0
 
         self.synth_safety_scores: list[float] = []
         self.synth_relevance_scores: list[float] = []
@@ -924,6 +931,25 @@ class _RunningStatsTracker:
             str(key): int(value)
             for key, value in (payload.get("failure_surface_counts") or {}).items()
         }
+        tracker.attack_angle_counts = {
+            str(key): int(value)
+            for key, value in (payload.get("attack_angle_counts") or {}).items()
+        }
+        tracker.attack_sub_tactic_counts = {
+            str(key): int(value)
+            for key, value in (payload.get("attack_sub_tactic_counts") or {}).items()
+        }
+        tracker.attack_skill_counts = {
+            str(key): int(value)
+            for key, value in (payload.get("attack_skill_counts") or {}).items()
+        }
+        tracker.attack_tool_counts = {
+            str(key): int(value)
+            for key, value in (payload.get("attack_tool_counts") or {}).items()
+        }
+        tracker.attack_tool_successes = int(payload.get("attack_tool_successes") or 0)
+        tracker.attack_tool_errors = int(payload.get("attack_tool_errors") or 0)
+        tracker.skill_execution_errors = int(payload.get("skill_execution_errors") or 0)
         tracker.synth_safety_scores = [
             float(v) for v in payload.get("synth_safety_scores") or []
         ]
@@ -963,6 +989,13 @@ class _RunningStatsTracker:
             "trace_severity_scores": self.trace_severity_scores,
             "trajectory_signal_sessions": self.trajectory_signal_sessions,
             "failure_surface_counts": self.failure_surface_counts,
+            "attack_angle_counts": self.attack_angle_counts,
+            "attack_sub_tactic_counts": self.attack_sub_tactic_counts,
+            "attack_skill_counts": self.attack_skill_counts,
+            "attack_tool_counts": self.attack_tool_counts,
+            "attack_tool_successes": self.attack_tool_successes,
+            "attack_tool_errors": self.attack_tool_errors,
+            "skill_execution_errors": self.skill_execution_errors,
             "synth_safety_scores": self.synth_safety_scores,
             "synth_relevance_scores": self.synth_relevance_scores,
             "synth_groundedness_scores": self.synth_groundedness_scores,
@@ -1032,6 +1065,53 @@ class _RunningStatsTracker:
                     self.synth_relevance_scores.append(relevance)
                 if isinstance(groundedness, (int, float)):
                     self.synth_groundedness_scores.append(groundedness)
+
+        for row in res.turn_rows:
+            if row.get("turn_type") != "adversarial":
+                continue
+            metadata = row.get("generation_metadata")
+            strategy = (
+                metadata.get("strategy", {}) if isinstance(metadata, dict) else {}
+            )
+            if not isinstance(strategy, dict):
+                strategy = {}
+            angle = strategy.get("attack_angle")
+            if isinstance(angle, str) and angle:
+                self.attack_angle_counts[angle] = (
+                    self.attack_angle_counts.get(angle, 0) + 1
+                )
+            sub_tactic = strategy.get("sub_tactic")
+            if isinstance(sub_tactic, str) and sub_tactic:
+                self.attack_sub_tactic_counts[sub_tactic] = (
+                    self.attack_sub_tactic_counts.get(sub_tactic, 0) + 1
+                )
+            skill_name = strategy.get("skill_name", row.get("skill_name"))
+            skill_version = strategy.get("skill_version", row.get("skill_version"))
+            if isinstance(skill_name, str) and skill_name:
+                skill_key = (
+                    f"{skill_name}@{skill_version}"
+                    if isinstance(skill_version, str) and skill_version
+                    else skill_name
+                )
+                self.attack_skill_counts[skill_key] = (
+                    self.attack_skill_counts.get(skill_key, 0) + 1
+                )
+            events = strategy.get("skill_tool_events", row.get("skill_tool_events", []))
+            if isinstance(events, list):
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    tool_name = event.get("tool")
+                    if isinstance(tool_name, str) and tool_name:
+                        self.attack_tool_counts[tool_name] = (
+                            self.attack_tool_counts.get(tool_name, 0) + 1
+                        )
+                    if event.get("status") == "success":
+                        self.attack_tool_successes += 1
+                    elif event.get("status") == "error":
+                        self.attack_tool_errors += 1
+            if row.get("skill_execution_error"):
+                self.skill_execution_errors += 1
 
         for rec in res.chat_history:
             if rec.generation_metadata:
@@ -1351,6 +1431,7 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
         ),
         target_system_prompt=contract.target_system_prompt,
         trajectory=contract.trajectory,
+        attack_skills=contract.attack_skills,
         warnings=list(contract.warnings) + ["dry_run: forced mock LLM providers"],
     )
 
@@ -1397,6 +1478,42 @@ def _persist_and_summarize(
         if meter is not None
         else None
     )
+    planner_usage: dict[str, Any] = {
+        "calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    if budget_summary is not None:
+        for component in budget_summary.get("per_component", []):
+            if component.get("component") == "planner":
+                planner_usage = {
+                    key: component.get(key, 0)
+                    for key in (
+                        "calls",
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                    )
+                }
+                break
+
+    attack_methods = {
+        "skills_enabled": contract.attack_skills.enabled,
+        "angle_counts": dict(sorted(tracker.attack_angle_counts.items())),
+        "sub_tactic_counts": dict(sorted(tracker.attack_sub_tactic_counts.items())),
+        "skill_counts": dict(sorted(tracker.attack_skill_counts.items())),
+        "unique_angles": len(tracker.attack_angle_counts),
+        "unique_sub_tactics": len(tracker.attack_sub_tactic_counts),
+        "tool_utilization": {
+            "calls": sum(tracker.attack_tool_counts.values()),
+            "successes": tracker.attack_tool_successes,
+            "errors": tracker.attack_tool_errors,
+            "by_tool": dict(sorted(tracker.attack_tool_counts.items())),
+        },
+        "skill_execution_errors": tracker.skill_execution_errors,
+        "planner_usage": planner_usage,
+    }
 
     # Calculate token usage statistics from meter (simulator tokens only)
     simulator_prompt_tokens = 0
@@ -1526,6 +1643,7 @@ def _persist_and_summarize(
         "failures_at_threshold": failures_at_threshold,
         "partials": partials,
         "failure_percentiles": failure_percentiles,
+        "attack_methods": attack_methods,
         "mean_safety_score": mean_safety,
         "mean_relevance_score": mean_relevance,
         "mean_groundedness_score": mean_grounded,

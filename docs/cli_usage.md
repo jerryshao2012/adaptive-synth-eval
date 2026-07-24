@@ -71,6 +71,21 @@ uv run ase summarize --run-id "$RUN_ID"
 
 This prints `outputs/runs/<run_id>/run_summary.json`.
 
+### Inspect attack skills
+
+Attack-skill commands inspect the curated packages shipped with ASE. They do not load arbitrary local paths:
+
+```bash
+uv run ase skills list
+uv run ase skills list --json
+uv run ase skills show semantic-drift
+uv run ase skills show semantic-drift --json
+uv run ase skills validate
+uv run ase skills validate semantic-drift
+```
+
+See [Attack skills](attack_skills.md) for contract configuration, authoring metadata, bounded tools, execution errors, and provenance.
+
 ## Incomplete run recovery
 
 When an existing run directory is incomplete, choose an action with `--incomplete-run-action`:
@@ -178,4 +193,5 @@ uv run ase --help
 uv run ase run --help
 uv run ase monitor run --help
 uv run ase loop --help
+uv run ase skills --help
 ```

@@ -8,7 +8,14 @@ from typing import Any
 
 import yaml
 
-from adaptive_synth_eval.artifacts.run_state import clear_run_directory, detect_incomplete_run
+from adaptive_synth_eval.adversarial_response_engine.skills.registry import (
+    SkillValidationError,
+    get_builtin_registry,
+)
+from adaptive_synth_eval.artifacts.run_state import (
+    clear_run_directory,
+    detect_incomplete_run,
+)
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.config.env import load_project_env
@@ -18,10 +25,18 @@ from adaptive_synth_eval.live_status import LiveStatusBar
 from adaptive_synth_eval.loop.audit import build_loop_audit
 from adaptive_synth_eval.loop.planner import LoopReasoner
 from adaptive_synth_eval.loop.policy import LoopPolicyEngine
-from adaptive_synth_eval.loop.profiles import LoopProfileError, load_loop_profile, load_loop_profiles
+from adaptive_synth_eval.loop.profiles import (
+    LoopProfileError,
+    load_loop_profile,
+    load_loop_profiles,
+)
 from adaptive_synth_eval.loop.scheduler import LoopScheduler, MultiLoopCoordinator
-from adaptive_synth_eval.loop.state_store import get_loop_status, initialize_loop_assets, record_loop_cycle, \
-    set_loop_paused
+from adaptive_synth_eval.loop.state_store import (
+    get_loop_status,
+    initialize_loop_assets,
+    record_loop_cycle,
+    set_loop_paused,
+)
 from adaptive_synth_eval.loop.verifier import LoopVerifier
 from adaptive_synth_eval.monitoring import run_monitoring
 from adaptive_synth_eval.prompt_toolkit_status import PromptToolkitStatusBar
@@ -95,9 +110,7 @@ def _describe_synth_persona_runtime() -> str:
 
 
 def _describe_unified_persona_runtime() -> str:
-    return (
-        "source=adaptive_synth_eval.unified_eval.providers.llm_factory.build_component_llms"
-    )
+    return "source=adaptive_synth_eval.unified_eval.providers.llm_factory.build_component_llms"
 
 
 def _unified_component_runtime_note(component: str, spec: Any) -> str | None:
@@ -108,16 +121,16 @@ def _unified_component_runtime_note(component: str, spec: Any) -> str | None:
 
 
 def _build_run_configuration_lines(
-        contract: Any,
-        *,
-        mode_name: str,
-        contract_path: str,
-        dry_run: bool,
-        persona_filter: str | None,
-        scenario_filter: str | None = None,
-        adversarial_filter: str | None = None,
-        max_concurrency_override: int | None = None,
-        realtime_chat: bool = False,
+    contract: Any,
+    *,
+    mode_name: str,
+    contract_path: str,
+    dry_run: bool,
+    persona_filter: str | None,
+    scenario_filter: str | None = None,
+    adversarial_filter: str | None = None,
+    max_concurrency_override: int | None = None,
+    realtime_chat: bool = False,
 ) -> list[str]:
     lines = [
         _CONFIG_BLOCK_SEPARATOR,
@@ -126,7 +139,7 @@ def _build_run_configuration_lines(
             "Run configuration: "
             f"contract={contract_path}, mode={mode_name}, dry_run={dry_run}, "
             f"realtime_chat={realtime_chat}, persona_filter={persona_filter or '*'}"
-        )
+        ),
     ]
 
     if mode_name == "synth":
@@ -181,37 +194,37 @@ def _build_run_configuration_lines(
 
 
 def _log_run_configuration(
-        contract: Any,
-        *,
-        mode_name: str,
-        contract_path: str,
-        dry_run: bool,
-        persona_filter: str | None,
-        scenario_filter: str | None = None,
-        adversarial_filter: str | None = None,
-        max_concurrency_override: int | None = None,
-        realtime_chat: bool = False,
+    contract: Any,
+    *,
+    mode_name: str,
+    contract_path: str,
+    dry_run: bool,
+    persona_filter: str | None,
+    scenario_filter: str | None = None,
+    adversarial_filter: str | None = None,
+    max_concurrency_override: int | None = None,
+    realtime_chat: bool = False,
 ) -> None:
     for line in _build_run_configuration_lines(
-            contract,
-            mode_name=mode_name,
-            contract_path=contract_path,
-            dry_run=dry_run,
-            persona_filter=persona_filter,
-            scenario_filter=scenario_filter,
-            adversarial_filter=adversarial_filter,
-            max_concurrency_override=max_concurrency_override,
-            realtime_chat=realtime_chat,
+        contract,
+        mode_name=mode_name,
+        contract_path=contract_path,
+        dry_run=dry_run,
+        persona_filter=persona_filter,
+        scenario_filter=scenario_filter,
+        adversarial_filter=adversarial_filter,
+        max_concurrency_override=max_concurrency_override,
+        realtime_chat=realtime_chat,
     ):
         logger.info(line)
 
 
 def _run_with_live_status(
-        *,
-        title: str,
-        enabled: bool,
-        realtime_interactive: bool,
-        runner,
+    *,
+    title: str,
+    enabled: bool,
+    realtime_interactive: bool,
+    runner,
 ) -> dict[str, Any]:
     if realtime_interactive:
         try:
@@ -231,7 +244,9 @@ def _run_with_live_status(
         status_renderer.update(**payload)
 
     try:
-        return runner(_progress_sink if status_renderer.enabled else None, status_renderer)
+        return runner(
+            _progress_sink if status_renderer.enabled else None, status_renderer
+        )
     finally:
         if started:
             status_renderer.update(phase="complete")
@@ -256,7 +271,9 @@ def detect_mode_from_file(path_str: str) -> str:
         is_synth = "simulation_suite" in payload and "traffic_orchestration" in payload
 
         if is_unified and is_synth:
-            raise ContractError("Contract contains both synth and unified top-level structures.")
+            raise ContractError(
+                "Contract contains both synth and unified top-level structures."
+            )
         if is_unified:
             return "unified"
         if is_synth:
@@ -277,15 +294,73 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "skills":
+            registry = get_builtin_registry()
+            if args.skills_command == "list":
+                payload = [
+                    {
+                        "name": skill.name,
+                        "description": skill.description,
+                        "compatibility": skill.compatibility,
+                        "angle": skill.angle,
+                        "version": skill.version,
+                        "digest": skill.package_digest,
+                        "allowed_tools": list(skill.allowed_tools),
+                    }
+                    for skill in registry.skills
+                ]
+                if args.json:
+                    print(json.dumps(payload, indent=2))
+                else:
+                    for item in payload:
+                        print(
+                            f"{item['name']}\t{item['version']}\t"
+                            f"{item['angle']}\t{item['digest'][:12]}"
+                        )
+                return 0
+
+            if args.skills_command == "show":
+                skill = registry.get(args.name)
+                payload = {
+                    "name": skill.name,
+                    "description": skill.description,
+                    "compatibility": skill.compatibility,
+                    "angle": skill.angle,
+                    "version": skill.version,
+                    "sub_tactics": list(skill.sub_tactics),
+                    "accumulation": skill.accumulation,
+                    "scenario_types": list(skill.scenario_types),
+                    "allowed_tools": list(skill.allowed_tools),
+                    "digest": skill.package_digest,
+                    "instructions": skill.instructions,
+                }
+                if args.json:
+                    print(json.dumps(payload, indent=2))
+                else:
+                    print(skill.instructions)
+                return 0
+
+            if args.skills_command == "validate":
+                selected = (registry.get(args.name),) if args.name else registry.skills
+                for skill in selected:
+                    print(f"Valid skill: {skill.name} ({skill.package_digest[:12]})")
+                return 0
+
         if args.command == "loop":
             if args.loop_command == "init":
-                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
-                summary = initialize_loop_assets(profile, output_dir=Path(args.output_dir))
+                profile = load_loop_profile(
+                    args.profile, profiles_dir=args.profiles_dir
+                )
+                summary = initialize_loop_assets(
+                    profile, output_dir=Path(args.output_dir)
+                )
                 print(json.dumps(summary, indent=2, default=str))
                 return 0
 
             if args.loop_command == "run":
-                profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                profile = load_loop_profile(
+                    args.profile, profiles_dir=args.profiles_dir
+                )
                 summary = _run_loop_profile(
                     profile,
                     output_dir=Path(args.output_dir),
@@ -303,7 +378,9 @@ def main(argv: list[str] | None = None) -> int:
                 if args.all:
                     profiles = load_loop_profiles(profiles_dir=profiles_dir)
                     if not profiles:
-                        raise LoopProfileError(f"No loop profiles found in: {profiles_dir}")
+                        raise LoopProfileError(
+                            f"No loop profiles found in: {profiles_dir}"
+                        )
                     coordinator = MultiLoopCoordinator()
                     summary = coordinator.run_profiles(
                         profiles,
@@ -326,8 +403,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 else:
                     if not args.profile:
-                        raise LoopProfileError("loop start requires --profile <id> or --all")
-                    profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+                        raise LoopProfileError(
+                            "loop start requires --profile <id> or --all"
+                        )
+                    profile = load_loop_profile(
+                        args.profile, profiles_dir=args.profiles_dir
+                    )
                     scheduler = LoopScheduler()
                     summary = scheduler.run_profile(
                         profile,
@@ -415,13 +496,15 @@ def main(argv: list[str] | None = None) -> int:
                 incomplete_run_action=args.incomplete_run_action,
             )
 
-            logger.info("Run complete: %s", summary['run_id'])
+            logger.info("Run complete: %s", summary["run_id"])
             logger.info(json.dumps(summary, indent=2, default=str))
             print(f"Run complete: {summary['run_id']}")
             return 0
 
         if args.command == "summarize":
-            summary_path = Path(args.output_dir) / "runs" / args.run_id / "run_summary.json"
+            summary_path = (
+                Path(args.output_dir) / "runs" / args.run_id / "run_summary.json"
+            )
             if not summary_path.exists():
                 logger.error("Run summary not found: %s", summary_path)
                 return 2
@@ -463,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
 
         parser.print_help()
         return 1
-    except (ContractError, LoopProfileError) as exc:
+    except (ContractError, LoopProfileError, SkillValidationError) as exc:
         logger.error(str(exc))
         print(str(exc), file=sys.stderr)
         return 2
@@ -487,24 +570,56 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="commands",
         description="Available operations",
-        metavar="{validate-contract,run,summarize,loop,monitor,metrics}",
+        metavar="{validate-contract,run,summarize,skills,loop,monitor,metrics}",
     )
+    skills = sub.add_parser(
+        "skills",
+        help="Inspect and validate curated attack-method skills",
+        description="List, show, or validate packaged Agent Skills used by adversarial evaluation.",
+    )
+    skills_sub = skills.add_subparsers(
+        dest="skills_command",
+        required=True,
+        title="skills commands",
+        metavar="{list,show,validate}",
+    )
+    skills_list = skills_sub.add_parser("list", help="List packaged attack skills")
+    skills_list.add_argument("--json", action="store_true", help="Emit JSON")
+    skills_show = skills_sub.add_parser("show", help="Show one packaged attack skill")
+    skills_show.add_argument("name", help="Skill name")
+    skills_show.add_argument("--json", action="store_true", help="Emit JSON")
+    skills_validate = skills_sub.add_parser(
+        "validate", help="Validate one skill or the entire packaged catalog"
+    )
+    skills_validate.add_argument("name", nargs="?", help="Optional skill name")
+
     validate = sub.add_parser(
         "validate-contract",
         help="Validate a simulation contract file and report schema or config issues",
         description="Validate a simulation contract file and print warnings if present.",
     )
-    validate.add_argument("contract", help="Path to a YAML/JSON simulation contract file")
+    validate.add_argument(
+        "contract", help="Path to a YAML/JSON simulation contract file"
+    )
 
     run = sub.add_parser(
         "run",
         help="Run a synthetic or unified chat simulation from a contract",
         description="Execute a simulation run from a contract and write artifacts to outputs/runs/<run_id>/.",
     )
-    run.add_argument("--contract", required=True, help="Path to a YAML/JSON simulation contract file")
-    run.add_argument("--dry-run", action="store_true", help="Skip real chatbot calls and use mock responses")
-    run.add_argument("--output-conversations", action="store_true",
-                     help="Output conversations in human-readable format with Persona/Bot labels")
+    run.add_argument(
+        "--contract", required=True, help="Path to a YAML/JSON simulation contract file"
+    )
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip real chatbot calls and use mock responses",
+    )
+    run.add_argument(
+        "--output-conversations",
+        action="store_true",
+        help="Output conversations in human-readable format with Persona/Bot labels",
+    )
     run.add_argument(
         "--realtime-chat",
         action="store_true",
@@ -680,7 +795,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Initialize persistent assets for a loop profile",
         description="Create loop state and markdown guardrail artifacts for a checked-in loop profile.",
     )
-    loop_init.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_init.add_argument(
+        "--profile",
+        required=True,
+        help="Loop profile ID or path to a profile YAML/JSON file",
+    )
     loop_init.add_argument(
         "--profiles-dir",
         default="loops/profiles",
@@ -697,7 +816,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Execute a report-only loop cycle for a profile",
         description="Run the profile's configured targets through the existing ase run internals and persist cycle state.",
     )
-    loop_run.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_run.add_argument(
+        "--profile",
+        required=True,
+        help="Loop profile ID or path to a profile YAML/JSON file",
+    )
     loop_run.add_argument(
         "--profiles-dir",
         default="loops/profiles",
@@ -736,7 +859,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start a recurring loop scheduler for a profile",
         description="Run the profile's loop cycle once or on its configured cadence and persist reasoning/state updates.",
     )
-    loop_start.add_argument("--profile", help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_start.add_argument(
+        "--profile", help="Loop profile ID or path to a profile YAML/JSON file"
+    )
     loop_start.add_argument(
         "--all",
         action="store_true",
@@ -831,8 +956,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Pause a loop profile via persistent kill switch state",
         description="Set paused=true in loop state so unattended schedulers skip the profile until resumed.",
     )
-    loop_pause.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
-    loop_pause.add_argument("--reason", default="manual pause", help="Reason recorded in loop state and run log")
+    loop_pause.add_argument(
+        "--profile",
+        required=True,
+        help="Loop profile ID or path to a profile YAML/JSON file",
+    )
+    loop_pause.add_argument(
+        "--reason",
+        default="manual pause",
+        help="Reason recorded in loop state and run log",
+    )
     loop_pause.add_argument(
         "--profiles-dir",
         default="loops/profiles",
@@ -849,7 +982,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Resume a paused loop profile",
         description="Clear paused state so unattended schedulers can run the profile again.",
     )
-    loop_resume.add_argument("--profile", required=True, help="Loop profile ID or path to a profile YAML/JSON file")
+    loop_resume.add_argument(
+        "--profile",
+        required=True,
+        help="Loop profile ID or path to a profile YAML/JSON file",
+    )
     loop_resume.add_argument(
         "--profiles-dir",
         default="loops/profiles",
@@ -863,7 +1000,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_run_dir(contract: Any, *, mode_name: str, run_id_override: str | None) -> Path | None:
+def _resolve_run_dir(
+    contract: Any, *, mode_name: str, run_id_override: str | None
+) -> Path | None:
     output = getattr(contract, "output", None)
     if output is None:
         return None
@@ -872,25 +1011,29 @@ def _resolve_run_dir(contract: Any, *, mode_name: str, run_id_override: str | No
     if base_dir is None:
         return None
 
-    run_id = run_id_override if mode_name == "unified" and run_id_override else getattr(output, "run_id", None)
+    run_id = (
+        run_id_override
+        if mode_name == "unified" and run_id_override
+        else getattr(output, "run_id", None)
+    )
     if not run_id:
         return None
     return Path(base_dir) / "runs" / run_id
 
 
 def _execute_contract_run(
-        *,
-        contract_path: str,
-        dry_run: bool,
-        persona_filter: str | None,
-        scenario_filter: str | None,
-        adversarial_filter: str | None,
-        max_concurrency_override: int | None,
-        run_id_override: str | None,
-        realtime_chat: bool,
-        output_conversations: bool,
-        interactive_realtime_controls: bool | None,
-        incomplete_run_action: str,
+    *,
+    contract_path: str,
+    dry_run: bool,
+    persona_filter: str | None,
+    scenario_filter: str | None,
+    adversarial_filter: str | None,
+    max_concurrency_override: int | None,
+    run_id_override: str | None,
+    realtime_chat: bool,
+    output_conversations: bool,
+    interactive_realtime_controls: bool | None,
+    incomplete_run_action: str,
 ) -> dict[str, Any]:
     mode_name = detect_mode_from_file(contract_path)
     mode = get_mode(mode_name)
@@ -907,22 +1050,31 @@ def _execute_contract_run(
         realtime_chat=realtime_chat,
     )
 
-    run_dir = _resolve_run_dir(contract, mode_name=mode_name, run_id_override=run_id_override)
+    run_dir = _resolve_run_dir(
+        contract, mode_name=mode_name, run_id_override=run_id_override
+    )
     resume_incomplete = False
     if run_dir is not None:
         incomplete = detect_incomplete_run(run_dir)
         if incomplete is not None:
-            action = _resolve_incomplete_action(incomplete_run_action, run_dir, incomplete)
+            action = _resolve_incomplete_action(
+                incomplete_run_action, run_dir, incomplete
+            )
             if action == "abort":
                 raise ContractError(
                     "Detected an incomplete prior run. Re-run with "
                     "--incomplete-run-action resume or --incomplete-run-action restart."
                 )
             if action == "restart":
-                logger.warning("Cleaning existing run artifacts before starting a new run: %s", run_dir)
+                logger.warning(
+                    "Cleaning existing run artifacts before starting a new run: %s",
+                    run_dir,
+                )
                 clear_run_directory(run_dir)
             elif action == "resume":
-                logger.warning("Resuming incomplete run from existing artifacts: %s", run_dir)
+                logger.warning(
+                    "Resuming incomplete run from existing artifacts: %s", run_dir
+                )
                 resume_incomplete = True
 
     if mode_name == "synth":
@@ -937,7 +1089,8 @@ def _execute_contract_run(
             unified_flags.append("--run-id")
         if unified_flags:
             raise ContractError(
-                f"Unified-only flags {', '.join(unified_flags)} cannot be used with a synth-only contract.")
+                f"Unified-only flags {', '.join(unified_flags)} cannot be used with a synth-only contract."
+            )
 
         controls_enabled = interactive_realtime_controls
         if controls_enabled is None:
@@ -956,7 +1109,9 @@ def _execute_contract_run(
                 persona_filter=persona_filter,
                 resume_incomplete=resume_incomplete,
                 progress_sink=progress_sink,
-                realtime_status_provider=status_renderer if (realtime_chat and controls_enabled) else None,
+                realtime_status_provider=status_renderer
+                if (realtime_chat and controls_enabled)
+                else None,
             ),
         )
 
@@ -981,19 +1136,21 @@ def _execute_contract_run(
             interactive_realtime_controls=controls_enabled,
             resume_incomplete=resume_incomplete,
             progress_sink=progress_sink,
-            realtime_status_provider=status_renderer if (realtime_chat and controls_enabled) else None,
+            realtime_status_provider=status_renderer
+            if (realtime_chat and controls_enabled)
+            else None,
         ),
     )
 
 
 def _run_loop_profile(
-        profile: Any,
-        *,
-        output_dir: Path,
-        dry_run: bool,
-        incomplete_run_action: str,
-        realtime_chat: bool,
-        output_conversations: bool,
+    profile: Any,
+    *,
+    output_dir: Path,
+    dry_run: bool,
+    incomplete_run_action: str,
+    realtime_chat: bool,
+    output_conversations: bool,
 ) -> dict[str, Any]:
     initialize_loop_assets(profile, output_dir=output_dir)
     loop_state = get_loop_status(profile_ref=profile.profile_id, output_dir=output_dir)
@@ -1009,10 +1166,16 @@ def _run_loop_profile(
         "verdict": "approved",
         "reason": "Checker approved target execution and assisted actions.",
     }
-    attempts = dict(loop_state.get("assisted_action_attempts") or {}) if isinstance(loop_state, dict) else {}
+    attempts = (
+        dict(loop_state.get("assisted_action_attempts") or {})
+        if isinstance(loop_state, dict)
+        else {}
+    )
     state_updates: dict[str, Any] = {
         "assisted_action_attempts": attempts,
-        "consecutive_checker_failures": int(loop_state.get("consecutive_checker_failures") or 0),
+        "consecutive_checker_failures": int(
+            loop_state.get("consecutive_checker_failures") or 0
+        ),
         "paused": bool(loop_state.get("paused", False)),
         "pause_reason": loop_state.get("pause_reason"),
     }
@@ -1036,8 +1199,14 @@ def _run_loop_profile(
             "rejected_actions": checker.rejected_actions,
         }
         if not checker.approved and profile.readiness_level in {"L2", "L3"}:
-            assisted_actions_log.extend(policy_engine.summarize_actions(plan.assisted_actions, status="rejected"))
-            state_updates = _next_checker_failure_state(profile, loop_state, checker.reason, attempts)
+            assisted_actions_log.extend(
+                policy_engine.summarize_actions(
+                    plan.assisted_actions, status="rejected"
+                )
+            )
+            state_updates = _next_checker_failure_state(
+                profile, loop_state, checker.reason, attempts
+            )
             record_loop_cycle(
                 profile,
                 output_dir=output_dir,
@@ -1057,17 +1226,28 @@ def _run_loop_profile(
             raise LoopProfileError(f"Checker rejected loop target: {checker.reason}")
 
         approved_actions = [
-            action for action in plan.assisted_actions if action.action in checker.approved_actions
+            action
+            for action in plan.assisted_actions
+            if action.action in checker.approved_actions
         ]
-        assisted_actions_log.extend(policy_engine.summarize_actions(approved_actions, status="approved"))
+        assisted_actions_log.extend(
+            policy_engine.summarize_actions(approved_actions, status="approved")
+        )
 
         for action in approved_actions:
             key = policy_engine.retry_key(target, action.action)
             attempts[key] = int(attempts.get(key, 0)) + 1
-            if action.action == "regenerate_missing_summary" and target_context["run_dir"] is not None:
-                _regenerate_missing_summary(target_context["run_dir"], mode_name=target_context["mode_name"])
+            if (
+                action.action == "regenerate_missing_summary"
+                and target_context["run_dir"] is not None
+            ):
+                _regenerate_missing_summary(
+                    target_context["run_dir"], mode_name=target_context["mode_name"]
+                )
 
-        effective_dry_run = dry_run if target.get("dry_run") is None else bool(target.get("dry_run"))
+        effective_dry_run = (
+            dry_run if target.get("dry_run") is None else bool(target.get("dry_run"))
+        )
         summary = _execute_contract_run(
             contract_path=target["contract"],
             dry_run=effective_dry_run,
@@ -1081,10 +1261,16 @@ def _run_loop_profile(
             interactive_realtime_controls=None,
             incomplete_run_action=plan.incomplete_run_action,
         )
-        status = "completed_with_errors" if int(summary.get("errors") or 0) > 0 else "completed"
+        status = (
+            "completed_with_errors"
+            if int(summary.get("errors") or 0) > 0
+            else "completed"
+        )
         run_results.append(
             {
-                "timestamp": summary.get("completed_at") or summary.get("started_at") or summary.get("timestamp"),
+                "timestamp": summary.get("completed_at")
+                or summary.get("started_at")
+                or summary.get("timestamp"),
                 "mode": detect_mode_from_file(target["contract"]),
                 "contract": target["contract"],
                 "run_id": summary.get("run_id"),
@@ -1099,7 +1285,9 @@ def _run_loop_profile(
             }
         )
 
-    reflection_decision = reasoner.reflect_on_cycle(loop_state, run_results, planner_decision)
+    reflection_decision = reasoner.reflect_on_cycle(
+        loop_state, run_results, planner_decision
+    )
     state_updates = _next_success_state(profile, loop_state, run_results, attempts)
 
     state = record_loop_cycle(
@@ -1119,7 +1307,9 @@ def _run_loop_profile(
         "planner": planner_decision.__dict__,
         "reflection": reflection_decision.__dict__,
         "run_results": run_results,
-        "state_path": str((output_dir / "loops" / "state" / f"{profile.profile_id}.json").resolve()),
+        "state_path": str(
+            (output_dir / "loops" / "state" / f"{profile.profile_id}.json").resolve()
+        ),
     }
 
 
@@ -1131,7 +1321,9 @@ def _resolve_target_context(target: dict[str, Any]) -> dict[str, Any]:
     run_dir = _resolve_run_dir(contract, mode_name=mode_name, run_id_override=None)
     max_concurrency = None
     if mode_name == "unified":
-        max_concurrency = int(getattr(getattr(contract, "run", None), "max_concurrency", 0) or 0)
+        max_concurrency = int(
+            getattr(getattr(contract, "run", None), "max_concurrency", 0) or 0
+        )
     return {
         "mode_name": mode_name,
         "run_dir": run_dir,
@@ -1166,7 +1358,9 @@ def _regenerate_missing_summary(run_dir: Path, *, mode_name: str) -> bool:
             "errors": int((metrics or {}).get("errors") or 0),
             "regenerated": True,
         }
-    summary_path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
+    )
     return True
 
 
@@ -1176,17 +1370,19 @@ def _extract_total_tokens(summary: dict[str, Any]) -> int:
         return 0
     total = 0
     for key in (
-            "simulator_total_tokens",
-            "chatbot_total_tokens",
-            "total_tokens",
-            "prompt_tokens",
-            "completion_tokens",
+        "simulator_total_tokens",
+        "chatbot_total_tokens",
+        "total_tokens",
+        "prompt_tokens",
+        "completion_tokens",
     ):
         total += int(tokens.get(key) or 0)
     return total
 
 
-def _enforce_l3_preflight(profile: Any, loop_state: dict[str, Any], *, output_dir: Path) -> None:
+def _enforce_l3_preflight(
+    profile: Any, loop_state: dict[str, Any], *, output_dir: Path
+) -> None:
     if bool(loop_state.get("paused", False)) or bool(getattr(profile, "paused", False)):
         raise LoopProfileError(f"Loop profile is paused: {profile.profile_id}")
 
@@ -1195,7 +1391,9 @@ def _enforce_l3_preflight(profile: Any, loop_state: dict[str, Any], *, output_di
 
     budget = dict(loop_state.get("budget") or {})
     daily_run_cap = loop_state.get("daily_run_cap")
-    if daily_run_cap is not None and int(budget.get("spent_today_runs") or 0) >= int(daily_run_cap):
+    if daily_run_cap is not None and int(budget.get("spent_today_runs") or 0) >= int(
+        daily_run_cap
+    ):
         reason = f"Daily run cap reached: {daily_run_cap}"
         set_loop_paused(
             profile.profile_id,
@@ -1207,7 +1405,9 @@ def _enforce_l3_preflight(profile: Any, loop_state: dict[str, Any], *, output_di
         raise LoopProfileError(reason)
 
     daily_token_cap = loop_state.get("daily_token_cap")
-    if daily_token_cap is not None and int(budget.get("spent_today_tokens") or 0) >= int(daily_token_cap):
+    if daily_token_cap is not None and int(
+        budget.get("spent_today_tokens") or 0
+    ) >= int(daily_token_cap):
         reason = f"Daily token cap reached: {daily_token_cap}"
         set_loop_paused(
             profile.profile_id,
@@ -1220,10 +1420,10 @@ def _enforce_l3_preflight(profile: Any, loop_state: dict[str, Any], *, output_di
 
 
 def _next_checker_failure_state(
-        profile: Any,
-        loop_state: dict[str, Any],
-        checker_reason: str,
-        attempts: dict[str, Any],
+    profile: Any,
+    loop_state: dict[str, Any],
+    checker_reason: str,
+    attempts: dict[str, Any],
 ) -> dict[str, Any]:
     failures = int(loop_state.get("consecutive_checker_failures") or 0) + 1
     updates = {
@@ -1232,7 +1432,9 @@ def _next_checker_failure_state(
         "paused": bool(loop_state.get("paused", False)),
         "pause_reason": loop_state.get("pause_reason"),
     }
-    threshold = int(profile.checker_policy.get("auto_pause_after_checker_failures", 3) or 3)
+    threshold = int(
+        profile.checker_policy.get("auto_pause_after_checker_failures", 3) or 3
+    )
     if profile.readiness_level == "L3" and failures >= threshold:
         updates["paused"] = True
         updates["pause_reason"] = (
@@ -1243,15 +1445,17 @@ def _next_checker_failure_state(
 
 
 def _next_success_state(
-        profile: Any,
-        loop_state: dict[str, Any],
-        run_results: list[dict[str, Any]],
-        attempts: dict[str, Any],
+    profile: Any,
+    loop_state: dict[str, Any],
+    run_results: list[dict[str, Any]],
+    attempts: dict[str, Any],
 ) -> dict[str, Any]:
-    spent_today_runs = int(((loop_state.get("budget") or {}).get("spent_today_runs") or 0)) + len(run_results)
-    spent_today_tokens = int(((loop_state.get("budget") or {}).get("spent_today_tokens") or 0)) + sum(
-        int(item.get("total_tokens") or 0) for item in run_results
-    )
+    spent_today_runs = int(
+        ((loop_state.get("budget") or {}).get("spent_today_runs") or 0)
+    ) + len(run_results)
+    spent_today_tokens = int(
+        ((loop_state.get("budget") or {}).get("spent_today_tokens") or 0)
+    ) + sum(int(item.get("total_tokens") or 0) for item in run_results)
     updates = {
         "assisted_action_attempts": attempts,
         "consecutive_checker_failures": 0,
@@ -1262,17 +1466,23 @@ def _next_success_state(
         daily_run_cap = loop_state.get("daily_run_cap")
         if daily_run_cap is not None and spent_today_runs >= int(daily_run_cap):
             updates["paused"] = True
-            updates["pause_reason"] = f"Auto-paused after reaching daily run cap: {daily_run_cap}"
+            updates["pause_reason"] = (
+                f"Auto-paused after reaching daily run cap: {daily_run_cap}"
+            )
             updates["status"] = "paused"
         daily_token_cap = loop_state.get("daily_token_cap")
         if daily_token_cap is not None and spent_today_tokens >= int(daily_token_cap):
             updates["paused"] = True
-            updates["pause_reason"] = f"Auto-paused after reaching daily token cap: {daily_token_cap}"
+            updates["pause_reason"] = (
+                f"Auto-paused after reaching daily token cap: {daily_token_cap}"
+            )
             updates["status"] = "paused"
     return updates
 
 
-def _resolve_incomplete_action(configured: str, run_dir: Path, incomplete: dict[str, Any]) -> str:
+def _resolve_incomplete_action(
+    configured: str, run_dir: Path, incomplete: dict[str, Any]
+) -> str:
     if configured != "ask":
         return configured
 
@@ -1288,7 +1498,9 @@ def _resolve_incomplete_action(configured: str, run_dir: Path, incomplete: dict[
         "Detected an incomplete run at "
         f"{run_dir} (status={incomplete.get('status')}, completed={completed}/{planned or '?'})."
     )
-    print("Choose: [R]esume remaining conversations, [N]ew run (clean artifacts), or [A]bort")
+    print(
+        "Choose: [R]esume remaining conversations, [N]ew run (clean artifacts), or [A]bort"
+    )
 
     while True:
         choice = input("Action [R/N/A]: ").strip().lower()

@@ -46,6 +46,13 @@ namespaces = true
 [tool.setuptools.package-data]
 # Ship the attack strategy catalog (loaded via importlib.resources at runtime).
 "adaptive_synth_eval.adversarial_response_engine.engine" = ["*.yaml"]
+"adaptive_synth_eval.adversarial_response_engine.skills" = [
+  "catalog/*/SKILL.md",
+  "catalog/*/references/*",
+  "catalog/*/references/**/*",
+  "catalog/*/assets/*",
+  "catalog/*/assets/**/*",
+]
 "adaptive_synth_eval.monitoring.metrics" = ["*.yaml"]
 
 [tool.pytest.ini_options]

@@ -1,12 +1,18 @@
 """Conversation-scoped assembly of the existing adversarial engine components."""
+
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass
 from typing import Any
 
-from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory, SessionState
-from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import AttackAgent
+from adaptive_synth_eval.adversarial_response_engine.core.models import (
+    AttackMemory,
+    SessionState,
+)
+from adaptive_synth_eval.adversarial_response_engine.engine.attack_agent import (
+    AttackAgent,
+)
 from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     AdaptationPlanner,
     RuleBasedSessionPolicyController,
@@ -16,14 +22,32 @@ from adaptive_synth_eval.adversarial_response_engine.engine.components import (
     TurnGenerator,
 )
 from adaptive_synth_eval.adversarial_response_engine.engine.config import PolicyConfig
-from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import LLMClient as AREClient
-from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import InlineTraceProvider
-from adaptive_synth_eval.unified_eval.config.schemas import AdversarialScenario, UnifiedContract
+from adaptive_synth_eval.adversarial_response_engine.providers.llm_client import (
+    LLMClient as AREClient,
+)
+from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider import (
+    InlineTraceProvider,
+)
+from adaptive_synth_eval.adversarial_response_engine.skills.executor import (
+    NativeAttackSkillExecutor,
+)
+from adaptive_synth_eval.adversarial_response_engine.skills.registry import (
+    get_builtin_registry,
+)
+from adaptive_synth_eval.adversarial_response_engine.skills.tools import (
+    build_default_tool_registry,
+)
+from adaptive_synth_eval.unified_eval.config.schemas import (
+    AdversarialScenario,
+    UnifiedContract,
+)
 from adaptive_synth_eval.unified_eval.personas.bridge import resolve_hijack_target
 from adaptive_synth_eval.unified_eval.providers.llm_factory import ProvidedLLM
 
 
-def _are_client(component: str, provided: ProvidedLLM, token_budget, meter) -> AREClient:
+def _are_client(
+    component: str, provided: ProvidedLLM, token_budget, meter
+) -> AREClient:
     on_usage = None
     if meter is not None:
         on_usage = lambda prompt, completion: meter.record_passthrough(
@@ -37,19 +61,23 @@ def _build_session_policy(contract: UnifiedContract, llms, token_budget, meter):
     if mode == "none":
         return None
     if mode == "rule":
-        return RuleBasedSessionPolicyController(PolicyConfig(
-            max_refusals=contract.run.policy_max_refusals,
-            suspicion_per_refusal=contract.run.policy_suspicion_per_refusal,
-            suspicion_decay=contract.run.policy_suspicion_decay,
-            abandon_suspicion=contract.run.policy_abandon_suspicion,
-        ))
+        return RuleBasedSessionPolicyController(
+            PolicyConfig(
+                max_refusals=contract.run.policy_max_refusals,
+                suspicion_per_refusal=contract.run.policy_suspicion_per_refusal,
+                suspicion_decay=contract.run.policy_suspicion_decay,
+                abandon_suspicion=contract.run.policy_abandon_suspicion,
+            )
+        )
     if mode == "llm":
         if "policy" not in llms:
             raise ValueError("run.session_policy='llm' requires a policy LLM")
         return SessionPolicyController(
             _are_client("policy", llms["policy"], token_budget, meter)
         )
-    raise ValueError(f"Unknown run.session_policy: {mode!r}. Use one of: none, rule, llm.")
+    raise ValueError(
+        f"Unknown run.session_policy: {mode!r}. Use one of: none, rule, llm."
+    )
 
 
 @dataclass
@@ -65,21 +93,20 @@ class AdversarialRuntime:
 
     @classmethod
     def build(
-            cls,
-            *,
-            contract: UnifiedContract,
-            llms: dict[str, ProvidedLLM],
-            token_budget,
-            meter,
-            attack_memory: AttackMemory | None,
-            adv_scenario: AdversarialScenario,
-            rng: random.Random,
-            session_id: str,
-            turn_count: int,
+        cls,
+        *,
+        contract: UnifiedContract,
+        llms: dict[str, ProvidedLLM],
+        token_budget,
+        meter,
+        attack_memory: AttackMemory | None,
+        adv_scenario: AdversarialScenario,
+        rng: random.Random,
+        session_id: str,
+        turn_count: int,
     ) -> "AdversarialRuntime":
-        planner = AdaptationPlanner(
-            _are_client("planner", llms["planner"], token_budget, meter)
-        )
+        planner_client = _are_client("planner", llms["planner"], token_budget, meter)
+        planner = AdaptationPlanner(planner_client)
         generator = TurnGenerator(
             _are_client("generator", llms["generator"], token_budget, meter)
         )
@@ -90,15 +117,34 @@ class AdversarialRuntime:
         trajectory_enabled = contract.trajectory.enabled
         trace_provider = (
             InlineTraceProvider(trace_field=contract.trajectory.trace_field)
-            if trajectory_enabled else None
+            if trajectory_enabled
+            else None
         )
         trace_summarizer = (
             TraceSummarizer(_are_client("judge", llms["judge"], token_budget, meter))
-            if trajectory_enabled else None
+            if trajectory_enabled
+            else None
         )
         hijack_target = resolve_hijack_target(
             adv_scenario.scenario_type, adv_scenario.hijack_target
         )
+        skill_registry = None
+        skill_executor = None
+        if contract.attack_skills.enabled:
+            skill_registry = get_builtin_registry()
+            skill_executor = NativeAttackSkillExecutor(
+                llm=planner_client,
+                tools=build_default_tool_registry(),
+                allowed_tools=frozenset(contract.attack_skills.allowed_tools),
+                max_tool_calls=contract.attack_skills.max_tool_calls_per_turn,
+            )
+        target_capabilities = {
+            "mode": contract.target.mode,
+            "enabled": contract.target.enabled,
+            "endpoint": contract.target.endpoint,
+            "timeout_seconds": contract.target.timeout_seconds,
+            "trace_field": contract.trajectory.trace_field,
+        }
         attack_agent = AttackAgent(
             planner=planner,
             generator=generator,
@@ -106,6 +152,10 @@ class AdversarialRuntime:
             persona_pool=[hijack_target] if hijack_target else [],
             rng=rng,
             rotate_after_refusals=adv_scenario.fresh_start_after_refusals,
+            skill_registry=skill_registry,
+            skill_executor=skill_executor,
+            skill_include=contract.attack_skills.include,
+            target_capabilities=target_capabilities,
         )
         session = SessionState(
             session_id=session_id,

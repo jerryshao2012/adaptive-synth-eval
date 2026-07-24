@@ -2,7 +2,10 @@ import json
 import sys
 import types
 
-from adaptive_synth_eval.adversarial_response_engine.providers.llm_backends import make_bedrock_backend
+from adaptive_synth_eval.adversarial_response_engine.providers.llm_backends import (
+    make_bedrock_backend,
+    make_mock_backend,
+)
 
 
 class _FakeBody:
@@ -22,7 +25,11 @@ class _FakeBedrockClient:
     def converse(self, **kwargs):
         self.calls.append(("converse", kwargs))
         model_id = kwargs.get("modelId", "")
-        if self.raise_unprefixed_on_demand and "." in model_id and not model_id.startswith(("us.", "eu.", "global.")):
+        if (
+            self.raise_unprefixed_on_demand
+            and "." in model_id
+            and not model_id.startswith(("us.", "eu.", "global."))
+        ):
             raise Exception(
                 "ValidationException: Invocation of model ID deepseek.r1-v1:0 with on-demand throughput isn’t supported. "
                 "Retry your request with the ID or ARN of an inference profile that contains this model."
@@ -32,7 +39,7 @@ class _FakeBedrockClient:
         return {
             "output": {
                 "message": {
-                    "content": [{"text": "{\"ok\": true}"}],
+                    "content": [{"text": '{"ok": true}'}],
                 }
             },
             "usage": {"inputTokens": 11, "outputTokens": 7},
@@ -44,7 +51,7 @@ class _FakeBedrockClient:
             return {
                 "body": _FakeBody(
                     {
-                        "choices": [{"message": {"content": "{\"ok\": true}"}}],
+                        "choices": [{"message": {"content": '{"ok": true}'}}],
                         "usage": {"prompt_tokens": 13, "completion_tokens": 8},
                     }
                 )
@@ -52,7 +59,7 @@ class _FakeBedrockClient:
         return {
             "body": _FakeBody(
                 {
-                    "results": [{"outputText": "{\"ok\": true}", "tokenCount": 5}],
+                    "results": [{"outputText": '{"ok": true}', "tokenCount": 5}],
                     "inputTextTokenCount": 9,
                 }
             )
@@ -75,32 +82,44 @@ class _FakeConfig:
 def test_bedrock_backend_uses_converse_for_us_moonshot(monkeypatch):
     fake_client = _FakeBedrockClient()
     monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3Module(fake_client))
-    monkeypatch.setitem(sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig))
+    monkeypatch.setitem(
+        sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig)
+    )
 
-    call_fn = make_bedrock_backend(model="us.moonshot.kimi-k2-thinking", region="us-east-1", max_tokens=123)
+    call_fn = make_bedrock_backend(
+        model="us.moonshot.kimi-k2-thinking", region="us-east-1", max_tokens=123
+    )
     result = call_fn("sys", "user")
 
     assert fake_client.calls[0][0] == "converse"
     converse_kwargs = fake_client.calls[0][1]
     assert converse_kwargs["modelId"] == "us.moonshot.kimi-k2-thinking"
     assert converse_kwargs["inferenceConfig"]["maxTokens"] == 123
-    assert result["content"] == "{\"ok\": true}"
+    assert result["content"] == '{"ok": true}'
     assert result["usage"]["prompt_tokens"] == 11
     assert result["usage"]["completion_tokens"] == 7
 
 
-def test_bedrock_backend_falls_back_to_invoke_model_for_invalid_converse_model(monkeypatch):
+def test_bedrock_backend_falls_back_to_invoke_model_for_invalid_converse_model(
+    monkeypatch,
+):
     fake_client = _FakeBedrockClient()
-    fake_client.raise_on_converse = Exception("ValidationException: The provided model identifier is invalid")
+    fake_client.raise_on_converse = Exception(
+        "ValidationException: The provided model identifier is invalid"
+    )
     monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3Module(fake_client))
-    monkeypatch.setitem(sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig))
+    monkeypatch.setitem(
+        sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig)
+    )
 
-    call_fn = make_bedrock_backend(model="us.moonshot.kimi-k2-thinking", region="us-east-1", max_tokens=123)
+    call_fn = make_bedrock_backend(
+        model="us.moonshot.kimi-k2-thinking", region="us-east-1", max_tokens=123
+    )
     result = call_fn("sys", "user")
 
     assert fake_client.calls[0][0] == "converse"
     assert fake_client.calls[1][0] == "invoke_model"
-    assert result["content"] == "{\"ok\": true}"
+    assert result["content"] == '{"ok": true}'
     assert result["usage"]["prompt_tokens"] == 13
     assert result["usage"]["completion_tokens"] == 8
 
@@ -108,15 +127,19 @@ def test_bedrock_backend_falls_back_to_invoke_model_for_invalid_converse_model(m
 def test_bedrock_backend_uses_invoke_model_for_amazon_titan(monkeypatch):
     fake_client = _FakeBedrockClient()
     monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3Module(fake_client))
-    monkeypatch.setitem(sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig))
+    monkeypatch.setitem(
+        sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig)
+    )
 
-    call_fn = make_bedrock_backend(model="amazon.titan-text-express-v1", region="us-east-1", max_tokens=256)
+    call_fn = make_bedrock_backend(
+        model="amazon.titan-text-express-v1", region="us-east-1", max_tokens=256
+    )
     result = call_fn("sys", "user")
 
     assert fake_client.calls[0][0] == "invoke_model"
     invoke_kwargs = fake_client.calls[0][1]
     assert invoke_kwargs["modelId"] == "amazon.titan-text-express-v1"
-    assert result["content"] == "{\"ok\": true}"
+    assert result["content"] == '{"ok": true}'
     assert result["usage"]["prompt_tokens"] == 9
     assert result["usage"]["completion_tokens"] == 5
 
@@ -125,13 +148,39 @@ def test_bedrock_backend_retries_with_profile_prefix_for_on_demand_error(monkeyp
     fake_client = _FakeBedrockClient()
     fake_client.raise_unprefixed_on_demand = True
     monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3Module(fake_client))
-    monkeypatch.setitem(sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig))
+    monkeypatch.setitem(
+        sys.modules, "botocore.config", types.SimpleNamespace(Config=_FakeConfig)
+    )
 
-    call_fn = make_bedrock_backend(model="deepseek.r1-v1:0", region="us-east-1", max_tokens=123)
+    call_fn = make_bedrock_backend(
+        model="deepseek.r1-v1:0", region="us-east-1", max_tokens=123
+    )
     result = call_fn("sys", "user")
 
     assert fake_client.calls[0][0] == "converse"
     assert fake_client.calls[0][1]["modelId"] == "deepseek.r1-v1:0"
     assert fake_client.calls[1][0] == "converse"
     assert fake_client.calls[1][1]["modelId"] == "us.deepseek.r1-v1:0"
-    assert result["content"] == "{\"ok\": true}"
+    assert result["content"] == '{"ok": true}'
+
+
+def test_mock_backend_emits_native_attack_skill_action():
+    backend = make_mock_backend(seed=7)
+    result = backend(
+        system="You execute one curated adversarial evaluation skill.",
+        user=json.dumps(
+            {
+                "selected_skill": {
+                    "name": "semantic-drift",
+                    "fixed_angle": "semantic_drift",
+                    "sub_tactics": ["topic_sliding", "boundary_erosion"],
+                }
+            }
+        ),
+    )
+
+    action = json.loads(result["content"])
+
+    assert action["action"] == "emit_plan"
+    assert action["plan"]["attack_angle"] == "semantic_drift"
+    assert action["plan"]["sub_tactic"] in {"topic_sliding", "boundary_erosion"}

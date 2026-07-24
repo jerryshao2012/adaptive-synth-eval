@@ -10,8 +10,15 @@ from adaptive_synth_eval.adversarial_response_engine.core.models import JudgeVer
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import (
     TokenBudgetManager,
 )
+from adaptive_synth_eval.adversarial_response_engine.skills.executor import (
+    NativeAttackSkillExecutor,
+)
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
-from adaptive_synth_eval.unified_eval.config.schemas import ComponentOverrides, LLMSpec
+from adaptive_synth_eval.unified_eval.config.schemas import (
+    AttackSkillsConfig,
+    ComponentOverrides,
+    LLMSpec,
+)
 from adaptive_synth_eval.unified_eval.orchestrator.adversarial_runtime import (
     AdversarialRuntime,
 )
@@ -74,6 +81,39 @@ def test_runtime_is_conversation_scoped_and_applies_scenario_settings():
     assert first.judge is not second.judge
     assert first.attack_agent.rotate_after_refusals == 0
     assert first.session.failure_threshold == 4
+
+
+def test_runtime_builds_native_skill_executor_when_enabled():
+    contract = load_unified_contract(EXAMPLE)
+    contract = replace(
+        contract,
+        llm=LLMSpec(provider="mock", model="mock"),
+        components=ComponentOverrides(),
+        attack_skills=AttackSkillsConfig(
+            enabled=True,
+            include=("semantic-drift",),
+            allowed_tools=("query_attack_memory",),
+            max_tool_calls_per_turn=2,
+        ),
+    )
+    llms = build_component_llms(contract)
+
+    runtime = AdversarialRuntime.build(
+        contract=contract,
+        llms=llms,
+        token_budget=TokenBudgetManager(10_000),
+        meter=None,
+        attack_memory=None,
+        adv_scenario=contract.adversarial_scenario_catalog[0],
+        rng=random.Random(1),
+        session_id="c1",
+        turn_count=3,
+    )
+
+    assert isinstance(runtime.attack_agent.skill_executor, NativeAttackSkillExecutor)
+    assert runtime.attack_agent.skill_include == ("semantic-drift",)
+    assert runtime.attack_agent.skill_executor.max_tool_calls == 2
+    assert runtime.attack_agent.target_capabilities["mode"] == contract.target.mode
 
 
 def test_score_adversarial_turn_retains_every_typed_verdict_field():

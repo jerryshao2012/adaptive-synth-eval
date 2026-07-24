@@ -110,7 +110,8 @@ guaranteed in `scores.jsonl`; other artifacts retain the verdict subsets appropr
 their purpose.
 
 Conversation `termination_reason` values include `completed`, `failure_threshold`,
-`session_policy`, `budget_exhausted`, `stopped`, and `runner_exception` where applicable.
+`session_policy`, `budget_exhausted`, `skill_execution_error`, `stopped`, and
+`runner_exception` where applicable.
 
 When trajectory mode is enabled, `run_summary.json` adds `trajectory` with
 `max_trace_severity_score`, `mean_trace_severity_score`, `sessions_with_signal`, and
@@ -118,14 +119,34 @@ When trajectory mode is enabled, `run_summary.json` adds `trajectory` with
 The current mean is calculated from positive trace-severity signals only; zero-severity
 meaningful traces are not included.
 
+### Agent Skills provenance
+
+When `attack_skills.enabled` is true, each successful adversarial row stores the selected
+skill in `generation_metadata.strategy`: `skill_name`, `skill_version`,
+`skill_package_digest`, and redacted `skill_tool_events`. Tool events contain the tool
+name, status, and argument/result type and size summaries rather than raw inputs or
+reversible hashes.
+
+A failed skill turn is written explicitly with `failure_mode` and
+`termination_reason` set to `skill_execution_error`; it also carries the selected skill
+identity, safe tool events, and `skill_execution_error`. ASE does not generate or send a
+legacy fallback attack for that turn.
+
+`run_summary.json` and `generation_report.md` include `attack_methods` coverage:
+angle, sub-tactic, and versioned-skill counts; unique coverage; tool utilization;
+skill-execution errors; and planner calls/tokens. The existing
+`failure_percentiles.failure_score` provides the judge-score distribution used with
+these fields for legacy-versus-skills comparison runs.
+
 ### Attack memory artifact
 
 `attack_memory.json` is written for `shared` and `per_persona` modes and omitted for
 `none`. Shared mode stores one `entries` array. Per-persona mode stores a `personas` map,
 with one independently capped memory payload per persona. Entries include the legacy
 response-only `failure_score` plus `effective_failure_score` and `failure_threshold`;
-legacy entries default the effective score to their response score and the threshold to
-`3`.
+skill-enabled entries also include `skill_name` and `skill_version`. Legacy entries
+default the effective score to their response score, the threshold to `3`, and the skill
+fields to empty strings.
 
 > **Current limitation:** memory entries preserve their historical thresholds, but the
 > planner's rendered worked/partial/refused labels currently classify aggregated scores

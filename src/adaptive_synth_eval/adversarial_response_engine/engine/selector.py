@@ -1,12 +1,18 @@
 # engine/selector.py
 import math
 import random
+from collections.abc import Sequence
 
 from .taxonomy import ANGLE_NAMES
 
 
-def select_angle(memory, rng: random.Random, c: float = 1.4,
-                 exclude: set[str] | None = None) -> str:
+def select_angle(
+    memory,
+    rng: random.Random,
+    c: float = 1.4,
+    exclude: set[str] | None = None,
+    candidates: Sequence[str] | None = None,
+) -> str:
     """Pick ONE attack angle for a conversation via UCB1 over the taxonomy.
 
     Reward = normalized cross-session mean failure_score (+ a near-miss bonus),
@@ -30,11 +36,14 @@ def select_angle(memory, rng: random.Random, c: float = 1.4,
         explore = c * math.sqrt(math.log(total_pulls) / st.n)
         return reward + near_bonus + explore
 
-    candidates = [a for a in ANGLE_NAMES if not exclude or a not in exclude]
-    if not candidates:  # everything excluded — ignore the filter rather than fail
-        candidates = list(ANGLE_NAMES)
+    allowed = list(candidates) if candidates is not None else list(ANGLE_NAMES)
+    if not allowed:
+        raise ValueError("at least one attack angle candidate is required")
+    available = [a for a in allowed if not exclude or a not in exclude]
+    if not available:  # everything excluded — ignore the filter rather than fail
+        available = allowed
     # Shuffle first so ties (notably the inf cold-start) are broken uniformly at
     # random per the conversation's seeded rng — this is what spreads angles
     # across the ~5000 conversations.
-    rng.shuffle(candidates)
-    return max(candidates, key=ucb)
+    rng.shuffle(available)
+    return max(available, key=ucb)

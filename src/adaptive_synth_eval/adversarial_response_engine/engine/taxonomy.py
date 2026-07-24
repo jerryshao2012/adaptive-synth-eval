@@ -1,9 +1,5 @@
-# engine/taxonomy.py
-#
-# Single source of truth for the attack strategy taxonomy. The editable data
-# lives in the sibling `attack_taxonomy.yaml`; this module loads + validates it
-# once at import and exposes typed access plus the prompt renderers. To add or
-# edit an angle / sub-tactic / scenario note, change the YAML, not this file.
+"""Compatibility facade over the packaged Agent Skills attack catalog."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,7 +7,24 @@ from importlib import resources
 
 import yaml
 
-_CATALOG_FILE = "attack_taxonomy.yaml"
+from ..skills.models import AttackSkill
+from ..skills.registry import get_builtin_registry
+
+CATALOG_SOURCE = "agent-skills"
+_SCENARIO_GUIDANCE_FILE = "scenario_guidance.yaml"
+_LEGACY_ANGLE_ORDER = (
+    "angle_shift",
+    "indirect_priming",
+    "specificity_escalation",
+    "authority_injection",
+    "deflection_wrap",
+    "role_entrapment",
+    "social_pressure",
+    "memory_exploitation",
+    "semantic_drift",
+    "decomposition_attack",
+    "hypothetical_framing",
+)
 
 
 @dataclass(frozen=True)
@@ -23,33 +36,44 @@ class AngleSpec:
     accumulation: bool = False
 
 
-def _load_catalog() -> tuple[dict[str, AngleSpec], dict[str, str]]:
-    raw = yaml.safe_load(resources.files(__package__).joinpath(_CATALOG_FILE).read_text("utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"{_CATALOG_FILE}: top-level YAML must be a mapping")
-
-    angles_raw = raw.get("angles")
-    if not isinstance(angles_raw, dict) or not angles_raw:
-        raise ValueError(f"{_CATALOG_FILE}: 'angles' must be a non-empty mapping")
-
-    angles: dict[str, AngleSpec] = {}
-    for name, body in angles_raw.items():
-        if not isinstance(body, dict):
-            raise ValueError(f"{_CATALOG_FILE}: angle '{name}' must be a mapping")
-        subs = body.get("sub_tactics")
-        if not isinstance(subs, list) or not subs:
-            raise ValueError(f"{_CATALOG_FILE}: angle '{name}' needs a non-empty 'sub_tactics' list")
-        angles[name] = AngleSpec(
-            name=name,
-            description=str(body.get("description", "")).strip(),
-            sub_tactics=tuple(str(s) for s in subs),
-            note=str(body.get("note", "")).strip(),
-            accumulation=bool(body.get("accumulation", False)),
+def _merge_angle_skills(angle: str, skills: list[AttackSkill]) -> AngleSpec:
+    descriptions = tuple(dict.fromkeys(skill.description for skill in skills))
+    notes = tuple(dict.fromkeys(skill.note for skill in skills if skill.note))
+    sub_tactics = tuple(
+        dict.fromkeys(
+            sub_tactic for skill in skills for sub_tactic in skill.sub_tactics
         )
+    )
+    return AngleSpec(
+        name=angle,
+        description=" / ".join(descriptions),
+        sub_tactics=sub_tactics,
+        note=" ".join(notes),
+        accumulation=any(skill.accumulation for skill in skills),
+    )
 
-    notes_raw = raw.get("scenario_strategy_notes", {}) or {}
+
+def _load_catalog() -> tuple[dict[str, AngleSpec], dict[str, str]]:
+    registry = get_builtin_registry()
+    by_angle: dict[str, list[AttackSkill]] = {}
+    for skill in registry.skills:
+        by_angle.setdefault(skill.angle, []).append(skill)
+    ordered_angles = [angle for angle in _LEGACY_ANGLE_ORDER if angle in by_angle]
+    ordered_angles.extend(sorted(set(by_angle) - set(ordered_angles)))
+    angles = {
+        angle: _merge_angle_skills(angle, by_angle[angle]) for angle in ordered_angles
+    }
+
+    notes_raw = (
+        yaml.safe_load(
+            resources.files(__package__)
+            .joinpath(_SCENARIO_GUIDANCE_FILE)
+            .read_text("utf-8")
+        )
+        or {}
+    )
     if not isinstance(notes_raw, dict):
-        raise ValueError(f"{_CATALOG_FILE}: 'scenario_strategy_notes' must be a mapping")
+        raise ValueError(f"{_SCENARIO_GUIDANCE_FILE}: top-level YAML must be a mapping")
     scenario_notes = {str(k): str(v).strip() for k, v in notes_raw.items()}
 
     return angles, scenario_notes
@@ -60,7 +84,9 @@ SCENARIO_STRATEGY_NOTES: dict[str, str]
 ANGLES, SCENARIO_STRATEGY_NOTES = _load_catalog()
 
 ANGLE_NAMES: list[str] = list(ANGLES.keys())
-ACCUMULATION_ANGLES: set[str] = {name for name, spec in ANGLES.items() if spec.accumulation}
+ACCUMULATION_ANGLES: set[str] = {
+    name for name, spec in ANGLES.items() if spec.accumulation
+}
 
 
 def is_valid_angle(name: str) -> bool:
@@ -81,7 +107,10 @@ def render_angle_detail(angle: str) -> str:
     spec = ANGLES.get(angle)
     if spec is None:
         return f"{angle} (unknown angle — no taxonomy entry found)"
-    lines = [f"{spec.name} — {spec.description}", f"  sub-tactics: {' | '.join(spec.sub_tactics)}"]
+    lines = [
+        f"{spec.name} — {spec.description}",
+        f"  sub-tactics: {' | '.join(spec.sub_tactics)}",
+    ]
     if spec.note:
         lines.append(f"  note: {spec.note}")
     return "\n".join(lines)

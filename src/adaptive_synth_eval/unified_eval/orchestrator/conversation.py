@@ -25,6 +25,9 @@ from adaptive_synth_eval.adversarial_response_engine.providers.trace_provider im
     compact_trace,
     has_meaningful_trace,
 )
+from adaptive_synth_eval.adversarial_response_engine.skills.executor import (
+    SkillExecutionError,
+)
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
 from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
@@ -219,7 +222,46 @@ async def run_conversation(
                 "generation_metadata": last_synth_turn.generation_metadata,
             }
         else:
-            probe = await asyncio.to_thread(attack_agent.next_turn, session)
+            try:
+                probe = await asyncio.to_thread(attack_agent.next_turn, session)
+            except SkillExecutionError as exc:
+                errors += 1
+                adv_count += 1
+                termination_reason = "skill_execution_error"
+                error_strategy = {
+                    "mode": "adversarial",
+                    "skill_name": exc.skill_name,
+                    "skill_version": exc.skill_version,
+                    "skill_package_digest": exc.skill_package_digest,
+                    "skill_tool_events": exc.events,
+                    "skill_execution_error": str(exc),
+                }
+                turn_rows.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "session_id": session_id,
+                        "persona_id": persona.persona_id,
+                        "scenario_id": synth_scenario.scenario_id,
+                        "adversarial_scenario_id": adv_scenario.scenario_id,
+                        "turn_id": turn_id,
+                        "turn_type": "adversarial",
+                        "user_message": "",
+                        "bot_response": "",
+                        "error": str(exc),
+                        "failure_mode": "skill_execution_error",
+                        "skill_name": exc.skill_name,
+                        "skill_version": exc.skill_version,
+                        "skill_package_digest": exc.skill_package_digest,
+                        "skill_tool_events": exc.events,
+                        "skill_execution_error": str(exc),
+                        "generation_metadata": {
+                            "turn_type": "adversarial",
+                            "strategy": error_strategy,
+                        },
+                    }
+                )
+                token_budget.release_reservation_for(reservation_key)
+                break
             if probe is None:
                 token_budget.release_reservation_for(reservation_key)
                 break
@@ -677,7 +719,7 @@ async def run_conversation(
         "scenario_id": synth_scenario.scenario_id,
         "adversarial_scenario_id": adv_scenario.scenario_id,
         "synthetic_day": synthetic_day.isoformat(),
-        "turn_count": len(chat_history),
+        "turn_count": len(turn_rows),
         "synth_turns": synth_count,
         "adversarial_turns": adv_count,
         "elapsed_seconds": round(time.perf_counter() - conversation_start, 2),

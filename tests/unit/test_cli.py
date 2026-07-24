@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,7 +6,12 @@ from types import SimpleNamespace
 from adaptive_synth_eval.cli import main
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 
-UNIFIED_EXAMPLE = Path(__file__).resolve().parents[2] / "contracts" / "examples" / "unified_evaluation_demo.yaml"
+UNIFIED_EXAMPLE = (
+    Path(__file__).resolve().parents[2]
+    / "contracts"
+    / "examples"
+    / "unified_evaluation_demo.yaml"
+)
 
 
 def test_cli_rejects_missing_contract(tmp_path, capsys):
@@ -16,6 +22,42 @@ def test_cli_rejects_missing_contract(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "Contract file not found" in captured.err
+
+
+def test_cli_lists_packaged_attack_skills_as_json(capsys):
+    exit_code = main(["skills", "list", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert len(payload) == 11
+    assert {item["name"] for item in payload} >= {
+        "semantic-drift",
+        "decomposition-attack",
+    }
+    assert all(len(item["digest"]) == 64 for item in payload)
+
+
+def test_cli_shows_and_validates_packaged_attack_skill(capsys):
+    show_code = main(["skills", "show", "semantic-drift", "--json"])
+    shown = json.loads(capsys.readouterr().out)
+    validate_code = main(["skills", "validate", "semantic-drift"])
+    validated = capsys.readouterr().out
+
+    assert show_code == 0
+    assert shown["name"] == "semantic-drift"
+    assert shown["angle"] == "semantic_drift"
+    assert "# Semantic drift" in shown["instructions"]
+    assert validate_code == 0
+    assert "Valid skill: semantic-drift" in validated
+
+
+def test_cli_rejects_unknown_attack_skill(capsys):
+    exit_code = main(["skills", "show", "missing-skill"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "unknown attack skill" in captured.err
 
 
 def test_cli_runs_dry_run_contract(tmp_path, capsys):
@@ -144,7 +186,9 @@ def test_cli_logs_elapsed_runtime_in_summary(tmp_path, monkeypatch, capsys):
 def test_cli_summarize_reads_run_summary(tmp_path, capsys):
     run_dir = tmp_path / "runs" / "abc"
     run_dir.mkdir(parents=True)
-    (run_dir / "run_summary.json").write_text('{"run_id": "abc", "total_conversations": 2}')
+    (run_dir / "run_summary.json").write_text(
+        '{"run_id": "abc", "total_conversations": 2}'
+    )
 
     exit_code = main(["summarize", "--run-id", "abc", "--output-dir", str(tmp_path)])
 
@@ -200,7 +244,9 @@ def test_cli_runs_with_realtime_chat_option(tmp_path, capsys):
         % output_dir.as_posix()
     )
 
-    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+    exit_code = main(
+        ["run", "--contract", str(contract), "--dry-run", "--realtime-chat"]
+    )
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -270,7 +316,9 @@ def test_cli_runs_with_interactive_realtime_controls_option(tmp_path, capsys):
     assert "Run complete" in captured.out
 
 
-def test_cli_realtime_chat_enables_interactive_controls_by_default(tmp_path, monkeypatch):
+def test_cli_realtime_chat_enables_interactive_controls_by_default(
+    tmp_path, monkeypatch
+):
     contract = tmp_path / "contract.json"
     output_dir = tmp_path / "outputs"
     contract.write_text(
@@ -320,12 +368,16 @@ def test_cli_realtime_chat_enables_interactive_controls_by_default(tmp_path, mon
     captured = {}
 
     def _fake_run_simulation(*args, **kwargs):
-        captured["interactive_realtime_controls"] = kwargs["interactive_realtime_controls"]
+        captured["interactive_realtime_controls"] = kwargs[
+            "interactive_realtime_controls"
+        ]
         return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
 
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 
-    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+    exit_code = main(
+        ["run", "--contract", str(contract), "--dry-run", "--realtime-chat"]
+    )
 
     assert exit_code == 0
     assert captured["interactive_realtime_controls"] is True
@@ -381,7 +433,9 @@ def test_cli_can_disable_interactive_controls_with_no_flag(tmp_path, monkeypatch
     captured = {}
 
     def _fake_run_simulation(*args, **kwargs):
-        captured["interactive_realtime_controls"] = kwargs["interactive_realtime_controls"]
+        captured["interactive_realtime_controls"] = kwargs[
+            "interactive_realtime_controls"
+        ]
         return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
 
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
@@ -459,17 +513,23 @@ def test_cli_disables_live_status_when_realtime_controls_enabled(tmp_path, monke
         return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
 
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr("adaptive_synth_eval.cli._run_with_live_status", _fake_live_status)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli._run_with_live_status", _fake_live_status
+    )
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 
-    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+    exit_code = main(
+        ["run", "--contract", str(contract), "--dry-run", "--realtime-chat"]
+    )
 
     assert exit_code == 0
     assert captured["enabled"] is True
     assert captured["realtime_interactive"] is True
 
 
-def test_cli_realtime_no_controls_uses_non_interactive_renderer_mode(tmp_path, monkeypatch):
+def test_cli_realtime_no_controls_uses_non_interactive_renderer_mode(
+    tmp_path, monkeypatch
+):
     contract = tmp_path / "contract.json"
     output_dir = tmp_path / "outputs"
     contract.write_text(
@@ -527,7 +587,9 @@ def test_cli_realtime_no_controls_uses_non_interactive_renderer_mode(tmp_path, m
         return {"run_id": "x", "total_conversations": 0, "total_turns": 0, "errors": 0}
 
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr("adaptive_synth_eval.cli._run_with_live_status", _fake_live_status)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli._run_with_live_status", _fake_live_status
+    )
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 
     exit_code = main(
@@ -546,7 +608,9 @@ def test_cli_realtime_no_controls_uses_non_interactive_renderer_mode(tmp_path, m
     assert captured["realtime_interactive"] is False
 
 
-def test_cli_realtime_interactive_fails_fast_without_prompt_toolkit(tmp_path, monkeypatch, capsys):
+def test_cli_realtime_interactive_fails_fast_without_prompt_toolkit(
+    tmp_path, monkeypatch, capsys
+):
     contract = tmp_path / "contract.json"
     output_dir = tmp_path / "outputs"
     contract.write_text(
@@ -604,7 +668,9 @@ def test_cli_realtime_interactive_fails_fast_without_prompt_toolkit(tmp_path, mo
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
 
-    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--realtime-chat"])
+    exit_code = main(
+        ["run", "--contract", str(contract), "--dry-run", "--realtime-chat"]
+    )
 
     captured = capsys.readouterr()
     assert exit_code == 2
@@ -666,7 +732,9 @@ def test_cli_runs_with_persona_option(tmp_path, monkeypatch):
 
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 
-    exit_code = main(["run", "--contract", str(contract), "--dry-run", "--persona", "P001"])
+    exit_code = main(
+        ["run", "--contract", str(contract), "--dry-run", "--persona", "P001"]
+    )
 
     assert exit_code == 0
     assert captured["persona_filter"] == "P001"
@@ -730,7 +798,12 @@ def test_cli_resume_incomplete_run_passes_resume_flag(tmp_path, monkeypatch):
 
     def _fake_run_simulation(*args, **kwargs):
         captured["resume_incomplete"] = kwargs.get("resume_incomplete")
-        return {"run_id": "existing_run", "total_conversations": 0, "total_turns": 0, "errors": 0}
+        return {
+            "run_id": "existing_run",
+            "total_conversations": 0,
+            "total_turns": 0,
+            "errors": 0,
+        }
 
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 
@@ -777,13 +850,24 @@ def test_cli_logs_pre_run_summary_before_realtime_controls(monkeypatch, caplog):
     assert exit_code == 0
 
     messages = [record.getMessage() for record in caplog.records]
-    summary_index = next(i for i, message in enumerate(messages) if message.startswith("Run configuration:"))
-    target_index = next(i for i, message in enumerate(messages) if message.startswith("Target:"))
+    summary_index = next(
+        i
+        for i, message in enumerate(messages)
+        if message.startswith("Run configuration:")
+    )
+    target_index = next(
+        i for i, message in enumerate(messages) if message.startswith("Target:")
+    )
     simulator_index = next(
-        i for i, message in enumerate(messages)
+        i
+        for i, message in enumerate(messages)
         if message.startswith("Adaptive component user_simulator:")
     )
-    controls_index = next(i for i, message in enumerate(messages) if message.startswith("Realtime controls:"))
+    controls_index = next(
+        i
+        for i, message in enumerate(messages)
+        if message.startswith("Realtime controls:")
+    )
 
     assert summary_index < controls_index
     assert target_index < controls_index
@@ -856,7 +940,12 @@ def test_cli_restart_incomplete_run_cleans_existing_artifacts(tmp_path, monkeypa
     def _fake_run_simulation(*args, **kwargs):
         captured["stale_exists_before_run"] = stale_file.exists()
         captured["resume_incomplete"] = kwargs.get("resume_incomplete")
-        return {"run_id": "existing_run", "total_conversations": 0, "total_turns": 0, "errors": 0}
+        return {
+            "run_id": "existing_run",
+            "total_conversations": 0,
+            "total_turns": 0,
+            "errors": 0,
+        }
 
     monkeypatch.setattr("adaptive_synth_eval.cli.run_simulation", _fake_run_simulation)
 

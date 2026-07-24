@@ -59,7 +59,28 @@ def test_unified_report_with_enhanced_stats():
                 "avg_chatbot_prompt_tokens_per_convo": 4000.0,
                 "avg_chatbot_completion_tokens_per_convo": 2000.0,
                 "avg_chatbot_total_tokens_per_convo": 6000.0,
-            }
+            },
+            "attack_methods": {
+                "skills_enabled": True,
+                "angle_counts": {"semantic_drift": 12},
+                "sub_tactic_counts": {"topic_sliding": 7, "boundary_erosion": 5},
+                "skill_counts": {"semantic-drift@1.0.0": 12},
+                "unique_angles": 1,
+                "unique_sub_tactics": 2,
+                "tool_utilization": {
+                    "calls": 4,
+                    "successes": 3,
+                    "errors": 1,
+                    "by_tool": {"query_attack_memory": 4},
+                },
+                "skill_execution_errors": 1,
+                "planner_usage": {
+                    "calls": 24,
+                    "prompt_tokens": 12000,
+                    "completion_tokens": 4000,
+                    "total_tokens": 16000,
+                },
+            },
         }
 
         report_path = writer.write_unified_report(summary)
@@ -71,26 +92,55 @@ def test_unified_report_with_enhanced_stats():
         content = report_path.read_text()
 
         # Check for enhanced sections
-        assert "Configured max concurrency: 5" in content, "Missing configured max concurrency"
-        assert "Effective max concurrency: 5" in content, "Missing effective max concurrency"
-        assert "## Time / Speed to Generate at Scale" in content, "Missing scale projections section"
-        assert "**Conversations generated per second**" in content, "Missing conversations per second"
+        assert "Configured max concurrency: 5" in content, (
+            "Missing configured max concurrency"
+        )
+        assert "Effective max concurrency: 5" in content, (
+            "Missing effective max concurrency"
+        )
+        assert "## Time / Speed to Generate at Scale" in content, (
+            "Missing scale projections section"
+        )
+        assert "**Conversations generated per second**" in content, (
+            "Missing conversations per second"
+        )
         assert "1,000 conversations" in content, "Missing 1K projection"
-        assert "10,000 conversations (Month at scale)" in content, "Missing 10K projection"
+        assert "10,000 conversations (Month at scale)" in content, (
+            "Missing 10K projection"
+        )
         assert "100,000 conversations" in content, "Missing 100K projection"
-        assert "### Steady-State Projection" in content, "Missing steady-state projection"
-        assert "## Runtime Performance" in content, "Missing runtime performance section"
+        assert "### Steady-State Projection" in content, (
+            "Missing steady-state projection"
+        )
+        assert "## Runtime Performance" in content, (
+            "Missing runtime performance section"
+        )
         assert "Avg target latency per turn" in content, "Missing target latency metric"
 
-        assert "## Simulator Token Usage & Estimated Cost" in content, "Missing token usage section"
-        assert "## Chatbot Token Usage & Estimated Cost" in content, "Missing chatbot token usage section"
-        assert "### Chatbot Cost Extrapolations (USD)" in content, "Missing chatbot cost extrapolations"
+        assert "## Simulator Token Usage & Estimated Cost" in content, (
+            "Missing token usage section"
+        )
+        assert "## Chatbot Token Usage & Estimated Cost" in content, (
+            "Missing chatbot token usage section"
+        )
+        assert "### Chatbot Cost Extrapolations (USD)" in content, (
+            "Missing chatbot cost extrapolations"
+        )
         assert "**Total Run Usage**" in content, "Missing total run usage"
         assert "**Average per Convo**" in content, "Missing average per convo"
         assert "### Cost Extrapolations (USD)" in content, "Missing cost extrapolations"
-        assert "Lightweight (e.g., nova-micro-v1:0)" in content, "Missing lightweight tier"
-        assert "Premium (e.g., anthropic claude-haiku-4-5-20251001)" in content, "Missing premium tier"
+        assert "Lightweight (e.g., nova-micro-v1:0)" in content, (
+            "Missing lightweight tier"
+        )
+        assert "Premium (e.g., anthropic claude-haiku-4-5-20251001)" in content, (
+            "Missing premium tier"
+        )
         assert "High-End (e.g., Claude 3.5 Sonnet)" in content, "Missing high-end tier"
+        assert "## Attack method coverage" in content
+        assert "semantic-drift@1.0.0" in content
+        assert "Unique sub-tactics: 2" in content
+        assert "Planner calls: 24" in content
+        assert "Tool calls: 4" in content
 
         print("✅ All enhanced stats sections present in unified report!")
         print(f"\nReport written to: {report_path}")

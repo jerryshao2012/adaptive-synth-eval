@@ -8,11 +8,15 @@ outputs/runs/
 outputs/loops/
 contracts/examples/outputs/
 adaptive_synth_eval.egg-info/
+build/
 .env
 .worktrees/
 .claude/
 graphify-out/
-.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/attack-skills.yml
 .vscode/
 .codex/
 .superpowers/
