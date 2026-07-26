@@ -92,6 +92,12 @@ ASE processes at the same run directory.
 
 Persona memory may contain synthetic names, email addresses, phone numbers, preferences, and conversation excerpts. Apply the same retention and access controls used for the rest of the run artifacts, especially when a target echoes real-looking identifiers.
 
+When `ASE_CAPTURE_ENABLED=true`, a successful unified persona-memory commit
+also emits an optional capture envelope. Authoritative JSON/Markdown
+persistence happens first; capture failure is logged without rolling back
+memory. Rich deltas use the bounded per-producer buffer and compact skeletons
+reference their durable locators.
+
 ## Related documentation
 
 - [User simulation LLM](user_simulation_llm.md) — how memory enters simulator prompts.

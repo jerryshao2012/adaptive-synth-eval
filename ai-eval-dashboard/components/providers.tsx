@@ -39,15 +39,15 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       })
   );
-  const [theme, setTheme] = useState<Theme>("light");
-
-  useEffect(() => {
-    const storedTheme = localStorage.getItem("ai-eval-theme");
-    const resolvedTheme: Theme =
-      storedTheme === "light" || storedTheme === "dark" ? storedTheme : "light";
-    setTheme(resolvedTheme);
-    applyTheme(resolvedTheme);
-  }, []);
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+    const storedTheme = window.localStorage.getItem("ai-eval-theme");
+    return storedTheme === "light" || storedTheme === "dark"
+      ? storedTheme
+      : "light";
+  });
 
   useEffect(() => {
     localStorage.setItem("ai-eval-theme", theme);

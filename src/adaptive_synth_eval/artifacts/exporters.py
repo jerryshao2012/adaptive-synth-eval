@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
+
+if TYPE_CHECKING:
+    from adaptive_synth_eval.capture.producers import ChatHistoryProducerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactWriter:
@@ -27,17 +33,25 @@ class ArtifactWriter:
         "clarification_score",
         "failure_mode",
         "latency_ms",
+        "status_code",
         "error",
         "synthetic_flag",
         "retrieved_policy_ids",
         "generation_metadata",
     ]
 
-    def __init__(self, base_dir: str | Path, *, run_id: str):
+    def __init__(
+        self,
+        base_dir: str | Path,
+        *,
+        run_id: str,
+        capture_adapter: ChatHistoryProducerAdapter | None = None,
+    ):
         self.base_dir = Path(base_dir)
         self.run_id = run_id
         self.run_dir = self.base_dir / "runs" / run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.capture_adapter = capture_adapter
 
     def write_json(self, name: str, payload) -> Path:
         path = self.run_dir / name
@@ -67,6 +81,30 @@ class ArtifactWriter:
         rows_list = list(rows)
         self.append_jsonl("chat_history.jsonl", rows_list, overwrite=overwrite)
         self._write_csv("chat_history.csv", rows_list, append=not overwrite)
+        if self.capture_adapter is not None:
+            for row in rows_list:
+                try:
+                    conversation_id = str(row.get("conversation_id") or "")
+                    turn_id = int(row.get("turn_id") or 0)
+                    producer = str(
+                        row.get("target_id")
+                        or row.get("chatbot_id")
+                        or "default"
+                    )
+                    self.capture_adapter.emit_chat_turn(
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        producer_id=f"target:{producer}",
+                        content=dict(row),
+                        timestamp=row.get("timestamp"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Capture failed for chat row run=%s conversation=%s turn=%s",
+                        self.run_id,
+                        row.get("conversation_id"),
+                        row.get("turn_id"),
+                    )
 
     def write_generation_report(self, summary: dict) -> Path:
         lines = [

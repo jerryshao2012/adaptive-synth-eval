@@ -145,10 +145,12 @@ export function computeInvestigationSummary(
   }
 
   // Average latency
-  const latencies = evaluations.map((e) => e.system_reliability.total_latency_ms).filter((l) => l > 0);
+  const latencies = evaluations
+    .map((e) => e.system_reliability.total_latency_ms)
+    .filter((latency): latency is number => typeof latency === "number");
   const avgLatencyMs = latencies.length > 0
     ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
-    : 0;
+    : null;
 
   // Comparison with prior period
   let comparisonWithPrior: InvestigationSummary["comparisonWithPrior"] = null;

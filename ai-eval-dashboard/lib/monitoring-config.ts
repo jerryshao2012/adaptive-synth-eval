@@ -14,6 +14,7 @@ const SAMPLING_STRATEGIES: readonly SamplingStrategy[] = [
   "all",
   "random",
   "systematic",
+  "triggered",
 ];
 const SUPPORTED_REQUEST_FIELDS = new Set([
   "runId",
@@ -22,6 +23,9 @@ const SUPPORTED_REQUEST_FIELDS = new Set([
   "sampleSize",
   "intervalMinutes",
   "maxWindows",
+  "triggeredLookback",
+  "triggeredLookahead",
+  "triggerPolicyFingerprint",
 ]);
 
 export const DEFAULT_MONITORING_PARAMETERS: EvalRunParameters = {
@@ -30,6 +34,8 @@ export const DEFAULT_MONITORING_PARAMETERS: EvalRunParameters = {
   intervalMinutes: 60,
   maxWindows: null,
 };
+const DEFAULT_TRIGGERED_LOOKBACK = 2;
+const DEFAULT_TRIGGERED_LOOKAHEAD = 2;
 
 export class MonitoringRequestValidationError extends Error {
   constructor(message: string) {
@@ -44,6 +50,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isMonitoringAction(value: unknown): value is MonitoringAction {
@@ -65,10 +75,11 @@ export function normalizeMonitoringParameters(
 ): EvalRunParameters {
   const record = isObject(state) ? state : {};
 
-  return {
-    samplingStrategy: isSamplingStrategy(record.sampling_strategy)
-      ? record.sampling_strategy
-      : DEFAULT_MONITORING_PARAMETERS.samplingStrategy,
+  const samplingStrategy = isSamplingStrategy(record.sampling_strategy)
+    ? record.sampling_strategy
+    : DEFAULT_MONITORING_PARAMETERS.samplingStrategy;
+  const parameters: EvalRunParameters = {
+    samplingStrategy,
     sampleSize: isPositiveInteger(record.sample_size)
       ? record.sample_size
       : DEFAULT_MONITORING_PARAMETERS.sampleSize,
@@ -79,7 +90,19 @@ export function normalizeMonitoringParameters(
       record.max_windows === null || isPositiveInteger(record.max_windows)
         ? record.max_windows
         : DEFAULT_MONITORING_PARAMETERS.maxWindows,
+    triggerPolicyFingerprint: typeof record.trigger_policy_fingerprint === "string"
+      ? record.trigger_policy_fingerprint
+      : DEFAULT_MONITORING_PARAMETERS.triggerPolicyFingerprint,
   };
+  if (samplingStrategy === "triggered") {
+    parameters.triggeredLookback = isNonNegativeInteger(record.triggered_lookback)
+      ? record.triggered_lookback
+      : DEFAULT_TRIGGERED_LOOKBACK;
+    parameters.triggeredLookahead = isNonNegativeInteger(record.triggered_lookahead)
+      ? record.triggered_lookahead
+      : DEFAULT_TRIGGERED_LOOKAHEAD;
+  }
+  return parameters;
 }
 
 function parseRunId(value: unknown): string {
@@ -117,6 +140,18 @@ function parsePositiveInteger(
   return value;
 }
 
+function parseNonNegativeInteger(
+  value: unknown,
+  field: "triggeredLookback" | "triggeredLookahead"
+): number {
+  if (!isNonNegativeInteger(value)) {
+    throw new MonitoringRequestValidationError(
+      `${field} must be a non-negative integer.`
+    );
+  }
+  return value;
+}
+
 export function parseMonitoringStartRequest(
   value: unknown
 ): MonitoringStartRequest {
@@ -146,7 +181,7 @@ export function parseMonitoringStartRequest(
     !isSamplingStrategy(value.samplingStrategy)
   ) {
     throw new MonitoringRequestValidationError(
-      "samplingStrategy must be 'all', 'random', or 'systematic'."
+      "samplingStrategy must be 'all', 'random', 'systematic', or 'triggered'."
     );
   }
 
@@ -164,15 +199,32 @@ export function parseMonitoringStartRequest(
     value.maxWindows === undefined || value.maxWindows === null
       ? DEFAULT_MONITORING_PARAMETERS.maxWindows
       : parsePositiveInteger(value.maxWindows, "maxWindows");
+  const triggeredLookback =
+    value.triggeredLookback === undefined
+      ? DEFAULT_TRIGGERED_LOOKBACK
+      : parseNonNegativeInteger(value.triggeredLookback, "triggeredLookback");
+  const triggeredLookahead =
+    value.triggeredLookahead === undefined
+      ? DEFAULT_TRIGGERED_LOOKAHEAD
+      : parseNonNegativeInteger(value.triggeredLookahead, "triggeredLookahead");
 
-  return {
+  const parsed: MonitoringStartRequest = {
     runId,
     action: value.action,
     samplingStrategy,
     sampleSize,
     intervalMinutes,
     maxWindows,
+    triggerPolicyFingerprint:
+      typeof value.triggerPolicyFingerprint === "string"
+        ? value.triggerPolicyFingerprint
+        : undefined,
   };
+  if (samplingStrategy === "triggered") {
+    parsed.triggeredLookback = triggeredLookback;
+    parsed.triggeredLookahead = triggeredLookahead;
+  }
+  return parsed;
 }
 
 export function buildMonitoringArgs(
@@ -197,6 +249,13 @@ export function buildMonitoringArgs(
   if (request.maxWindows !== null) {
     args.push("--max-windows", String(request.maxWindows));
   }
+
+  // Add triggered strategy parameters if applicable
+  if (request.samplingStrategy === "triggered") {
+    args.push("--triggered-lookback", String(request.triggeredLookback ?? 2));
+    args.push("--triggered-lookahead", String(request.triggeredLookahead ?? 2));
+  }
+
   args.push(
     "--incomplete-run-action",
     request.action === "start" ? "restart" : "resume"

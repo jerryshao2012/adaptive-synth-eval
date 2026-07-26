@@ -248,6 +248,7 @@ export default function DashboardPage() {
         selectedRun?.hasMonitoringScores ??
         false,
       updatedAt: monitoringStatus?.updatedAt,
+      triggerMetrics: monitoringStatus?.triggerMetrics,
     };
   }, [activeRunId, monitoringStatus, retainedAcceptedLaunch, selectedRun]);
 
@@ -591,19 +592,29 @@ export default function DashboardPage() {
           const period = getChartPeriod(key);
           const scopedEvaluations = filterEvaluationsByPeriod(evaluations || [], period);
           const points = scopedEvaluations
-            .map((e) => ({
-              timestamp: e.timestamp,
-              value: e.system_reliability.availability * 100,
-              status: e.system_reliability.availability_status,
-              pointIdentity: {
-                runId: e.run_id || activeRunId,
-                conversationId: e.conversation_id,
-                turnId: String(e.turn_id),
+            .flatMap((e) => {
+              const availability = e.system_reliability.availability;
+              const status = e.system_reliability.availability_status;
+              if (
+                typeof availability !== "number" ||
+                (status !== "pass" && status !== "warn" && status !== "fail")
+              ) {
+                return [];
+              }
+              return [{
                 timestamp: e.timestamp,
-                metricGroup: "reliability" as const,
-                metricKey: key,
-              },
-            }))
+                value: availability * 100,
+                status,
+                pointIdentity: {
+                  runId: e.run_id || activeRunId,
+                  conversationId: e.conversation_id,
+                  turnId: String(e.turn_id),
+                  timestamp: e.timestamp,
+                  metricGroup: "reliability" as const,
+                  metricKey: key,
+                },
+              }];
+            })
             .sort(
               (a, b) =>
                 new Date(a.timestamp).getTime() -
@@ -686,6 +697,16 @@ export default function DashboardPage() {
                 }
                 onRefresh={refreshAll}
               />
+              {displayedMonitoringStatus?.triggerMetrics && (
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-3 lg:grid-cols-6">
+                  <span>Triggers: {displayedMonitoringStatus.triggerMetrics.triggersDetected}</span>
+                  <span>Promoted: {displayedMonitoringStatus.triggerMetrics.rowsPromoted}</span>
+                  <span>Budget drops: {displayedMonitoringStatus.triggerMetrics.budgetDrops}</span>
+                  <span>Deduplicated: {displayedMonitoringStatus.triggerMetrics.deduplicatedContext}</span>
+                  <span>Pending: {displayedMonitoringStatus.triggerMetrics.pendingLookahead}</span>
+                  <span>Window budget: {displayedMonitoringStatus.triggerMetrics.budgetAvailable}</span>
+                </div>
+              )}
               <EvaluationLogPanel
                 runId={activeRunId}
                 monitoringStatus={runStatus}

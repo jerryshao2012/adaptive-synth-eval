@@ -23,6 +23,47 @@ function rowKey(item: ReviewQueueItem): string {
   return `${item.runId}:${item.conversationId}:${item.turnId}:${item.timestamp}`;
 }
 
+type ReviewSortColumn = NonNullable<ReviewQueueFilters["sortBy"]>;
+
+function SortHeader({
+  column,
+  label,
+  className,
+  sortBy,
+  sortOrder,
+  onSort,
+}: {
+  column: ReviewSortColumn;
+  label: string;
+  className?: string;
+  sortBy: ReviewQueueFilters["sortBy"];
+  sortOrder: ReviewQueueFilters["sortOrder"];
+  onSort: (key: ReviewSortColumn) => void;
+}) {
+  const icon =
+    sortBy !== column ? (
+      <ArrowUpDown className="h-3 w-3 text-muted-foreground/50" />
+    ) : sortOrder === "asc" ? (
+      <ChevronUp className="h-3 w-3" />
+    ) : (
+      <ChevronDown className="h-3 w-3" />
+    );
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors",
+        className
+      )}
+      onClick={() => onSort(column)}
+    >
+      {label}
+      {icon}
+    </button>
+  );
+}
+
 export function ReviewTable({
   items,
   selectedIds,
@@ -55,41 +96,6 @@ export function ReviewTable({
     onSelectionChange(next);
   }
 
-  function SortIcon({ column }: { column: NonNullable<ReviewQueueFilters["sortBy"]> }) {
-    if (sortBy !== column) {
-      return <ArrowUpDown className="h-3 w-3 text-muted-foreground/50" />;
-    }
-    return sortOrder === "asc" ? (
-      <ChevronUp className="h-3 w-3" />
-    ) : (
-      <ChevronDown className="h-3 w-3" />
-    );
-  }
-
-  function SortHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: NonNullable<ReviewQueueFilters["sortBy"]>;
-    label: string;
-    className?: string;
-  }) {
-    return (
-      <button
-        type="button"
-        className={cn(
-          "flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors",
-          className
-        )}
-        onClick={() => onSort(column)}
-      >
-        {label}
-        <SortIcon column={column} />
-      </button>
-    );
-  }
-
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
       <table className="w-full text-xs">
@@ -108,7 +114,13 @@ export function ReviewTable({
               />
             </th>
             <th className="px-3 py-2.5 text-left" scope="col">
-              <SortHeader column="timestamp" label="Timestamp" />
+              <SortHeader
+                column="timestamp"
+                label="Timestamp"
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSort={onSort}
+              />
             </th>
             <th className="px-3 py-2.5 text-left" scope="col">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -121,16 +133,40 @@ export function ReviewTable({
               </span>
             </th>
             <th className="px-3 py-2.5 text-center" scope="col">
-              <SortHeader column="safetyStatus" label="Safety" />
+              <SortHeader
+                column="safetyStatus"
+                label="Safety"
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSort={onSort}
+              />
             </th>
             <th className="px-3 py-2.5 text-center" scope="col">
-              <SortHeader column="safetyStatus" label="Perf." />
+              <SortHeader
+                column="safetyStatus"
+                label="Perf."
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSort={onSort}
+              />
             </th>
             <th className="px-3 py-2.5 text-center" scope="col">
-              <SortHeader column="avgAiScore" label="AI Score" />
+              <SortHeader
+                column="avgAiScore"
+                label="AI Score"
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSort={onSort}
+              />
             </th>
             <th className="px-3 py-2.5 text-center" scope="col">
-              <SortHeader column="reviewStatus" label="Review" />
+              <SortHeader
+                column="reviewStatus"
+                label="Review"
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSort={onSort}
+              />
             </th>
             <th className="px-3 py-2.5 text-left" scope="col">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

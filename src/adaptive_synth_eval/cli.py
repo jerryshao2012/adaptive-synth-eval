@@ -540,6 +540,11 @@ def main(argv: list[str] | None = None) -> int:
                     max_windows=args.max_windows,
                     metrics_config_path=metrics_config_path,
                     rescan=args.rescan,
+                    triggered_lookback=args.triggered_lookback,
+                    triggered_lookahead=args.triggered_lookahead,
+                    trigger_policy_path=(
+                        Path(args.trigger_policy) if args.trigger_policy else None
+                    ),
                 )
                 print(json.dumps(summary, indent=2, default=str))
                 return 0
@@ -732,7 +737,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sample-size",
         type=int,
         default=1000,
-        help="Number of chat rows to evaluate per sampling window (default: 1000)",
+        help=(
+            "Rows to evaluate per sampling window; this is the hard capture "
+            "budget for triggered sampling (default: 1000)"
+        ),
     )
     monitor_run.add_argument(
         "--interval-minutes",
@@ -742,9 +750,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     monitor_run.add_argument(
         "--sampling-strategy",
-        choices=("all", "random", "systematic"),
+        choices=("all", "random", "systematic", "triggered"),
         default="all",
         help="Sampling strategy to select subset of chats per window (default: all)",
+    )
+    monitor_run.add_argument(
+        "--triggered-lookback",
+        type=int,
+        default=2,
+        help="Lookback turns to include in context when trigger fires (default: 2). Used with --sampling-strategy triggered.",
+    )
+    monitor_run.add_argument(
+        "--triggered-lookahead",
+        type=int,
+        default=2,
+        help="Lookahead turns to hold pending when trigger fires (default: 2). Used with --sampling-strategy triggered.",
+    )
+    monitor_run.add_argument(
+        "--trigger-policy",
+        default=None,
+        help="Optional YAML policy that completely replaces the packaged trigger policy.",
     )
     monitor_run.add_argument(
         "--max-windows",

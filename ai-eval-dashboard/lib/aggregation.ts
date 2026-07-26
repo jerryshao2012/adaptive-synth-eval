@@ -165,13 +165,22 @@ export function extractLatencyTimeSeries(
   pointIdentity?: MetricPointIdentity;
 }[] {
   return evaluations
-    .map((e) => {
+    .flatMap((e) => {
       const r = e.system_reliability;
       const statusKey = `${latencyKey.replace("_ms", "")}_status` as keyof typeof r;
-      return {
+      const value = r[latencyKey];
+      const status = r[statusKey];
+      if (
+        typeof value !== "number" ||
+        (status !== "pass" && status !== "warn" && status !== "fail")
+      ) {
+        return [];
+      }
+      const knownStatus: "pass" | "warn" | "fail" = status;
+      return [{
         timestamp: e.timestamp,
-        value: r[latencyKey] as number,
-        status: r[statusKey] as "pass" | "warn" | "fail",
+        value,
+        status: knownStatus,
         pointIdentity: {
           runId: e.run_id || defaultRunId || "",
           conversationId: e.conversation_id,
@@ -180,7 +189,7 @@ export function extractLatencyTimeSeries(
           metricGroup: "reliability" as const,
           metricKey: latencyKey,
         },
-      };
+      }];
     })
     .sort(
       (a, b) =>

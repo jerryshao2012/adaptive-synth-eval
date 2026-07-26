@@ -80,6 +80,11 @@ the sampling strategy, per-window sample size, interval minutes, and optional
 maximum windows. Continue and Re-evaluate are prefilled from the saved
 `monitoring_state.json` values.
 
+For Triggered sampling, sample size is the hard capture budget. Lookback and
+lookahead accept zero, and triggered-only fields are omitted for other
+strategies. Custom trigger-policy paths remain CLI-only. The Monitor page shows
+detected, promoted, dropped, deduplicated, and pending-context counters.
+
 Start uses the runner's restart recovery action. Continue uses its saved cursor
 when fingerprints and source identity still match; otherwise changed
 evaluation/policy fingerprints, unknown or rewritten source history, or a
@@ -105,8 +110,9 @@ Run-scoped files live in `outputs/runs/<run_id>/`:
 | Artifact | Dashboard use |
 | --- | --- |
 | `chat_history.jsonl` | Source conversations for monitoring and trace drill-down |
-| `monitoring_scores.jsonl` | Charts, failures, review queue, and golden-dataset records |
-| `monitoring_state.json` | Monitoring status, progress, and fingerprints |
+| `monitoring_scores.jsonl` | Active selected scores for charts; inactive reconciled cache rows are filtered |
+| `monitoring_state.json` | Monitoring status, progress, fingerprints, pending selection, and trigger counters |
+| `capture/*.jsonl` | Trigger/promotion journals and optional capture records |
 | `eval_progress.md` | Human-readable monitoring progress |
 | `monitoring.log` | Append-only stdout/stderr from dashboard-launched monitoring processes |
 | `run_state.json` | Run metadata and artifact validation |

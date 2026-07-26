@@ -113,6 +113,37 @@ describe("parseMonitoringStartRequest", () => {
     ).toBe(3);
   });
 
+  it("accepts zero context and omits triggered fields for other strategies", () => {
+    const triggered = parseMonitoringStartRequest({
+      runId: "run-1",
+      action: "start",
+      samplingStrategy: "triggered",
+      triggeredLookback: 0,
+      triggeredLookahead: 0,
+    });
+    expect(triggered.triggeredLookback).toBe(0);
+    expect(triggered.triggeredLookahead).toBe(0);
+
+    const random = parseMonitoringStartRequest({
+      runId: "run-1",
+      action: "start",
+      samplingStrategy: "random",
+    });
+    expect(random).not.toHaveProperty("triggeredLookback");
+    expect(random).not.toHaveProperty("triggeredLookahead");
+  });
+
+  it("rejects the removed duplicate capture-budget field", () => {
+    expect(() =>
+      parseMonitoringStartRequest({
+        runId: "run-1",
+        action: "start",
+        samplingStrategy: "triggered",
+        triggeredCaptureBudget: 5,
+      })
+    ).toThrow(/Unsupported request field/);
+  });
+
   it.each([
     null,
     [],
@@ -285,5 +316,21 @@ describe("buildMonitoringArgs", () => {
     expect(args).not.toContain("--dry-run");
     expect(args.join(" ")).not.toContain("--model");
     expect(args.join(" ")).not.toContain("--metrics-config");
+  });
+
+  it("uses sample size as the only triggered capture budget", () => {
+    const request = parseMonitoringStartRequest({
+      runId: "run-1",
+      action: "start",
+      samplingStrategy: "triggered",
+      sampleSize: 5,
+      triggeredLookback: 0,
+      triggeredLookahead: 0,
+    });
+    const args = buildMonitoringArgs(request, "outputs/runs/run-1");
+    expect(args).toContain("--sample-size");
+    expect(args).not.toContain("--triggered-capture-budget");
+    expect(args).toContain("--triggered-lookback");
+    expect(args).toContain("0");
   });
 });

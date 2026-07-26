@@ -359,7 +359,7 @@ export function ConversationQueue({
                       />
                       Perf
                     </Badge>
-                    {item.latencyMs > 0 && (
+                    {item.latencyMs !== null && (
                       <span className="text-[10px] text-muted-foreground">
                         <Clock className="h-2.5 w-2.5 inline mr-0.5" />
                         {item.latencyMs}ms

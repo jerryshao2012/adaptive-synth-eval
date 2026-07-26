@@ -163,7 +163,12 @@ RUN_ID=copy_the_run_id_printed_by_ase_run
 uv run ase monitor run --run-folder "outputs/runs/$RUN_ID" --dry-run
 ```
 
-Common flags are `--sample-size`, `--interval-minutes`, `--sampling-strategy`, `--max-windows`, `--metrics-config`, and `--incomplete-run-action`. See the [Monitoring guide](monitoring.md) for sampling, fingerprints, incremental scheduling, recovery, timestamps, and the complete flag reference.
+Common flags are `--sample-size`, `--interval-minutes`, `--sampling-strategy`,
+`--max-windows`, `--metrics-config`, and `--incomplete-run-action`. Triggered
+monitoring also accepts `--triggered-lookback`, `--triggered-lookahead`, and the
+CLI-only `--trigger-policy`; `--sample-size` is its capture budget. See the
+[Monitoring guide](monitoring.md) for ordering, fingerprints, resume behavior,
+and the complete flag reference.
 
 ## Loop command map
 

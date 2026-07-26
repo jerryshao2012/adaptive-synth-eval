@@ -54,7 +54,7 @@ type StartMonitoringFn = (
   request: MonitoringStartRequest
 ) => Promise<MonitoringStartResponse>;
 
-async function handleMonitoringPost(
+export async function handleMonitoringPost(
   request: NextRequest,
   startFn: StartMonitoringFn
 ) {

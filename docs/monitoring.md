@@ -96,6 +96,36 @@ Monitoring uses SHA-256-derived fingerprints to decide whether stored scores rem
 
 These fingerprints are generated automatically; there is no metric-version flag. Metric definitions are shipped in `src/adaptive_synth_eval/monitoring/metrics/*.yaml`. A custom monolithic metrics file can be supplied with `--metrics-config` for testing or controlled overrides.
 
+Triggered selection has a separate fingerprint covering the complete trigger
+policy, lookback, lookahead, `sample_size`, and selector algorithm version. A
+change to any of these restarts selection automatically while retaining
+fingerprint-valid metric values.
+
+## Triggered monitoring
+
+```bash
+uv run ase monitor run \
+  --run-folder "outputs/runs/$RUN_ID" \
+  --sampling-strategy triggered \
+  --sample-size 100 \
+  --triggered-lookback 2 \
+  --triggered-lookahead 2
+```
+
+`sample_size` is the hard capture budget for each processing window. Trigger
+rows rank before context. Context ranks by associated trigger severity, nearest
+distance, before ahead of after at equal distance, then source line. Selection
+uses conversation-local history, so interleaved conversations cannot leak into
+one another. Lookback can cross a prior processing window and unresolved
+lookahead is persisted for a later invocation.
+
+The packaged YAML policy is the default. `--trigger-policy PATH` loads a
+complete replacement rather than merging rules. This path is intentionally
+CLI-only. Each rule has an optional `enabled` boolean (default `true`), and the
+top-level `agent_events_enabled` boolean controls whether row-provided
+`capture_events` are eligible. Both settings participate in the trigger-policy
+fingerprint, so changing either causes deterministic reselection.
+
 Use `--rescan` to traverse the source history again from row zero without
 discarding existing scores:
 
@@ -202,7 +232,10 @@ If a source row lacks a usable timestamp, the runner derives a deterministic fal
 ase monitor run --run-folder RUN_FOLDER
                 [--sample-size SAMPLE_SIZE]
                 [--interval-minutes INTERVAL_MINUTES]
-                [--sampling-strategy {all,random,systematic}]
+                [--sampling-strategy {all,random,systematic,triggered}]
+                [--triggered-lookback TRIGGERED_LOOKBACK]
+                [--triggered-lookahead TRIGGERED_LOOKAHEAD]
+                [--trigger-policy TRIGGER_POLICY]
                 [--max-windows MAX_WINDOWS]
                 [--rescan]
                 [--metrics-config METRICS_CONFIG]
@@ -213,9 +246,12 @@ ase monitor run --run-folder RUN_FOLDER
 | Flag | Meaning |
 | --- | --- |
 | `--run-folder` | Existing `outputs/runs/<run_id>` directory containing `chat_history.jsonl` |
-| `--sample-size` | Rows selected per time window; must be greater than zero |
+| `--sample-size` | Rows selected per time window; in triggered mode this is the hard capture budget |
 | `--interval-minutes` | Time-window width; must be greater than zero |
-| `--sampling-strategy` | Select all rows, a random subset, or an evenly spaced subset |
+| `--sampling-strategy` | Select all rows, a random/systematic subset, or trigger-plus-context rows |
+| `--triggered-lookback` | Same-conversation prior turns; zero is valid |
+| `--triggered-lookahead` | Same-conversation future turns persisted as pending; zero is valid |
+| `--trigger-policy` | CLI-only complete replacement trigger-policy YAML |
 | `--max-windows` | Optional cap on windows processed in this invocation |
 | `--rescan` | Traverse source history from the beginning and reuse fingerprint-valid stored scores |
 | `--metrics-config` | Optional path to a custom monolithic metrics YAML file |

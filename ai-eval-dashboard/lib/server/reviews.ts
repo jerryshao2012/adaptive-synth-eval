@@ -1,71 +1,44 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { METRIC_THRESHOLDS } from "@/lib/metrics";
 import {
-  getActiveMonitoringLaunch,
-  projectMonitoringRun,
-  startMonitoringRun,
-} from "@/lib/server/monitoring-launch";
-import { resolveRunDirectory } from "@/lib/server/run-paths";
-
+  getMonitoringEvaluations,
+  listRunSummaries,
+} from "@/lib/server/monitoring";
 import type {
   EvaluationRecord,
-  EvaluationsResponse,
-  MetricPointIdentity,
-  MonitoringRunStatus,
-  RunSummary,
-  TraceDetailsResponse,
+  HumanReview,
+  ReviewQueueFilters,
+  ReviewQueueItem,
+  ReviewQueueResponse,
+  ReviewStats,
 } from "@/types/evaluation";
 
-const REPO_ROOT = path.resolve(process.cwd(), "..");
-// Support environment variable override for runs directory (useful when project is on OneDrive)
+const REPO_ROOT = path.resolve(
+  process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..")
+);
 const RUNS_DIR =
-  process.env.ASE_RUNS_DIR ||
-  path.join(REPO_ROOT, "outputs", "runs");
-const DEFAULT_LIMIT = 2000;
+  process.env.ASE_RUNS_DIR || path.join(REPO_ROOT, "outputs", "runs");
+const HUMAN_REVIEWS_FILE = "human_reviews.jsonl";
 
 function runDirPath(runId: string): string {
   return path.join(RUNS_DIR, runId);
 }
 
-export async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(content) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function readTextFile(filePath: string): Promise<string | null> {
-  try {
-    return await fs.readFile(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-}
-
-export async function readJsonLines<T>(filePath: string): Promise<T[]> {
+async function readJsonLines<T>(filePath: string): Promise<T[]> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return content
-      .split(/\r?\n/)
+      .split(/\r?\n/u)
       .map((line) => line.trim())
       .filter(Boolean)
       .flatMap((line) => {
         try {
           return [JSON.parse(line) as T];
         } catch {
-          return [] as T[];
+          return [];
         }
       });
   } catch {
@@ -73,241 +46,369 @@ export async function readJsonLines<T>(filePath: string): Promise<T[]> {
   }
 }
 
-function safeNumber(value: unknown): number {
-  return typeof value === "number" ? value : Number(value || 0);
+function compositeKey(
+  runId: string,
+  conversationId: string,
+  turnId: string
+): string {
+  return `${runId}::${conversationId}::${turnId}`;
 }
 
-function clampPercent(completed: number, total: number): number {
-  if (total <= 0) {
+function avgAiScore(record: EvaluationRecord): number {
+  const metrics = [
+    ...Object.values(record.safety_metrics),
+    ...Object.values(record.performance_metrics),
+  ];
+  if (metrics.length === 0) {
     return 0;
   }
-  return Math.max(0, Math.min(100, Number(((completed / total) * 100).toFixed(2))));
+  return Math.round(
+    metrics.reduce((sum, metric) => sum + metric.percent, 0) / metrics.length
+  );
 }
 
-function sortRuns(a: RunSummary, b: RunSummary): number {
-  const left = a.updatedAt || a.startedAt || "";
-  const right = b.updatedAt || b.startedAt || "";
-  return right.localeCompare(left);
+function overallStatus(record: EvaluationRecord): HumanReview["overallStatus"] {
+  if (
+    record.safety_status === "fail" ||
+    record.performance_status === "fail"
+  ) {
+    return "fail";
+  }
+  if (
+    record.safety_status === "warn" ||
+    record.performance_status === "warn"
+  ) {
+    return "warn";
+  }
+  return "pass";
 }
 
-export async function listRunSummaries(): Promise<RunSummary[]> {
-  let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
-  try {
-    entries = (await fs.readdir(RUNS_DIR, {
-      withFileTypes: true,
-    })) as Array<{ name: string; isDirectory: () => boolean }>;
-  } catch {
-    return [];
+function scoresFromMetrics(
+  metrics: EvaluationRecord["safety_metrics"]
+): HumanReview["safetyScores"];
+function scoresFromMetrics(
+  metrics: EvaluationRecord["performance_metrics"]
+): HumanReview["performanceScores"];
+function scoresFromMetrics(
+  metrics:
+    | EvaluationRecord["safety_metrics"]
+    | EvaluationRecord["performance_metrics"]
+): HumanReview["safetyScores"] {
+  return Object.fromEntries(
+    Object.entries(metrics).map(([key, metric]) => [
+      key,
+      {
+        aiScore: metric.percent,
+        humanScore: metric.percent,
+        status: metric.status,
+      },
+    ])
+  );
+}
+
+export async function getHumanReviews(runId: string): Promise<HumanReview[]> {
+  return readJsonLines<HumanReview>(
+    path.join(runDirPath(runId), HUMAN_REVIEWS_FILE)
+  );
+}
+
+export async function saveHumanReview(review: HumanReview): Promise<void> {
+  const filePath = path.join(runDirPath(review.runId), HUMAN_REVIEWS_FILE);
+  const existing = await getHumanReviews(review.runId);
+  const rows = [
+    ...existing.filter((item) => item.reviewId !== review.reviewId),
+    review,
+  ];
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    rows.map((item) => JSON.stringify(item)).join("\n") + "\n",
+    "utf-8"
+  );
+}
+
+export async function getReviewQueue(
+  filters: ReviewQueueFilters = {}
+): Promise<ReviewQueueResponse> {
+  const page = Math.max(1, filters.page ?? 1);
+  const pageSize = Math.max(1, filters.pageSize ?? 50);
+  const runs = await listRunSummaries();
+  const runIds = filters.runId ? [filters.runId] : runs.map((run) => run.runId);
+  const allItems: ReviewQueueItem[] = [];
+
+  for (const runId of runIds) {
+    const [evaluations, reviews] = await Promise.all([
+      getMonitoringEvaluations(runId),
+      getHumanReviews(runId),
+    ]);
+    if (!evaluations) {
+      continue;
+    }
+    const reviewsByTurn = new Map(
+      reviews.map((review) => [
+        compositeKey(review.runId, review.conversationId, review.turnId),
+        review,
+      ])
+    );
+    for (const record of evaluations.evaluations) {
+      const conversationId = record.conversation_id || "";
+      const turnId = String(record.turn_id);
+      const review =
+        reviewsByTurn.get(compositeKey(runId, conversationId, turnId)) || null;
+      allItems.push({
+        runId,
+        conversationId,
+        turnId,
+        userText: record.user_text,
+        responseText: record.response_text,
+        timestamp: record.timestamp,
+        safetyStatus: record.safety_status,
+        performanceStatus: record.performance_status,
+        avgAiScore: avgAiScore(record),
+        hasHumanReview: Boolean(review),
+        reviewStatus: review?.reviewStatus ?? null,
+        flags: review?.flags ?? [],
+        reviewedAt: review?.reviewedAt ?? null,
+      });
+    }
   }
 
-  const runs = await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory())
-      .map(async (entry) => {
-        const runId = entry.name;
-        const runDir = runDirPath(runId);
-        const monitoringState = await readJsonFile<Record<string, unknown>>(
-          path.join(runDir, "monitoring_state.json")
-        );
-        const runState = await readJsonFile<Record<string, unknown>>(
-          path.join(runDir, "run_state.json")
-        );
-        const runSummary = await readJsonFile<Record<string, unknown>>(
-          path.join(runDir, "run_summary.json")
-        );
-        const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
-        const activeLaunch = await getActiveMonitoringLaunch(runDir);
-        const projection = projectMonitoringRun(monitoringState, activeLaunch);
+  const query = filters.searchText?.toLowerCase();
+  const filtered = allItems.filter((item) => {
+    if (
+      filters.status &&
+      item.safetyStatus !== filters.status &&
+      item.performanceStatus !== filters.status
+    ) {
+      return false;
+    }
+    if (
+      query &&
+      !item.userText.toLowerCase().includes(query) &&
+      !item.responseText.toLowerCase().includes(query)
+    ) {
+      return false;
+    }
+    if (filters.disputedOnly && !item.flags.includes("disputed")) {
+      return false;
+    }
+    if (filters.unreviewedOnly && item.hasHumanReview) {
+      return false;
+    }
+    return true;
+  });
 
-        const progressCompleted = safeNumber(
-          monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
-        );
-        const progressTotal = safeNumber(monitoringState?.total_lines ?? 0);
+  const sortBy = filters.sortBy ?? "timestamp";
+  const direction = filters.sortOrder === "asc" ? 1 : -1;
+  filtered.sort((left, right) => {
+    if (sortBy === "avgAiScore") {
+      return (left.avgAiScore - right.avgAiScore) * direction;
+    }
+    const leftValue =
+      sortBy === "safetyStatus"
+        ? left.safetyStatus
+        : sortBy === "reviewStatus"
+          ? left.reviewStatus || ""
+          : left.timestamp;
+    const rightValue =
+      sortBy === "safetyStatus"
+        ? right.safetyStatus
+        : sortBy === "reviewStatus"
+          ? right.reviewStatus || ""
+          : right.timestamp;
+    return leftValue.localeCompare(rightValue) * direction;
+  });
 
-        const summary: RunSummary = {
-          runId,
-          mode: String(runSummary?.mode || runState?.mode || "unknown"),
-          monitoringStatus: projection.monitoringStatus,
-          startedAt: String(
-            monitoringState?.started_at || runState?.started_at || runSummary?.started_at || ""
-          ),
-          updatedAt: String(
-            monitoringState?.updated_at || runState?.updated_at || runSummary?.completed_at || ""
-          ),
-          completedAt: runSummary?.completed_at ? String(runSummary.completed_at) : undefined,
-          progress: {
-            completed: progressCompleted,
-            total: progressTotal,
-            percent: clampPercent(progressCompleted, progressTotal),
-          },
-          evaluationFingerprint: monitoringState?.evaluation_fingerprint
-            ? String(monitoringState.evaluation_fingerprint)
-            : undefined,
-          hasMonitoringState: Boolean(monitoringState),
-          hasMonitoringScores: hasScores,
-          canStart: projection.canStart,
-          canContinue: projection.canContinue,
-          canReevaluate: projection.canReevaluate,
-        };
-
-        return summary;
-      })
-  );
-
-  return runs.sort(sortRuns);
-}
-
-export async function getMonitoringStatus(
-  runId: string,
-  repoRoot = REPO_ROOT
-): Promise<MonitoringRunStatus | null> {
-  const normalizedRunId = runId.trim();
-  const runDir = await resolveRunDirectory(runId, repoRoot);
-
-  const monitoringState = await readJsonFile<Record<string, unknown>>(
-    path.join(runDir, "monitoring_state.json")
-  );
-  const progressMarkdown = await readTextFile(path.join(runDir, "eval_progress.md"));
-  const hasScores = await fileExists(path.join(runDir, "monitoring_scores.jsonl"));
-  const activeLaunch = await getActiveMonitoringLaunch(runDir);
-  const projection = projectMonitoringRun(monitoringState, activeLaunch);
-
-  const completed = safeNumber(
-    monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
-  );
-  const total = safeNumber(monitoringState?.total_lines ?? 0);
-
+  const start = (page - 1) * pageSize;
   return {
-    runId: normalizedRunId,
-    monitoringStatus: projection.monitoringStatus,
-    progress: {
-      completed,
-      total,
-      percent: clampPercent(completed, total),
-    },
-    evaluationFingerprint: monitoringState?.evaluation_fingerprint
-      ? String(monitoringState.evaluation_fingerprint)
-      : undefined,
-    progressMarkdown,
-    state: monitoringState,
-    hasMonitoringScores: hasScores,
-    updatedAt: monitoringState?.updated_at ? String(monitoringState.updated_at) : undefined,
-  };
-}
-
-export async function getMonitoringEvaluations(
-  runId: string,
-  from?: string,
-  to?: string,
-  limit = DEFAULT_LIMIT
-): Promise<EvaluationsResponse | null> {
-  const runDir = runDirPath(runId);
-  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
-  if (!(await fileExists(runDir))) {
-    return null;
-  }
-  if (!(await fileExists(scoresPath))) {
-    return {
-      evaluations: [],
-      total: 0,
-      from: from || "",
-      to: to || "",
-    };
-  }
-
-  const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
-  const filtered = rows
-    .filter((row) => {
-      if (!row.timestamp) {
-        return false;
-      }
-      if (from && row.timestamp < from) {
-        return false;
-      }
-      if (to && row.timestamp > to) {
-        return false;
-      }
-      return true;
-    })
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    .slice(0, limit)
-    .map((row) => ({
-      ...row,
-      run_id: runId,
-      variant: row.variant || "raw",
-    }));
-
-  return {
-    evaluations: filtered,
+    items: filtered.slice(start, start + pageSize),
     total: filtered.length,
-    from: from || "",
-    to: to || "",
+    page,
+    pageSize,
   };
 }
 
-function sameTurnId(left: unknown, right: unknown): boolean {
-  return String(left ?? "") === String(right ?? "");
-}
-
-function sameConversationId(left: unknown, right: unknown): boolean {
-  return String(left ?? "") === String(right ?? "");
-}
-
-export async function getMonitoringTraceDetails(
-  point: MetricPointIdentity
-): Promise<TraceDetailsResponse | null> {
-  const runDir = runDirPath(point.runId);
-  if (!(await fileExists(runDir))) {
+export async function getReviewDetail(
+  runId: string,
+  turnId: string
+): Promise<{
+  evaluation: EvaluationRecord;
+  existingReview: HumanReview | null;
+} | null> {
+  const evaluations = await getMonitoringEvaluations(runId);
+  if (!evaluations) {
     return null;
   }
-
-  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
-  const chatHistoryPath = path.join(runDir, "chat_history.jsonl");
-  const turnsPath = path.join(runDir, "turns.jsonl");
-
-  const evaluationRows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(
-    scoresPath
+  const evaluation = evaluations.evaluations.find(
+    (record) => String(record.turn_id) === turnId
   );
-
-  const matchedEvaluation =
-    evaluationRows.find(
-      (row) =>
-        sameConversationId(row.conversation_id, point.conversationId) &&
-        sameTurnId(row.turn_id, point.turnId)
-    ) ||
-    evaluationRows.find(
-      (row) =>
-        row.timestamp === point.timestamp &&
-        sameTurnId(row.turn_id, point.turnId)
-    ) ||
-    null;
-
-  const chatHistoryRows = await readJsonLines<Record<string, unknown>>(chatHistoryPath);
-  const matchedChatHistory =
-    chatHistoryRows.find(
-      (row) =>
-        sameConversationId(row.conversation_id, point.conversationId) &&
-        sameTurnId(row.turn_id, point.turnId)
-    ) || null;
-
-  const turnRows = await readJsonLines<Record<string, unknown>>(turnsPath);
-  const matchedTurn =
-    turnRows.find(
-      (row) =>
-        sameConversationId(row.conversation_id, point.conversationId) &&
-        sameTurnId(row.turn_id, point.turnId)
-    ) || null;
-
+  if (!evaluation) {
+    return null;
+  }
+  const reviews = await getHumanReviews(runId);
   return {
-    point,
-    evaluationRecord: matchedEvaluation,
-    chatHistoryRecord: matchedChatHistory,
-    turnRecord: matchedTurn,
-    notFoundReason:
-      matchedEvaluation || matchedChatHistory || matchedTurn
-        ? undefined
-        : "No matching records were found for this chart point in monitoring/chat artifacts.",
+    evaluation,
+    existingReview:
+      reviews.find(
+        (review) => review.runId === runId && review.turnId === turnId
+      ) ?? null,
   };
 }
 
-export { startMonitoringRun };
+function createReview(
+  runId: string,
+  evaluation: EvaluationRecord,
+  existingReview: HumanReview | null,
+  options: {
+    reviewerId: string;
+    reviewStatus: HumanReview["reviewStatus"];
+    flags: HumanReview["flags"];
+  }
+): HumanReview {
+  const now = new Date().toISOString();
+  return {
+    reviewId: existingReview?.reviewId ?? randomUUID(),
+    evaluationRecordId: compositeKey(
+      runId,
+      evaluation.conversation_id || "",
+      String(evaluation.turn_id)
+    ),
+    runId,
+    conversationId: evaluation.conversation_id || "",
+    turnId: String(evaluation.turn_id),
+    reviewerId: existingReview?.reviewerId ?? options.reviewerId,
+    reviewStatus: options.reviewStatus,
+    safetyScores:
+      existingReview?.safetyScores ??
+      scoresFromMetrics(evaluation.safety_metrics),
+    performanceScores:
+      existingReview?.performanceScores ??
+      scoresFromMetrics(evaluation.performance_metrics),
+    overallStatus: existingReview?.overallStatus ?? overallStatus(evaluation),
+    notes: existingReview?.notes ?? "",
+    flags: options.flags,
+    reviewedAt: existingReview?.reviewedAt ?? now,
+    createdAt: existingReview?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+export async function bulkApprove(
+  recordRefs: Array<{ runId: string; turnId: string }>
+): Promise<number> {
+  let updated = 0;
+  for (const { runId, turnId } of recordRefs) {
+    const detail = await getReviewDetail(runId, turnId);
+    if (!detail) {
+      continue;
+    }
+    await saveHumanReview(
+      createReview(runId, detail.evaluation, detail.existingReview, {
+        reviewerId: "auto-approved",
+        reviewStatus: "approved",
+        flags: detail.existingReview?.flags ?? ["reviewed_ok"],
+      })
+    );
+    updated += 1;
+  }
+  return updated;
+}
+
+export async function bulkFlag(
+  recordRefs: Array<{ runId: string; turnId: string }>,
+  flag: string
+): Promise<number> {
+  let updated = 0;
+  for (const { runId, turnId } of recordRefs) {
+    const detail = await getReviewDetail(runId, turnId);
+    if (!detail) {
+      continue;
+    }
+    const typedFlag = flag as HumanReview["flags"][number];
+    const existingFlags = detail.existingReview?.flags ?? [];
+    const flags = existingFlags.includes(typedFlag)
+      ? existingFlags
+      : [...existingFlags, typedFlag];
+    await saveHumanReview(
+      createReview(runId, detail.evaluation, detail.existingReview, {
+        reviewerId: "bulk-flag",
+        reviewStatus: detail.existingReview?.reviewStatus ?? "draft",
+        flags,
+      })
+    );
+    updated += 1;
+  }
+  return updated;
+}
+
+export async function getReviewStats(): Promise<ReviewStats> {
+  const runs = await listRunSummaries();
+  let totalRecords = 0;
+  let reviewedCount = 0;
+  let draftCount = 0;
+  let approvedCount = 0;
+  let disputedCount = 0;
+  const agreementSums: Record<string, number> = Object.fromEntries(
+    Object.keys(METRIC_THRESHOLDS).map((key) => [key, 0])
+  );
+  const agreementCounts: Record<string, number> = Object.fromEntries(
+    Object.keys(METRIC_THRESHOLDS).map((key) => [key, 0])
+  );
+
+  for (const run of runs) {
+    const [evaluations, reviews] = await Promise.all([
+      getMonitoringEvaluations(run.runId),
+      getHumanReviews(run.runId),
+    ]);
+    if (!evaluations) {
+      continue;
+    }
+    totalRecords += evaluations.total;
+    for (const review of reviews) {
+      reviewedCount += 1;
+      draftCount += review.reviewStatus === "draft" ? 1 : 0;
+      approvedCount += review.reviewStatus === "approved" ? 1 : 0;
+      disputedCount += review.flags.includes("disputed") ? 1 : 0;
+      for (const [metricKey, score] of Object.entries({
+        ...review.safetyScores,
+        ...review.performanceScores,
+      })) {
+        agreementSums[metricKey] ??= 0;
+        agreementCounts[metricKey] ??= 0;
+        agreementSums[metricKey] +=
+          Math.abs(score.aiScore - score.humanScore) <= 5 ? 1 : 0;
+        agreementCounts[metricKey] += 1;
+      }
+    }
+  }
+
+  const perMetricAgreement = Object.fromEntries(
+    Object.keys(agreementSums).map((key) => [
+      key,
+      agreementCounts[key] > 0
+        ? Math.round((agreementSums[key] / agreementCounts[key]) * 100)
+        : 100,
+    ])
+  );
+  const agreementCount = Object.values(agreementCounts).reduce(
+    (sum, count) => sum + count,
+    0
+  );
+  const agreementSum = Object.values(agreementSums).reduce(
+    (sum, count) => sum + count,
+    0
+  );
+
+  return {
+    totalRecords,
+    reviewedCount,
+    draftCount,
+    approvedCount,
+    disputedCount,
+    averageAgreement:
+      agreementCount > 0
+        ? Math.round((agreementSum / agreementCount) * 100)
+        : 100,
+    perMetricAgreement,
+  };
+}

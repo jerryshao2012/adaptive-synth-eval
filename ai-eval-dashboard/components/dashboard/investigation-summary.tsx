@@ -176,7 +176,11 @@ export function InvestigationSummaryCard({
           />
           <StatItem
             label="Avg Latency"
-            value={`${summary.avgLatencyMs}ms`}
+            value={
+              summary.avgLatencyMs === null
+                ? "Unknown"
+                : `${summary.avgLatencyMs}ms`
+            }
             sub="per turn"
             icon={Zap}
             tone="neutral"

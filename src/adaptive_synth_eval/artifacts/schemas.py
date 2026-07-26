@@ -31,6 +31,8 @@ class ChatHistoryRecord:
     generation_metadata: dict[str, Any] | None = None
     reference_context: str | None = None
     reference_answer: str | None = None
+    capture_events: list[dict[str, Any]] | None = None
+    status_code: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

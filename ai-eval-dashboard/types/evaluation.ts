@@ -45,14 +45,18 @@ export interface PerformanceMetrics {
 }
 
 export interface SystemReliability {
-  llm_latency_ms: number;
-  llm_latency_status: "pass" | "warn" | "fail";
-  guardrail_latency_ms: number;
-  guardrail_latency_status: "pass" | "warn" | "fail";
-  total_latency_ms: number;
-  total_latency_status: "pass" | "warn" | "fail";
-  availability: number;
-  availability_status: "pass" | "warn" | "fail";
+  target_latency_ms?: number | null;
+  llm_latency_ms: number | null;
+  llm_latency_status: "pass" | "warn" | "fail" | "unknown";
+  guardrail_latency_ms: number | null;
+  guardrail_latency_status: "pass" | "warn" | "fail" | "unknown";
+  total_latency_ms: number | null;
+  total_latency_status: "pass" | "warn" | "fail" | "unknown";
+  availability: number | null;
+  availability_status: "pass" | "warn" | "fail" | "unknown";
+  availability_evidence?: string;
+  trace_error_count?: number;
+  tool_error_count?: number;
 }
 
 export interface EvaluationRecord {
@@ -75,6 +79,19 @@ export interface EvaluationRecord {
   scenario?: string;
   persona?: string;
   attack_category?: string;
+  // Triggered sampling metadata
+  capture_events?: Array<{
+    trigger_id: string;
+    source: string;
+    severity: string;
+    reason: string;
+  }>;
+  selection_provenance?: Array<Record<string, unknown>>;
+  selected_for_monitoring?: boolean;
+  evaluation_runtime?: {
+    elapsed_ms: number;
+    status: "pass" | "warn" | "fail";
+  };
 }
 
 export interface EvaluationsResponse {
@@ -126,17 +143,32 @@ export interface MonitoringRunStatus {
   state: Record<string, unknown> | null;
   hasMonitoringScores: boolean;
   updatedAt?: string;
+  // Triggered sampling metrics (populated when samplingStrategy === "triggered")
+  triggerMetrics?: {
+    triggersDetected: number;
+    rowsPromoted: number;
+    budgetUsed: number;
+    budgetAvailable: number;
+    budgetDrops: number;
+    deduplicatedContext: number;
+    pendingLookahead: number;
+    policyFingerprint?: string;
+  };
 }
 
 export type MonitoringAction = "start" | "continue" | "reevaluate";
 
-export type SamplingStrategy = "all" | "random" | "systematic";
+export type SamplingStrategy = "all" | "random" | "systematic" | "triggered";
 
 export interface EvalRunParameters {
   samplingStrategy: SamplingStrategy;
   sampleSize: number;
   intervalMinutes: number;
   maxWindows: number | null;
+  // Triggered sampling strategy parameters
+  triggeredLookback?: number;
+  triggeredLookahead?: number;
+  triggerPolicyFingerprint?: string;
 }
 
 export interface MetricPointIdentity {
@@ -431,7 +463,7 @@ export interface InvestigationSummary {
     failCount: number;
     avgScore: number;
   } | null;
-  avgLatencyMs: number;
+  avgLatencyMs: number | null;
   comparisonWithPrior: {
     passRateChange: number;
     failRateChange: number;
@@ -476,7 +508,7 @@ export interface ConversationQueueItem {
   failedMetrics: string[];
   safetyScores: Record<string, number>;
   performanceScores: Record<string, number>;
-  latencyMs: number;
+  latencyMs: number | null;
   scenario?: string;
   persona?: string;
   attackCategory?: string;

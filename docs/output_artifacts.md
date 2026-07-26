@@ -29,6 +29,12 @@ outputs/runs/<run_id>/
 ├── monitoring_state.json       # Monitoring resume/checkpoint state
 ├── eval_progress.md            # Monitoring progress/status markdown
 ├── monitoring.log              # Append-only dashboard-launched CLI output
+├── capture/
+│   ├── local/<producer>.jsonl  # Optional bounded rich producer buffers
+│   ├── skeleton.jsonl          # Compact records with durable locators
+│   ├── envelopes.jsonl         # Rich records resolved during promotion
+│   ├── triggers.jsonl          # Idempotent detected-trigger journal
+│   └── promotions.jsonl        # Promotion outcomes, including unavailable rows
 └── personas/
 	├── <persona_id>_memory.json # Unified authoritative, versioned actor state
 	└── <persona_id>_memory.md   # Synth state / unified compatibility view
@@ -172,6 +178,22 @@ a threshold-only policy change reuses the stored numeric score and recalculates
 its pass/warn/fail label without a judge call. An unchanged rescan can therefore
 report zero newly evaluated rows.
 
+Triggered rows additionally carry `selected_for_monitoring`,
+`source_line_index`, `selection_fingerprint`, `trigger_policy_fingerprint`,
+`selector_algorithm_version`, and `selection_provenance`. Provenance is a list
+because one row can belong to overlapping trigger contexts. Each association
+records trigger/rule identity, event type, detector name, reason, source,
+severity, role, distance, and policy fingerprint. Reconciliation retains valid
+metric values but marks rows outside the current selection inactive; dashboard
+queries omit inactive cache rows.
+
+`system_reliability` contains observed target telemetry. Missing latency or
+availability evidence is `null` with status `unknown`. Availability uses
+explicit errors first, then explicit availability, then the persisted target
+HTTP status (including telemetry nested in `response_raw`), and finally response
+presence. Evaluator elapsed time is stored separately under
+`evaluation_runtime`.
+
 ### Monitoring state and dashboard log
 
 `monitoring_state.json` is the resumable checkpoint and the dashboard's source
@@ -180,6 +202,26 @@ for saved launch defaults. Its operational fields include `sample_size`,
 `status`, `next_line_index`, row/window counts, source identity, provider, and
 evaluation/policy fingerprints. `eval_progress.md` presents the same progress in
 human-readable form, including the saved maximum-window setting.
+
+Triggered state also includes trigger-policy and selection fingerprints,
+selector version, lookback/lookahead, recent conversation locators, pending
+lookahead, detected/selected IDs, budget drops, and trigger counters.
+
+### Capture storage
+
+Production capture is opt-in with `ASE_CAPTURE_ENABLED=true`. Rich data is
+written to one bounded file per producer and skeletons reference it with a
+locator. The default FIFO limit is 1000 records per producer; override it with
+`ASE_CAPTURE_MAX_RECORDS_PER_PRODUCER`.
+
+Central journals use file locking, append-only writes, and stable-ID
+deduplication. Monitoring resolves a production chat turn through its stable
+`chat-<conversation_id>-<turn_id>` skeleton ID, so the canonical chat-history
+schema does not need to embed a local path. A delayed promotion whose skeleton
+or locator is absent or whose bounded record expired remains auditable as
+`unavailable_missing` or `unavailable_evicted`. Rich buffers can contain
+messages or memory deltas, so apply the run's normal access and retention
+controls.
 
 `monitoring.log` is append-only across dashboard Start, Continue, and
 Re-evaluate launches. Each dashboard launch writes a timestamped boundary, then
@@ -214,6 +256,7 @@ The principal files `chat_history.jsonl` and `chat_history.csv` document every t
 | `clarification_score` | `float` | Clarification score (synthetic turns only) |
 | `failure_mode` | `str` | Identified failure category/type (if any) |
 | `latency_ms` | `float` | Turn completion latency |
+| `status_code` | `int` | Target HTTP status code, when observed |
 | `error` | `str` | HTTP or backend client error string (if failed) |
 | `synthetic_flag` | `bool` | True if synthetic generation |
 
@@ -222,6 +265,7 @@ The principal files `chat_history.jsonl` and `chat_history.csv` document every t
 - `retrieved_policy_ids` (`list`): List of document or policy IDs retrieved by the target bot.
 - `response_raw` (`dict`): The raw JSON payload returned by the chatbot endpoint.
 - `generation_metadata` (`dict`): Generation metadata; unified rows include turn type (`synth` or `adversarial`) and adversarial strategy fields where applicable.
+- `capture_events` (`list`): Optional typed events emitted by an instrumented producer.
 
 `response_raw` is retained in `chat_history.jsonl` but intentionally omitted from the
 CSV field list. `retrieved_policy_ids` and `generation_metadata` are present in both

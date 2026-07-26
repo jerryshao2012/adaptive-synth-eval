@@ -180,7 +180,7 @@ export function TraceDrawer({
   // our animation is running for a newly selected point.
   const showLoadingState = isLoading || (isPointSwitchAnimating && !!pointKey);
 
-  const resolvedMetricStatus =
+  const rawMetricStatus =
     trace && trace.evaluationRecord
       ? trace.point.metricGroup === "safety"
         ? trace.evaluationRecord.safety_status
@@ -194,6 +194,8 @@ export function TraceDrawer({
                 ? trace.evaluationRecord.system_reliability.total_latency_status
                 : trace.evaluationRecord.system_reliability.availability_status
       : null;
+  const resolvedMetricStatus =
+    rawMetricStatus === "unknown" ? null : rawMetricStatus;
 
   return (
     <>

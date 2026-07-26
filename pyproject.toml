@@ -54,6 +54,7 @@ namespaces = true
   "catalog/*/assets/**/*",
 ]
 "adaptive_synth_eval.monitoring.metrics" = ["*.yaml"]
+"adaptive_synth_eval.monitoring" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

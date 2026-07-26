@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from adaptive_synth_eval.capture.models import PromotionRecord, PromotionRole
+from adaptive_synth_eval.capture.sinks import CaptureCoordinator
 from adaptive_synth_eval.clients.llm import LLMClient
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.monitoring import evaluator as evaluator_core
@@ -29,6 +31,15 @@ from adaptive_synth_eval.monitoring.metric_definitions import (
     MetricsConfig,
     load_metrics_config,
 )
+from adaptive_synth_eval.monitoring.selection import (
+    SELECTOR_ALGORITHM_VERSION,
+    TriggeredSelectionState,
+    select_triggered_window,
+)
+from adaptive_synth_eval.monitoring.triggers import (
+    TriggerPolicy,
+    load_trigger_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +51,11 @@ _PROGRESS_MARKDOWN_FILE = "eval_progress.md"
 _JUDGE_PROTOCOL_VERSION = evaluator_core.JUDGE_PROTOCOL_VERSION
 _JUDGE_SETTINGS = evaluator_core.JUDGE_SETTINGS
 
+
 def _fingerprint_payload(payload: Any) -> str:
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
@@ -50,10 +64,10 @@ def _judge_identity(llm: LLMClient, *, dry_run: bool) -> dict[str, str]:
 
 
 def _build_judge_batches(
-        metrics_config: MetricsConfig,
-        *,
-        default_llm: LLMClient,
-        dry_run: bool,
+    metrics_config: MetricsConfig,
+    *,
+    default_llm: LLMClient,
+    dry_run: bool,
 ) -> list[JudgeBatch]:
     """Partition metrics by output group and resolved judge route."""
     return evaluator_core.build_judge_batches(
@@ -72,12 +86,12 @@ def _metric_judge_fingerprints(batches: list[JudgeBatch]) -> dict[str, str]:
 
 
 def _batch_input_fingerprint(
-        batch: JudgeBatch,
-        *,
-        user_text: str,
-        response_text: str,
-        reference_context: str | None,
-        reference_answer: str | None,
+    batch: JudgeBatch,
+    *,
+    user_text: str,
+    response_text: str,
+    reference_context: str | None,
+    reference_answer: str | None,
 ) -> str:
     payload: dict[str, str | None] = {
         "user_message": user_text,
@@ -92,13 +106,13 @@ def _batch_input_fingerprint(
 
 
 def _judge_batch_versions(
-        batches: list[JudgeBatch],
-        batch_quality: dict[str, str],
-        *,
-        user_text: str,
-        response_text: str,
-        reference_context: str | None,
-        reference_answer: str | None,
+    batches: list[JudgeBatch],
+    batch_quality: dict[str, str],
+    *,
+    user_text: str,
+    response_text: str,
+    reference_context: str | None,
+    reference_answer: str | None,
 ) -> dict[str, dict[str, Any]]:
     return {
         batch.batch_id: {
@@ -113,23 +127,21 @@ def _judge_batch_versions(
                 reference_context=reference_context,
                 reference_answer=reference_answer,
             ),
-            "refresh_quality": batch_quality.get(
-                batch.batch_id, "heuristic_fallback"
-            ),
+            "refresh_quality": batch_quality.get(batch.batch_id, "heuristic_fallback"),
         }
         for batch in batches
     }
 
 
 def _stale_batch_ids_for_row(
-        row: dict[str, Any],
-        metrics_config: MetricsConfig,
-        batches: list[JudgeBatch],
-        *,
-        user_text: str,
-        response_text: str,
-        reference_context: str | None,
-        reference_answer: str | None,
+    row: dict[str, Any],
+    metrics_config: MetricsConfig,
+    batches: list[JudgeBatch],
+    *,
+    user_text: str,
+    response_text: str,
+    reference_context: str | None,
+    reference_answer: str | None,
 ) -> set[str]:
     versions = row.get("value_versions")
     if not isinstance(versions, dict):
@@ -153,28 +165,26 @@ def _stale_batch_ids_for_row(
             reference_answer=reference_answer,
         )
         if (
-                saved.get("evaluation_group") != batch.group_name
-                or saved.get("metric_keys") != list(batch.metric_keys)
-                or saved.get("judge_fingerprint") != batch.judge_fingerprint
-                or saved.get("input_fingerprint") != expected_input
-                or saved.get("refresh_quality") == "heuristic_fallback"
+            saved.get("evaluation_group") != batch.group_name
+            or saved.get("metric_keys") != list(batch.metric_keys)
+            or saved.get("judge_fingerprint") != batch.judge_fingerprint
+            or saved.get("input_fingerprint") != expected_input
+            or saved.get("refresh_quality") == "heuristic_fallback"
         ):
             stale.add(batch.batch_id)
             continue
         for key in batch.metric_keys:
             saved_metric = saved_metrics.get(key)
-            if (
-                    not isinstance(saved_metric, dict)
-                    or saved_metric.get("content_fingerprint")
-                    != metrics_config.metric_content_fingerprints.get(key)
-            ):
+            if not isinstance(saved_metric, dict) or saved_metric.get(
+                "content_fingerprint"
+            ) != metrics_config.metric_content_fingerprints.get(key):
                 stale.add(batch.batch_id)
                 break
     return stale
 
 
 def _has_retryable_fallbacks(
-        scores: dict[tuple[str, str], dict[str, Any]],
+    scores: dict[tuple[str, str], dict[str, Any]],
 ) -> bool:
     for row in scores.values():
         versions = row.get("value_versions")
@@ -182,9 +192,9 @@ def _has_retryable_fallbacks(
         if not isinstance(batches, dict):
             continue
         if any(
-                isinstance(batch, dict)
-                and batch.get("refresh_quality") == "heuristic_fallback"
-                for batch in batches.values()
+            isinstance(batch, dict)
+            and batch.get("refresh_quality") == "heuristic_fallback"
+            for batch in batches.values()
         ):
             return True
     return False
@@ -205,15 +215,14 @@ def _current_model_identity(llm: LLMClient, *, dry_run: bool) -> dict[str, str]:
 
 def _current_metric_groups(metrics_config: MetricsConfig) -> dict[str, str]:
     return {
-        key: metric.evaluation_group
-        for key, metric in metrics_config.metrics.items()
+        key: metric.evaluation_group for key, metric in metrics_config.metrics.items()
     }
 
 
 def _stale_groups_for_row(
-        row: dict[str, Any],
-        metrics_config: MetricsConfig,
-        model_identity: dict[str, str],
+    row: dict[str, Any],
+    metrics_config: MetricsConfig,
+    model_identity: dict[str, str],
 ) -> set[str]:
     """Return groups whose cached metric values cannot be safely reused."""
     current_groups = _current_metric_groups(metrics_config)
@@ -226,15 +235,22 @@ def _stale_groups_for_row(
     saved_groups = versions.get("metric_groups")
     saved_quality = versions.get("group_refresh_quality")
     saved_model = versions.get("resolved_model")
-    if not all(isinstance(value, dict) for value in (
-            saved_metrics, saved_groups, saved_quality, saved_model,
-    )):
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            saved_metrics,
+            saved_groups,
+            saved_quality,
+            saved_model,
+        )
+    ):
         return all_groups
     if saved_model != model_identity:
         return all_groups
 
     stale: set[str] = {
-        group for group, quality in saved_quality.items()
+        group
+        for group, quality in saved_quality.items()
         if quality == "heuristic_fallback" and group in all_groups
     }
     all_metric_keys = set(current_groups) | set(saved_groups) | set(saved_metrics)
@@ -253,7 +269,9 @@ def _stale_groups_for_row(
         if not isinstance(saved_metric, dict):
             stale.add(current_group)
             continue
-        if saved_metric.get("content_fingerprint") != metrics_config.metric_content_fingerprints.get(key):
+        if saved_metric.get(
+            "content_fingerprint"
+        ) != metrics_config.metric_content_fingerprints.get(key):
             stale.add(current_group)
     return stale
 
@@ -283,10 +301,10 @@ def _get_row_timestamp(row: dict[str, Any], index: int) -> datetime:
 
 
 def _read_time_window_rows(
-        chat_path: Path,
-        *,
-        start_index: int,
-        interval_minutes: int,
+    chat_path: Path,
+    *,
+    start_index: int,
+    interval_minutes: int,
 ) -> tuple[list[tuple[int, dict[str, Any]]], int]:
     from datetime import timedelta
 
@@ -317,7 +335,9 @@ def _read_time_window_rows(
 
             if window_start_time is None:
                 window_start_time = row_time
-                window_end_time = window_start_time + timedelta(minutes=interval_minutes)
+                window_end_time = window_start_time + timedelta(
+                    minutes=interval_minutes
+                )
 
             if row_time < window_end_time:
                 window_rows.append((index, parsed))
@@ -329,16 +349,55 @@ def _read_time_window_rows(
     return window_rows, index
 
 
+def _read_rows_at_indices(
+    chat_path: Path,
+    indices: set[int],
+) -> dict[int, dict[str, Any]]:
+    """Read sparse source rows needed to reconstruct locator-only lookback state."""
+    if not indices:
+        return {}
+    wanted = {index for index in indices if index >= 0}
+    found: dict[int, dict[str, Any]] = {}
+    last = max(wanted, default=-1)
+    with chat_path.open("r", encoding="utf-8") as handle:
+        for index, raw in enumerate(handle):
+            if index > last or len(found) == len(wanted):
+                break
+            if index not in wanted:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                found[index] = row
+    return found
+
+
+def _recent_locator_indices(state: TriggeredSelectionState) -> set[int]:
+    indices: set[int] = set()
+    for snapshots in state.recent_by_conversation.values():
+        for snapshot in snapshots:
+            locator = snapshot.get("locator") if isinstance(snapshot, dict) else None
+            if isinstance(locator, dict):
+                try:
+                    indices.add(int(locator["line_index"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return indices
+
+
 def _sample_window_rows(
-        window_rows: list[tuple[int, dict[str, Any]]],
-        sample_size: int,
-        strategy: str,
+    window_rows: list[tuple[int, dict[str, Any]]],
+    sample_size: int,
+    strategy: str,
 ) -> list[tuple[int, dict[str, Any]]]:
     if len(window_rows) <= sample_size or strategy == "all":
         return window_rows
 
     if strategy == "random":
         import random
+
         sampled = random.sample(window_rows, sample_size)
         sampled.sort(key=lambda x: x[0])
         return sampled
@@ -348,25 +407,30 @@ def _sample_window_rows(
         sampled = [window_rows[int(i * k)] for i in range(sample_size)]
         return sampled
 
-    return window_rows
-
 
 def run_monitoring(
-        *,
-        run_dir: Path,
-        sample_size: int,
-        interval_minutes: int,
-        sampling_strategy: str = "all",
-        incomplete_run_action: str,
-        dry_run: bool,
-        max_windows: int | None,
-        metrics_config_path: Path | None = None,
-        rescan: bool = False,
+    *,
+    run_dir: Path,
+    sample_size: int,
+    interval_minutes: int,
+    sampling_strategy: str = "all",
+    incomplete_run_action: str,
+    dry_run: bool,
+    max_windows: int | None,
+    metrics_config_path: Path | None = None,
+    rescan: bool = False,
+    triggered_lookback: int = 2,
+    triggered_lookahead: int = 2,
+    trigger_policy_path: Path | None = None,
 ) -> dict[str, Any]:
     if sample_size <= 0:
         raise ContractError("--sample-size must be greater than 0")
     if interval_minutes <= 0:
         raise ContractError("--interval-minutes must be greater than 0")
+    if triggered_lookback < 0:
+        raise ContractError("--triggered-lookback must be greater than or equal to 0")
+    if triggered_lookahead < 0:
+        raise ContractError("--triggered-lookahead must be greater than or equal to 0")
 
     chat_history_path = run_dir / _CHAT_HISTORY_FILE
     if not chat_history_path.exists():
@@ -428,6 +492,27 @@ def run_monitoring(
         chat_history_path,
         chat_history_source,
     )
+
+    # Initialize trigger policy for triggered strategy
+    trigger_policy = (
+        load_trigger_policy(trigger_policy_path)
+        if sampling_strategy == "triggered"
+        else None
+    )
+    selection_fingerprint = (
+        _fingerprint_payload(
+            {
+                "trigger_policy_fingerprint": trigger_policy.fingerprint(),
+                "lookback": triggered_lookback,
+                "lookahead": triggered_lookahead,
+                "sample_size": sample_size,
+                "selector_algorithm_version": SELECTOR_ALGORITHM_VERSION,
+            }
+        )
+        if trigger_policy is not None
+        else None
+    )
+    run_id = run_dir.name
     if state is not None and str(state.get("status") or "").lower() != "completed":
         action = _resolve_incomplete_action(incomplete_run_action, run_dir)
         if action == "abort":
@@ -443,12 +528,14 @@ def run_monitoring(
 
     # Determine whether existing scores are still valid.
     same_eval_fingerprint = bool(
-        state
-        and state.get("evaluation_fingerprint") == evaluation_fingerprint
+        state and state.get("evaluation_fingerprint") == evaluation_fingerprint
     )
     same_policy_fingerprints = bool(
-        state
-        and state.get("policy_fingerprints") == policy_fingerprints
+        state and state.get("policy_fingerprints") == policy_fingerprints
+    )
+    same_selection_fingerprint = bool(
+        sampling_strategy != "triggered"
+        or (state and state.get("selection_fingerprint") == selection_fingerprint)
     )
 
     # Load existing scores into a dict keyed by (conversation_id, turn_id).
@@ -462,22 +549,75 @@ def run_monitoring(
         state and state.get("retryable_fallbacks")
     ) or _has_retryable_fallbacks(existing_scores)
     reconciliation_needed = (
-            rescan
-            or not same_eval_fingerprint
-            or not same_policy_fingerprints
-            or source_relation in {"unknown", "rewritten"}
-            or retryable_fallbacks
+        rescan
+        or not same_eval_fingerprint
+        or not same_policy_fingerprints
+        or not same_selection_fingerprint
+        or source_relation in {"unknown", "rewritten"}
+        or retryable_fallbacks
     )
-    next_line_index = 0 if reconciliation_needed else int(state.get("next_line_index") or 0)
+    if sampling_strategy == "triggered" and reconciliation_needed:
+        for score in existing_scores.values():
+            score["selected_for_monitoring"] = False
+    next_line_index = (
+        0 if reconciliation_needed else int(state.get("next_line_index") or 0)
+    )
 
-    base_evaluated = int(state.get("evaluated_rows") or 0) if not reconciliation_needed else 0
-    base_skipped = int(state.get("skipped_rows") or 0) if not reconciliation_needed else 0
-    base_windows = int(state.get("windows_completed") or 0) if not reconciliation_needed else 0
+    base_evaluated = (
+        int(state.get("evaluated_rows") or 0) if not reconciliation_needed else 0
+    )
+    base_skipped = (
+        int(state.get("skipped_rows") or 0) if not reconciliation_needed else 0
+    )
+    base_windows = (
+        int(state.get("windows_completed") or 0) if not reconciliation_needed else 0
+    )
 
     windows_processed_this_run = 0
     evaluated_rows_this_run = 0
     skipped_rows_this_run = 0
     total_lines = _count_lines(chat_history_path)
+
+    # Initialize trigger metrics if using triggered strategy
+    trigger_metrics_this_run = None
+    if sampling_strategy == "triggered":
+        prior_metrics = (
+            state.get("trigger_metrics")
+            if state and not reconciliation_needed
+            else None
+        )
+        trigger_metrics_this_run = {
+            "triggers_detected": int(
+                (prior_metrics or {}).get("triggers_detected") or 0
+            ),
+            "rows_promoted": int((prior_metrics or {}).get("rows_promoted") or 0),
+            "budget_used": int((prior_metrics or {}).get("budget_used") or 0),
+            "budget_drops": int((prior_metrics or {}).get("budget_drops") or 0),
+            "deduplicated_context": int(
+                (prior_metrics or {}).get("deduplicated_context") or 0
+            ),
+            "pending_lookahead": int(
+                (prior_metrics or {}).get("pending_lookahead") or 0
+            ),
+        }
+    selector_state = (
+        TriggeredSelectionState.from_dict(state.get("triggered_selection"))
+        if (
+            sampling_strategy == "triggered"
+            and state
+            and same_selection_fingerprint
+            and not rescan
+        )
+        else TriggeredSelectionState()
+    )
+    capture_coordinator = (
+        CaptureCoordinator(run_dir) if sampling_strategy == "triggered" else None
+    )
+    selection_row_cache = _read_rows_at_indices(
+        chat_history_path,
+        _recent_locator_indices(selector_state),
+    )
+
     current_state = _build_state(
         run_dir=run_dir,
         status="in_progress",
@@ -495,6 +635,14 @@ def run_monitoring(
         policy_fingerprints=policy_fingerprints,
         chat_history_source=chat_history_source,
         retryable_fallbacks=_has_retryable_fallbacks(existing_scores),
+        trigger_metrics=trigger_metrics_this_run,
+        trigger_policy_fingerprint=(
+            trigger_policy.fingerprint() if trigger_policy else None
+        ),
+        selection_fingerprint=selection_fingerprint,
+        triggered_lookback=triggered_lookback,
+        triggered_lookahead=triggered_lookahead,
+        triggered_selection=selector_state.to_dict(),
     )
     _write_monitoring_state(run_dir, current_state)
     _write_progress_markdown(run_dir, current_state)
@@ -512,7 +660,92 @@ def run_monitoring(
             break
 
         window_id = base_windows + windows_processed_this_run + 1
-        sampled_rows = _sample_window_rows(window_rows, sample_size, sampling_strategy)
+
+        selection_provenance: dict[int, list[dict[str, Any]]] = {}
+        if sampling_strategy == "triggered" and trigger_policy:
+            selection_row_cache.update(dict(window_rows))
+            selection = select_triggered_window(
+                window_rows,
+                state=selector_state,
+                policy=trigger_policy,
+                run_id=run_id,
+                lookback=triggered_lookback,
+                lookahead=triggered_lookahead,
+                budget=sample_size,
+                row_resolver=lambda locator: selection_row_cache.get(
+                    locator.line_index
+                ),
+            )
+            selector_state = selection.state
+            retained_indices = _recent_locator_indices(selector_state)
+            selection_row_cache = {
+                index: row
+                for index, row in selection_row_cache.items()
+                if index in retained_indices
+            }
+            sampled_rows = selection.rows
+            selection_provenance = selection.provenance
+            if trigger_metrics_this_run is not None:
+                for key, value in selection.metrics.items():
+                    if key == "pending_lookahead":
+                        trigger_metrics_this_run[key] = value
+                    else:
+                        trigger_metrics_this_run[key] += value
+            if capture_coordinator is not None:
+                for trigger in selection.triggers:
+                    capture_coordinator.emit_trigger(trigger)
+                for line_index, row in sampled_rows:
+                    row_payload = json.dumps(
+                        row,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                        default=str,
+                    ).encode("utf-8")
+                    digest = hashlib.sha256(row_payload).hexdigest()
+                    for association in selection_provenance.get(line_index, []):
+                        role = PromotionRole(str(association["role"]))
+                        promotion = PromotionRecord(
+                            promotion_id=(
+                                f"{association['trigger_id']}/"
+                                f"{line_index}:{digest[:16]}/{role.value}"
+                            ),
+                            trigger_id=str(association["trigger_id"]),
+                            promoted_turn_key=(
+                                str(row.get("conversation_id") or ""),
+                                int(row.get("turn_id") or 0),
+                            ),
+                            promotion_role=role,
+                            promoted_content_digest=digest,
+                            promoted_size_bytes=len(row_payload),
+                            metadata={
+                                "source_line_index": line_index,
+                                "rule_id": association.get("rule_id"),
+                                "source": association.get("source"),
+                                "event_type": association.get("event_type"),
+                                "detector_name": association.get("detector_name"),
+                                "reason": association.get("reason"),
+                                "policy_fingerprint": association.get(
+                                    "policy_fingerprint"
+                                ),
+                                "selection_fingerprint": selection_fingerprint,
+                            },
+                        )
+                        capture_coordinator.promote(
+                            promotion,
+                            row.get("buffer_locator")
+                            or row.get("capture_buffer_locator")
+                            or capture_coordinator.locator_for_envelope(
+                                "chat-"
+                                f"{row.get('conversation_id') or ''}-"
+                                f"{row.get('turn_id') or 0}"
+                            ),
+                        )
+        else:
+            sampled_rows = _sample_window_rows(
+                window_rows, sample_size, sampling_strategy
+            )
+
         sampled_indices = {line_idx for line_idx, _ in sampled_rows}
 
         for idx_in_batch, (line_idx, chat_row) in enumerate(window_rows, 1):
@@ -522,7 +755,21 @@ def run_monitoring(
                 continue
 
             turn_key = _turn_key(chat_row)
+            provenance = selection_provenance.get(line_idx, [])
             if turn_key in existing_scores:
+                existing_scores[turn_key]["selected_for_monitoring"] = True
+                existing_scores[turn_key]["selection_provenance"] = provenance
+                existing_scores[turn_key]["source_line_index"] = line_idx
+                if trigger_policy is not None:
+                    existing_scores[turn_key]["selection_fingerprint"] = (
+                        selection_fingerprint
+                    )
+                    existing_scores[turn_key]["trigger_policy_fingerprint"] = (
+                        trigger_policy.fingerprint()
+                    )
+                    existing_scores[turn_key]["selector_algorithm_version"] = (
+                        SELECTOR_ALGORITHM_VERSION
+                    )
                 user_text = str(chat_row.get("user_message") or "")
                 response_text = str(chat_row.get("bot_response") or "")
                 reference_context, reference_answer = _reference_inputs(chat_row)
@@ -537,10 +784,29 @@ def run_monitoring(
                 )
                 if stale_batches:
                     existing_scores[turn_key] = _refresh_existing_row(
-                        existing_scores[turn_key], chat_row, dry_run,
-                        metrics_config, judge_batches, stale_batches, evaluation_fingerprint,
-                        policy_fingerprints, now_iso(),
+                        existing_scores[turn_key],
+                        chat_row,
+                        dry_run,
+                        metrics_config,
+                        judge_batches,
+                        stale_batches,
+                        evaluation_fingerprint,
+                        policy_fingerprints,
+                        now_iso(),
                     )
+                    existing_scores[turn_key]["selected_for_monitoring"] = True
+                    existing_scores[turn_key]["selection_provenance"] = provenance
+                    existing_scores[turn_key]["source_line_index"] = line_idx
+                    if trigger_policy is not None:
+                        existing_scores[turn_key]["selection_fingerprint"] = (
+                            selection_fingerprint
+                        )
+                        existing_scores[turn_key]["trigger_policy_fingerprint"] = (
+                            trigger_policy.fingerprint()
+                        )
+                        existing_scores[turn_key]["selector_algorithm_version"] = (
+                            SELECTOR_ALGORITHM_VERSION
+                        )
                     evaluated_rows_this_run += 1
                     continue
                 skipped_rows_this_run += 1
@@ -558,11 +824,17 @@ def run_monitoring(
                 source_line_index=line_idx,
                 started_at=now_iso(),
             )
+            evaluation["selected_for_monitoring"] = True
+            evaluation["selection_provenance"] = provenance
+            if trigger_policy is not None:
+                evaluation["selection_fingerprint"] = selection_fingerprint
+                evaluation["trigger_policy_fingerprint"] = trigger_policy.fingerprint()
+                evaluation["selector_algorithm_version"] = SELECTOR_ALGORITHM_VERSION
             elapsed_ms = int((time.perf_counter() - row_started) * 1000)
-            evaluation["system_reliability"]["llm_latency_ms"] = elapsed_ms
-            evaluation["system_reliability"]["total_latency_ms"] = elapsed_ms
-            evaluation["system_reliability"]["llm_latency_status"] = _latency_status(elapsed_ms)
-            evaluation["system_reliability"]["total_latency_status"] = _latency_status(elapsed_ms)
+            evaluation["evaluation_runtime"] = {
+                "elapsed_ms": elapsed_ms,
+                "status": _latency_status(elapsed_ms),
+            }
             existing_scores[turn_key] = evaluation
             evaluated_rows_this_run += 1
 
@@ -571,26 +843,6 @@ def run_monitoring(
                     f"Evaluating window {window_id}: row {idx_in_batch}/{len(window_rows)} "
                     f"(overall line {line_idx + 1}/{total_lines})"
                 )
-                current_state = _build_state(
-                    run_dir=run_dir,
-                    status="in_progress",
-                    sample_size=sample_size,
-                    interval_minutes=interval_minutes,
-                    sampling_strategy=sampling_strategy,
-                    max_windows=max_windows,
-                    next_line_index=line_idx + 1,
-                    total_lines=total_lines,
-                    evaluated_rows=base_evaluated + evaluated_rows_this_run,
-                    skipped_rows=base_skipped + skipped_rows_this_run,
-                    windows_completed=base_windows + windows_processed_this_run,
-                    llm_provider=judge_summary["provider"],
-                    evaluation_fingerprint=evaluation_fingerprint,
-                    policy_fingerprints=policy_fingerprints,
-                    chat_history_source=chat_history_source,
-                    retryable_fallbacks=_has_retryable_fallbacks(existing_scores),
-                )
-                _write_monitoring_state(run_dir, current_state)
-                _write_progress_markdown(run_dir, current_state)
 
         # Atomically write all scores after each window.
         _atomic_write_scores(run_dir / _MONITORING_SCORES_FILE, existing_scores)
@@ -615,6 +867,14 @@ def run_monitoring(
             policy_fingerprints=policy_fingerprints,
             chat_history_source=chat_history_source,
             retryable_fallbacks=_has_retryable_fallbacks(existing_scores),
+            trigger_metrics=trigger_metrics_this_run,
+            trigger_policy_fingerprint=(
+                trigger_policy.fingerprint() if trigger_policy else None
+            ),
+            selection_fingerprint=selection_fingerprint,
+            triggered_lookback=triggered_lookback,
+            triggered_lookahead=triggered_lookahead,
+            triggered_selection=selector_state.to_dict(),
         )
         _write_monitoring_state(run_dir, current_state)
         _write_progress_markdown(run_dir, current_state)
@@ -640,6 +900,14 @@ def run_monitoring(
         policy_fingerprints=policy_fingerprints,
         chat_history_source=chat_history_source,
         retryable_fallbacks=_has_retryable_fallbacks(existing_scores),
+        trigger_metrics=trigger_metrics_this_run,
+        trigger_policy_fingerprint=(
+            trigger_policy.fingerprint() if trigger_policy else None
+        ),
+        selection_fingerprint=selection_fingerprint,
+        triggered_lookback=triggered_lookback,
+        triggered_lookahead=triggered_lookahead,
+        triggered_selection=selector_state.to_dict(),
     )
     _write_monitoring_state(run_dir, final_state)
     _write_progress_markdown(run_dir, final_state)
@@ -666,17 +934,118 @@ def run_monitoring(
     }
 
 
+def _optional_number(value: Any) -> float | int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _error_count(value: Any) -> int:
+    if value is None or value is False or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 1
+
+
+def _observed_reliability(chat_row: dict[str, Any]) -> dict[str, Any]:
+    """Map target-side telemetry with explicit availability precedence."""
+    response_raw = (
+        chat_row.get("response_raw")
+        if isinstance(chat_row.get("response_raw"), dict)
+        else {}
+    )
+    nested_telemetry = (
+        response_raw.get("telemetry")
+        if isinstance(response_raw.get("telemetry"), dict)
+        else {}
+    )
+    evidence_sources = (chat_row, response_raw, nested_telemetry)
+
+    def evidence(*keys: str) -> Any:
+        for source in evidence_sources:
+            for key in keys:
+                if source.get(key) is not None:
+                    return source[key]
+        return None
+
+    target_latency = _optional_number(evidence("latency_ms", "target_latency_ms"))
+    guardrail_latency = _optional_number(evidence("guardrail_latency_ms"))
+    total_latency = _optional_number(evidence("total_latency_ms"))
+    if total_latency is None:
+        total_latency = target_latency
+
+    error = evidence("error")
+    if error is not None and str(error).strip():
+        availability = 0.0
+        availability_evidence = "error"
+    elif evidence("availability") is not None:
+        raw_availability = evidence("availability")
+        if isinstance(raw_availability, bool):
+            availability = 1.0 if raw_availability else 0.0
+        else:
+            parsed = _optional_number(raw_availability)
+            availability = (
+                max(0.0, min(1.0, float(parsed))) if parsed is not None else None
+            )
+        availability_evidence = "explicit"
+    else:
+        raw_status = evidence("status_code", "http_status", "response_status")
+        status_code = _optional_number(raw_status)
+        if status_code is not None:
+            availability = 1.0 if 200 <= float(status_code) <= 399 else 0.0
+            availability_evidence = "http_status"
+        elif str(chat_row.get("bot_response") or "").strip():
+            availability = 1.0
+            availability_evidence = "response"
+        else:
+            availability = None
+            availability_evidence = "unknown"
+
+    def latency_status(value: float | int | None) -> str:
+        return _latency_status(value) if value is not None else "unknown"
+
+    availability_status = (
+        "unknown"
+        if availability is None
+        else ("pass" if availability >= 1.0 else "fail")
+    )
+    return {
+        "target_latency_ms": target_latency,
+        # Compatibility alias: this is observed target/model latency, never judge time.
+        "llm_latency_ms": target_latency,
+        "llm_latency_status": latency_status(target_latency),
+        "guardrail_latency_ms": guardrail_latency,
+        "guardrail_latency_status": latency_status(guardrail_latency),
+        "total_latency_ms": total_latency,
+        "total_latency_status": latency_status(total_latency),
+        "availability": availability,
+        "availability_status": availability_status,
+        "availability_evidence": availability_evidence,
+        "trace_error_count": _error_count(evidence("trace_errors", "trace_error")),
+        "tool_error_count": _error_count(evidence("tool_errors", "tool_error")),
+    }
+
+
 def _evaluate_chat_row(
-        *,
-        chat_row: dict[str, Any],
-        dry_run: bool,
-        metrics_config: MetricsConfig,
-        judge_batches: list[JudgeBatch],
-        evaluation_fingerprint: str,
-        policy_fingerprints: dict[str, str],
-        sample_window_id: int,
-        source_line_index: int,
-        started_at: str,
+    *,
+    chat_row: dict[str, Any],
+    dry_run: bool,
+    metrics_config: MetricsConfig,
+    judge_batches: list[JudgeBatch],
+    evaluation_fingerprint: str,
+    policy_fingerprints: dict[str, str],
+    sample_window_id: int,
+    source_line_index: int,
+    started_at: str,
 ) -> dict[str, Any]:
     user_text = str(chat_row.get("user_message") or "")
     response_text = str(chat_row.get("bot_response") or "")
@@ -710,21 +1079,18 @@ def _evaluate_chat_row(
     performance_metrics: dict[str, Any] = {}
     for key in metrics_config.metric_keys_by_group.get("performance", []):
         mdef = metrics_config.metrics[key]
-        performance_metrics[key] = _metric_value(mdef, outcome.scores[mdef.eval_input_key])
+        performance_metrics[key] = _metric_value(
+            mdef, outcome.scores[mdef.eval_input_key]
+        )
 
-    safety_status = _merge_status(metric["status"] for metric in safety_metrics.values())
-    performance_status = _merge_status(metric["status"] for metric in performance_metrics.values())
+    safety_status = _merge_status(
+        metric["status"] for metric in safety_metrics.values()
+    )
+    performance_status = _merge_status(
+        metric["status"] for metric in performance_metrics.values()
+    )
 
-    system_reliability = {
-        "llm_latency_ms": 0,
-        "llm_latency_status": "pass",
-        "guardrail_latency_ms": 0,
-        "guardrail_latency_status": "pass",
-        "total_latency_ms": 0,
-        "total_latency_status": "pass",
-        "availability": 1.0,
-        "availability_status": "pass",
-    }
+    system_reliability = _observed_reliability(chat_row)
 
     return {
         "timestamp": chat_timestamp_iso,
@@ -747,9 +1113,13 @@ def _evaluate_chat_row(
             "prompt_hash": evaluation_fingerprint,
             "metrics": {
                 key: {
-                    "content_fingerprint": metrics_config.metric_content_fingerprints.get(key, ""),
+                    "content_fingerprint": metrics_config.metric_content_fingerprints.get(
+                        key, ""
+                    ),
                     "policy_fingerprint": fp,
-                    "judge_fingerprint": _metric_judge_fingerprints(judge_batches).get(key, ""),
+                    "judge_fingerprint": _metric_judge_fingerprints(judge_batches).get(
+                        key, ""
+                    ),
                 }
                 for key, fp in policy_fingerprints.items()
             },
@@ -785,20 +1155,20 @@ def _reference_inputs(row: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def _reference_modes(
-        reference_context: Any,
-        reference_answer: Any,
+    reference_context: Any,
+    reference_answer: Any,
 ) -> dict[str, str]:
     return evaluator_core.reference_modes(reference_context, reference_answer)
 
 
 def _build_group_messages(
-        group_name: str,
-        metrics: list[MetricDefinition],
-        *,
-        user_text: str,
-        response_text: str,
-        reference_context: str | None = None,
-        reference_answer: str | None = None,
+    group_name: str,
+    metrics: list[MetricDefinition],
+    *,
+    user_text: str,
+    response_text: str,
+    reference_context: str | None = None,
+    reference_answer: str | None = None,
 ) -> tuple[str, str]:
     """Return role-separated evaluator instructions and untrusted JSON inputs."""
     return evaluator_core.build_group_messages(
@@ -811,7 +1181,9 @@ def _build_group_messages(
     )
 
 
-def _build_group_prompt(group_name: str, metrics: list[MetricDefinition], user_text: str, response_text: str) -> str:
+def _build_group_prompt(
+    group_name: str, metrics: list[MetricDefinition], user_text: str, response_text: str
+) -> str:
     """Backward-compatible single-string prompt used by legacy callers and tests."""
     system_prompt, _ = _build_group_messages(
         group_name,
@@ -837,15 +1209,23 @@ def _build_group_prompt(group_name: str, metrics: list[MetricDefinition], user_t
 
 
 def _refresh_existing_row(
-        row: dict[str, Any], chat_row: dict[str, Any], dry_run: bool,
-        metrics_config: MetricsConfig, judge_batches: list[JudgeBatch],
-        stale_batch_ids: set[str], evaluation_fingerprint: str,
-        policy_fingerprints: dict[str, str], started_at: str,
+    row: dict[str, Any],
+    chat_row: dict[str, Any],
+    dry_run: bool,
+    metrics_config: MetricsConfig,
+    judge_batches: list[JudgeBatch],
+    stale_batch_ids: set[str],
+    evaluation_fingerprint: str,
+    policy_fingerprints: dict[str, str],
+    started_at: str,
 ) -> dict[str, Any]:
     """Refresh only stale judge batches and retain valid cached metric values."""
+    refresh_started = time.perf_counter()
     refreshed = dict(row)
     user_text = str(chat_row.get("user_message") or refreshed.get("user_text") or "")
-    response_text = str(chat_row.get("bot_response") or refreshed.get("response_text") or "")
+    response_text = str(
+        chat_row.get("bot_response") or refreshed.get("response_text") or ""
+    )
     reference_context, reference_answer = _reference_inputs(chat_row)
     evaluator = MetricEvaluator(
         metrics_config=metrics_config,
@@ -881,8 +1261,16 @@ def _refresh_existing_row(
         if isinstance(values, dict):
             refreshed[section] = {key: values[key] for key in keys if key in values}
     _recompute_statuses({("", ""): refreshed}, metrics_config)
-    prior_versions = refreshed.get("value_versions") if isinstance(refreshed.get("value_versions"), dict) else {}
-    prior_batches = prior_versions.get("judge_batches", {}) if isinstance(prior_versions, dict) else {}
+    prior_versions = (
+        refreshed.get("value_versions")
+        if isinstance(refreshed.get("value_versions"), dict)
+        else {}
+    )
+    prior_batches = (
+        prior_versions.get("judge_batches", {})
+        if isinstance(prior_versions, dict)
+        else {}
+    )
     batch_quality = {
         batch.batch_id: outcome.batch_quality.get(
             batch.batch_id,
@@ -890,7 +1278,8 @@ def _refresh_existing_row(
                 prior_batches.get(batch.batch_id, {}).get("refresh_quality")
                 if isinstance(prior_batches.get(batch.batch_id), dict)
                 else None
-            ) or "heuristic_fallback",
+            )
+            or "heuristic_fallback",
         )
         for batch in judge_batches
     }
@@ -904,7 +1293,9 @@ def _refresh_existing_row(
         "prompt_hash": evaluation_fingerprint,
         "metrics": {
             key: {
-                "content_fingerprint": metrics_config.metric_content_fingerprints.get(key, ""),
+                "content_fingerprint": metrics_config.metric_content_fingerprints.get(
+                    key, ""
+                ),
                 "policy_fingerprint": policy_fingerprints.get(key, ""),
                 "judge_fingerprint": metric_judge_fingerprints.get(key, ""),
             }
@@ -922,34 +1313,44 @@ def _refresh_existing_row(
         ),
         "metric_modes": _reference_modes(reference_context, reference_answer),
     }
+    elapsed_ms = int((time.perf_counter() - refresh_started) * 1000)
+    refreshed["system_reliability"] = _observed_reliability(chat_row)
+    refreshed["evaluation_runtime"] = {
+        "elapsed_ms": elapsed_ms,
+        "status": _latency_status(elapsed_ms),
+    }
     return refreshed
 
 
-def _compute_heuristic_value(mdef: MetricDefinition, user_text: str, response_text: str) -> float:
+def _compute_heuristic_value(
+    mdef: MetricDefinition, user_text: str, response_text: str
+) -> float:
     return evaluator_core.compute_heuristic_value(mdef, user_text, response_text)
 
 
-def _heuristic_metrics(user_text: str, response_text: str, metrics_config: MetricsConfig) -> dict[str, float]:
+def _heuristic_metrics(
+    user_text: str, response_text: str, metrics_config: MetricsConfig
+) -> dict[str, float]:
     return evaluator_core.heuristic_metrics(user_text, response_text, metrics_config)
 
 
 def _aggregate_group_quality(
-        batches: list[JudgeBatch],
-        batch_quality: dict[str, str],
+    batches: list[JudgeBatch],
+    batch_quality: dict[str, str],
 ) -> dict[str, str]:
     return evaluator_core._aggregate_group_quality(batches, batch_quality)
 
 
 def _evaluate_judge_batches(
-        user_text: str,
-        response_text: str,
-        *,
-        metrics_config: MetricsConfig,
-        batches: list[JudgeBatch],
-        dry_run: bool,
-        reference_context: str | None = None,
-        reference_answer: str | None = None,
-        batch_ids: set[str] | None = None,
+    user_text: str,
+    response_text: str,
+    *,
+    metrics_config: MetricsConfig,
+    batches: list[JudgeBatch],
+    dry_run: bool,
+    reference_context: str | None = None,
+    reference_answer: str | None = None,
+    batch_ids: set[str] | None = None,
 ) -> BatchEvaluation:
     return evaluator_core.evaluate_judge_batches(
         user_text,
@@ -964,18 +1365,21 @@ def _evaluate_judge_batches(
 
 
 def _evaluate_with_llm(
-        user_text: str,
-        response_text: str,
-        llm: LLMClient,
-        metrics_config: MetricsConfig,
-        *,
-        dry_run: bool,
-        groups: set[str] | None = None,
+    user_text: str,
+    response_text: str,
+    llm: LLMClient,
+    metrics_config: MetricsConfig,
+    *,
+    dry_run: bool,
+    groups: set[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
-    selected_groups = groups if groups is not None else set(metrics_config.evaluation_groups)
+    selected_groups = (
+        groups if groups is not None else set(metrics_config.evaluation_groups)
+    )
     heuristic = _heuristic_metrics(user_text, response_text, metrics_config)
     selected_keys = {
-        key for group in selected_groups
+        key
+        for group in selected_groups
         for key in metrics_config.metric_keys_by_group.get(group, [])
     }
     if dry_run:
@@ -995,14 +1399,17 @@ def _evaluate_with_llm(
         if not group_metrics:
             continue
 
-        prompt = _build_group_prompt(group_name, group_metrics, user_text, response_text)
+        prompt = _build_group_prompt(
+            group_name, group_metrics, user_text, response_text
+        )
         result = llm.complete(prompt)
         if result.error:
             # Fall back to heuristic for this group.
             logger.warning(
                 "LLM evaluation failed for %s group (error=%s); "
                 "falling back to heuristic scores.",
-                group_name, result.error,
+                group_name,
+                result.error,
             )
             quality[group_name] = "heuristic_fallback"
             continue
@@ -1100,13 +1507,16 @@ def _load_existing_scores(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
                 continue
             # Keep the most recent row per key (in case of duplicates).
             existing = scores.get(key)
-            if existing is None or (row.get("timestamp") or "") > (existing.get("timestamp") or ""):
+            if existing is None or (row.get("timestamp") or "") > (
+                existing.get("timestamp") or ""
+            ):
                 scores[key] = row
     return scores
 
 
-def _read_chat_rows(chat_path: Path, *, start_index: int, max_rows: int) -> tuple[
-    list[tuple[int, dict[str, Any]]], int]:
+def _read_chat_rows(
+    chat_path: Path, *, start_index: int, max_rows: int
+) -> tuple[list[tuple[int, dict[str, Any]]], int]:
     rows: list[tuple[int, dict[str, Any]]] = []
     index = 0
 
@@ -1156,7 +1566,9 @@ def _hash_file_prefix(path: Path, size_bytes: int | None = None) -> str:
     remaining = size_bytes
     with path.open("rb") as handle:
         while remaining is None or remaining > 0:
-            chunk_size = 1024 * 1024 if remaining is None else min(1024 * 1024, remaining)
+            chunk_size = (
+                1024 * 1024 if remaining is None else min(1024 * 1024, remaining)
+            )
             chunk = handle.read(chunk_size)
             if not chunk:
                 break
@@ -1174,9 +1586,9 @@ def _chat_history_source(path: Path) -> dict[str, Any]:
 
 
 def _chat_history_relation(
-        previous: Any,
-        path: Path,
-        current: dict[str, Any],
+    previous: Any,
+    path: Path,
+    current: dict[str, Any],
 ) -> str:
     if not isinstance(previous, dict):
         return "unknown"
@@ -1188,7 +1600,10 @@ def _chat_history_relation(
     current_size = int(current["size_bytes"])
     if current_size == previous_size and current["sha256"] == previous_hash:
         return "unchanged"
-    if current_size >= previous_size and _hash_file_prefix(path, previous_size) == previous_hash:
+    if (
+        current_size >= previous_size
+        and _hash_file_prefix(path, previous_size) == previous_hash
+    ):
         return "append_only"
     return "rewritten"
 
@@ -1196,7 +1611,9 @@ def _chat_history_relation(
 def _write_monitoring_state(run_dir: Path, payload: dict[str, Any]) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / _MONITORING_STATE_FILE
-    fd, tmp_name = tempfile.mkstemp(prefix=".monitoring_state_", suffix=".tmp", dir=str(run_dir))
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".monitoring_state_", suffix=".tmp", dir=str(run_dir)
+    )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -1213,7 +1630,9 @@ def _write_monitoring_state(run_dir: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
-def _atomic_write_scores(path: Path, scores: dict[tuple[str, str], dict[str, Any]]) -> None:
+def _atomic_write_scores(
+    path: Path, scores: dict[tuple[str, str], dict[str, Any]]
+) -> None:
     """Atomically write all scores to disk via temp file + os.replace.
 
     The file always contains exactly one row per (conversation_id, turn_id).
@@ -1239,8 +1658,8 @@ def _atomic_write_scores(path: Path, scores: dict[tuple[str, str], dict[str, Any
 
 
 def _recompute_statuses(
-        scores: dict[tuple[str, str], dict[str, Any]],
-        metrics_config: MetricsConfig,
+    scores: dict[tuple[str, str], dict[str, Any]],
+    metrics_config: MetricsConfig,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Recompute pass/warn/fail statuses from existing scores using new thresholds.
 
@@ -1351,23 +1770,29 @@ def _delete_if_exists(path: Path) -> None:
 
 
 def _build_state(
-        *,
-        run_dir: Path,
-        status: str,
-        sample_size: int,
-        interval_minutes: int,
-        sampling_strategy: str = "all",
-        max_windows: int | None,
-        next_line_index: int,
-        total_lines: int,
-        evaluated_rows: int,
-        skipped_rows: int,
-        windows_completed: int,
-        llm_provider: str,
-        evaluation_fingerprint: str,
-        policy_fingerprints: dict[str, str],
-        chat_history_source: dict[str, Any] | None = None,
-        retryable_fallbacks: bool = False,
+    *,
+    run_dir: Path,
+    status: str,
+    sample_size: int,
+    interval_minutes: int,
+    sampling_strategy: str = "all",
+    max_windows: int | None,
+    next_line_index: int,
+    total_lines: int,
+    evaluated_rows: int,
+    skipped_rows: int,
+    windows_completed: int,
+    llm_provider: str,
+    evaluation_fingerprint: str,
+    policy_fingerprints: dict[str, str],
+    chat_history_source: dict[str, Any] | None = None,
+    retryable_fallbacks: bool = False,
+    trigger_metrics: dict[str, Any] | None = None,
+    trigger_policy_fingerprint: str | None = None,
+    selection_fingerprint: str | None = None,
+    triggered_lookback: int | None = None,
+    triggered_lookahead: int | None = None,
+    triggered_selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = {
         "run_id": run_dir.name,
@@ -1389,4 +1814,14 @@ def _build_state(
     }
     if chat_history_source is not None:
         state["chat_history_source"] = chat_history_source
+    if trigger_metrics is not None:
+        state["trigger_metrics"] = trigger_metrics
+    if trigger_policy_fingerprint is not None:
+        state["trigger_policy_fingerprint"] = trigger_policy_fingerprint
+    if selection_fingerprint is not None:
+        state["selection_fingerprint"] = selection_fingerprint
+        state["selector_algorithm_version"] = SELECTOR_ALGORITHM_VERSION
+        state["triggered_lookback"] = triggered_lookback
+        state["triggered_lookahead"] = triggered_lookahead
+        state["triggered_selection"] = triggered_selection or {}
     return state

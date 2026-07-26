@@ -69,6 +69,13 @@ function parsePositiveInteger(value: string): number | null {
     : null;
 }
 
+function parseNonNegativeInteger(value: string): number | null {
+  const parsed = Number(value);
+  return value.trim() !== "" && Number.isInteger(parsed) && parsed >= 0
+    ? parsed
+    : null;
+}
+
 function EvaluationConfigDialogSession({
   open,
   action,
@@ -88,6 +95,12 @@ function EvaluationConfigDialogSession({
   const [maxWindowsText, setMaxWindowsText] = useState(
     toOptionalNumber(initialValues.maxWindows)
   );
+  const [triggeredLookbackText, setTriggeredLookbackText] = useState(
+    String(initialValues.triggeredLookback ?? 2)
+  );
+  const [triggeredLookaheadText, setTriggeredLookaheadText] = useState(
+    String(initialValues.triggeredLookahead ?? 2)
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -95,6 +108,8 @@ function EvaluationConfigDialogSession({
   const sampleSizeRef = useRef<HTMLInputElement>(null);
   const intervalMinutesRef = useRef<HTMLInputElement>(null);
   const maxWindowsRef = useRef<HTMLInputElement>(null);
+  const triggeredLookbackRef = useRef<HTMLInputElement>(null);
+  const triggeredLookaheadRef = useRef<HTMLInputElement>(null);
 
   const content = ACTION_CONTENT[action];
 
@@ -111,6 +126,8 @@ function EvaluationConfigDialogSession({
       maxWindowsText.trim() === ""
         ? null
         : parsePositiveInteger(maxWindowsText);
+    const triggeredLookback = parseNonNegativeInteger(triggeredLookbackText);
+    const triggeredLookahead = parseNonNegativeInteger(triggeredLookaheadText);
     const nextErrors: Record<string, string> = {};
 
     if (samplingStrategy !== "all" && sampleSize === null) {
@@ -124,6 +141,16 @@ function EvaluationConfigDialogSession({
       nextErrors.maxWindows =
         "Max windows must be a positive integer or left blank.";
     }
+    if (samplingStrategy === "triggered") {
+      if (triggeredLookback === null) {
+        nextErrors.triggeredLookback =
+          "Lookback must be a non-negative integer.";
+      }
+      if (triggeredLookahead === null) {
+        nextErrors.triggeredLookahead =
+          "Lookahead must be a non-negative integer.";
+      }
+    }
 
     setErrors(nextErrors);
     setSubmissionError(null);
@@ -132,20 +159,29 @@ function EvaluationConfigDialogSession({
         sampleSizeRef.current?.focus();
       } else if (nextErrors.intervalMinutes) {
         intervalMinutesRef.current?.focus();
-      } else {
+      } else if (nextErrors.maxWindows) {
         maxWindowsRef.current?.focus();
+      } else if (nextErrors.triggeredLookback) {
+        triggeredLookbackRef.current?.focus();
+      } else if (nextErrors.triggeredLookahead) {
+        triggeredLookaheadRef.current?.focus();
       }
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await onSubmit({
+      const parameters: EvalRunParameters = {
         samplingStrategy,
         sampleSize: sampleSize as number,
         intervalMinutes: intervalMinutes as number,
         maxWindows,
-      });
+      };
+      if (samplingStrategy === "triggered") {
+        parameters.triggeredLookback = triggeredLookback as number;
+        parameters.triggeredLookahead = triggeredLookahead as number;
+      }
+      await onSubmit(parameters);
       onOpenChange(false);
     } catch (error) {
       setSubmissionError(
@@ -198,6 +234,7 @@ function EvaluationConfigDialogSession({
               <option value="all">All rows</option>
               <option value="random">Random sample</option>
               <option value="systematic">Systematic sample</option>
+              <option value="triggered">Triggered (retroactive)</option>
             </select>
             <p className={HELPER_CLASS_NAME}>
               Choose how rows are selected from each evaluation window.
@@ -239,7 +276,9 @@ function EvaluationConfigDialogSession({
               <p className={HELPER_CLASS_NAME} id="evaluation-sample-size-help">
                 {samplingStrategy === "all"
                   ? "All rows are evaluated, so sample size is not used."
-                  : "Rows selected from each evaluation window."}
+                  : samplingStrategy === "triggered"
+                    ? "Hard capture budget per window: triggers first, then nearest context."
+                    : "Rows selected from each evaluation window."}
               </p>
             )}
           </div>
@@ -325,6 +364,99 @@ function EvaluationConfigDialogSession({
               </p>
             )}
           </div>
+
+          {samplingStrategy === "triggered" && (
+            <>
+              <div>
+                <label
+                  className={LABEL_CLASS_NAME}
+                  htmlFor="evaluation-triggered-lookback"
+                >
+                  Lookback turns
+                </label>
+                <input
+                  id="evaluation-triggered-lookback"
+                  ref={triggeredLookbackRef}
+                  className={CONTROL_CLASS_NAME}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  value={triggeredLookbackText}
+                  onChange={(event) => setTriggeredLookbackText(event.target.value)}
+                  disabled={isSubmitting}
+                  aria-invalid={Boolean(errors.triggeredLookback)}
+                  aria-describedby={
+                    errors.triggeredLookback
+                      ? "evaluation-triggered-lookback-error"
+                      : "evaluation-triggered-lookback-help"
+                  }
+                />
+                {errors.triggeredLookback ? (
+                  <p
+                    className={ERROR_CLASS_NAME}
+                    id="evaluation-triggered-lookback-error"
+                    role="alert"
+                    aria-live="polite"
+                  >
+                    {errors.triggeredLookback}
+                  </p>
+                ) : (
+                  <p
+                    className={HELPER_CLASS_NAME}
+                    id="evaluation-triggered-lookback-help"
+                  >
+                    Number of prior turns to include when trigger fires.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  className={LABEL_CLASS_NAME}
+                  htmlFor="evaluation-triggered-lookahead"
+                >
+                  Lookahead turns
+                </label>
+                <input
+                  id="evaluation-triggered-lookahead"
+                  ref={triggeredLookaheadRef}
+                  className={CONTROL_CLASS_NAME}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  value={triggeredLookaheadText}
+                  onChange={(event) => setTriggeredLookaheadText(event.target.value)}
+                  disabled={isSubmitting}
+                  aria-invalid={Boolean(errors.triggeredLookahead)}
+                  aria-describedby={
+                    errors.triggeredLookahead
+                      ? "evaluation-triggered-lookahead-error"
+                      : "evaluation-triggered-lookahead-help"
+                  }
+                />
+                {errors.triggeredLookahead ? (
+                  <p
+                    className={ERROR_CLASS_NAME}
+                    id="evaluation-triggered-lookahead-error"
+                    role="alert"
+                    aria-live="polite"
+                  >
+                    {errors.triggeredLookahead}
+                  </p>
+                ) : (
+                  <p
+                    className={HELPER_CLASS_NAME}
+                    id="evaluation-triggered-lookahead-help"
+                  >
+                    Number of pending future turns to capture after trigger.
+                  </p>
+                )}
+              </div>
+
+            </>
+          )}
 
           {(serverError || submissionError) && (
             <p

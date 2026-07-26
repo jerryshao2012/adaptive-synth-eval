@@ -21,6 +21,7 @@ def test_artifact_writer_writes_chat_history_jsonl_and_csv(tmp_path):
         applied_failure_modes=[],
         reference_context="Policy section 4 applies.",
         reference_answer="The employee is eligible.",
+        status_code=207,
         synthetic_flag=True,
     )
 
@@ -34,6 +35,10 @@ def test_artifact_writer_writes_chat_history_jsonl_and_csv(tmp_path):
     )
     assert row["reference_context"] == "Policy section 4 applies."
     assert row["reference_answer"] == "The employee is eligible."
+    assert row["status_code"] == 207
+    assert "207" in (
+        tmp_path / "runs" / "run1" / "chat_history.csv"
+    ).read_text()
 
 
 def test_chat_history_reference_fields_do_not_shift_existing_positional_arguments():

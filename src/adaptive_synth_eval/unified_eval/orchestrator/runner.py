@@ -28,6 +28,12 @@ from adaptive_synth_eval.artifacts.run_state import (
 )
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
+from adaptive_synth_eval.capture.producers import (
+    AttackMemoryProducerAdapter,
+    ChatHistoryProducerAdapter,
+    PersonaMemoryProducerAdapter,
+)
+from adaptive_synth_eval.capture.runtime import capture_coordinator_from_env
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
@@ -375,7 +381,28 @@ async def run_unified_async(
         run_id = f"{contract.output.run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     else:
         run_id = f"unified_run_{int(time.time())}"
-    writer = UnifiedArtifactWriter(contract.output.base_dir, run_id=run_id)
+    run_dir = Path(contract.output.base_dir) / "runs" / run_id
+    capture_coordinator = capture_coordinator_from_env(run_dir)
+    chat_capture_adapter = (
+        ChatHistoryProducerAdapter(capture_coordinator)
+        if capture_coordinator is not None
+        else None
+    )
+    persona_capture_adapter = (
+        PersonaMemoryProducerAdapter(capture_coordinator)
+        if capture_coordinator is not None
+        else None
+    )
+    attack_capture_adapter = (
+        AttackMemoryProducerAdapter(capture_coordinator)
+        if capture_coordinator is not None
+        else None
+    )
+    writer = UnifiedArtifactWriter(
+        contract.output.base_dir,
+        run_id=run_id,
+        capture_adapter=chat_capture_adapter,
+    )
     # Persist this run's log lines (including the per-turn trajectory logs) to run.log
     # alongside the other artifacts, in addition to console / optional CloudWatch output.
     attach_run_file_log(writer.run_dir)
@@ -478,7 +505,10 @@ async def run_unified_async(
             raise ContractError(
                 "Cannot resume: attack_memory_max_entries differs from the v2 checkpoint."
             )
-        memory_registry = AttackMemoryRegistry.from_dict(restored_memory)
+        memory_registry = AttackMemoryRegistry.from_dict(
+            restored_memory,
+            capture_adapter=attack_capture_adapter,
+        )
         if contract.eval_plan.seed_attack_memory_path:
             logger.warning(
                 "Ignoring seed_attack_memory_path because restored v2 memory supersedes seeds."
@@ -497,6 +527,7 @@ async def run_unified_async(
             mode=contract.eval_plan.attack_memory,
             max_entries=contract.eval_plan.attack_memory_max_entries,
             shared_memory=shared_seed,
+            capture_adapter=attack_capture_adapter,
         )
     tracker = _RunningStatsTracker.from_dict(
         threshold=contract.scoring.adversarial_failure_threshold,
@@ -614,6 +645,7 @@ async def run_unified_async(
         persona_id: PersonaMemoryActor(
             persona=personas_by_id[persona_id],
             markdown_path=writer.persona_memory_path(persona_id),
+            capture_adapter=persona_capture_adapter,
         )
         for persona_id in sorted({planned["persona_id"] for planned in full_plan})
     }

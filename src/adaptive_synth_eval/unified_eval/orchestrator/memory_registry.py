@@ -1,10 +1,19 @@
 """Run-scoped routing for shared, per-persona, or disabled attack memory."""
 from __future__ import annotations
 
+import logging
+from dataclasses import asdict
+from typing import TYPE_CHECKING
+
 from adaptive_synth_eval.adversarial_response_engine.core.models import (
     AttackMemory,
     SessionState,
 )
+
+if TYPE_CHECKING:
+    from adaptive_synth_eval.capture.producers import AttackMemoryProducerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class AttackMemoryRegistry:
@@ -14,6 +23,7 @@ class AttackMemoryRegistry:
             mode: str,
             max_entries: int,
             shared_memory: AttackMemory | None = None,
+            capture_adapter: AttackMemoryProducerAdapter | None = None,
     ) -> None:
         if mode not in {"shared", "per_persona", "none"}:
             raise ValueError(f"Unsupported attack-memory mode: {mode!r}")
@@ -24,6 +34,7 @@ class AttackMemoryRegistry:
             if mode == "shared" else None
         )
         self._per_persona: dict[str, AttackMemory] = {}
+        self.capture_adapter = capture_adapter
 
     def for_persona(self, persona_id: str) -> AttackMemory | None:
         if self.mode == "none":
@@ -40,7 +51,21 @@ class AttackMemoryRegistry:
         memory = self.for_persona(persona_id)
         if memory is None or session is None:
             return False
-        return memory.record_session(session)
+        recorded = memory.record_session(session)
+        if recorded and self.capture_adapter is not None:
+            try:
+                self.capture_adapter.emit_attack_memory_commit(
+                    conversation_id=session.session_id,
+                    persona_id=persona_id,
+                    attack_session=asdict(session),
+                )
+            except Exception:
+                logger.exception(
+                    "Capture failed for attack-memory commit session=%s persona=%s",
+                    session.session_id,
+                    persona_id,
+                )
+        return recorded
 
     def to_dict(self) -> dict:
         if self.mode == "shared":
@@ -57,13 +82,27 @@ class AttackMemoryRegistry:
         return {"mode": self.mode, "max_entries": self.max_entries, "entries": []}
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "AttackMemoryRegistry":
+    def from_dict(
+        cls,
+        payload: dict,
+        *,
+        capture_adapter: AttackMemoryProducerAdapter | None = None,
+    ) -> "AttackMemoryRegistry":
         mode = str(payload.get("mode", "shared"))
         max_entries = int(payload.get("max_entries", 50) or 50)
         if mode == "shared":
             shared = AttackMemory.from_dict(payload, max_entries=max_entries)
-            return cls(mode=mode, max_entries=max_entries, shared_memory=shared)
-        registry = cls(mode=mode, max_entries=max_entries)
+            return cls(
+                mode=mode,
+                max_entries=max_entries,
+                shared_memory=shared,
+                capture_adapter=capture_adapter,
+            )
+        registry = cls(
+            mode=mode,
+            max_entries=max_entries,
+            capture_adapter=capture_adapter,
+        )
         if mode == "per_persona":
             for persona_id, raw in (payload.get("personas") or {}).items():
                 if isinstance(raw, dict):

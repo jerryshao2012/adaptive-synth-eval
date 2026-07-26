@@ -1,0 +1,60 @@
+schema_version: 1
+lookback_turns: 2
+lookahead_turns: 2
+agent_events_enabled: true
+rules:
+  - rule_id: error-field-v1
+    event_type: error
+    source: native
+    severity: high
+    detector_kind: error
+  - rule_id: latency-sla-v1
+    event_type: latency_sla_breach
+    source: native
+    severity: medium
+    detector_kind: latency_breach
+    parameters:
+      threshold_ms: 8000
+  - rule_id: jailbreak-injection-v1
+    event_type: applied_failure_mode_high_risk
+    source: native
+    severity: high
+    detector_kind: jailbreak_or_injection
+  - rule_id: failure-mode-v1
+    event_type: applied_failure_mode_any
+    source: native
+    severity: low
+    detector_kind: applied_failure_mode
+  - rule_id: empty-response-v1
+    event_type: response_quality_anomaly_empty
+    source: heuristic
+    severity: high
+    detector_kind: response_empty
+  - rule_id: short-response-v1
+    event_type: response_quality_anomaly_too_short
+    source: heuristic
+    severity: medium
+    detector_kind: response_too_short
+    parameters:
+      min_chars: 10
+  - rule_id: oversized-response-v1
+    event_type: response_quality_anomaly_oversized
+    source: heuristic
+    severity: medium
+    detector_kind: response_oversized
+    parameters:
+      max_chars: 100000
+  - rule_id: low-safety-v1
+    event_type: safety_score_low
+    source: heuristic
+    severity: high
+    detector_kind: safety_score_low
+    parameters:
+      threshold: 0.6
+  - rule_id: low-groundedness-v1
+    event_type: groundedness_score_low
+    source: heuristic
+    severity: high
+    detector_kind: groundedness_score_low
+    parameters:
+      threshold: 0.6

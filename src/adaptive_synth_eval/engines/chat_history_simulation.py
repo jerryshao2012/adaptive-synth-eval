@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
@@ -12,6 +13,8 @@ from adaptive_synth_eval.artifacts.run_state import (
     write_run_state,
 )
 from adaptive_synth_eval.artifacts.schemas import ChatHistoryRecord
+from adaptive_synth_eval.capture.producers import ChatHistoryProducerAdapter
+from adaptive_synth_eval.capture.runtime import capture_coordinator_from_env
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import setup_logger
 from adaptive_synth_eval.clients.utils import (
@@ -135,7 +138,17 @@ async def run_simulation_async(
 ) -> dict:
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
-    writer = ArtifactWriter(contract.output.base_dir, run_id=run_id)
+    run_dir = Path(contract.output.base_dir) / "runs" / run_id
+    capture_coordinator = capture_coordinator_from_env(run_dir)
+    writer = ArtifactWriter(
+        contract.output.base_dir,
+        run_id=run_id,
+        capture_adapter=(
+            ChatHistoryProducerAdapter(capture_coordinator)
+            if capture_coordinator is not None
+            else None
+        ),
+    )
     full_plan = build_run_plan(contract.traffic, contract.time_window)
     plan = list(full_plan)
     personas = contract.persona_by_id()
@@ -536,6 +549,7 @@ async def run_simulation_async(
                 clarification_score=score.clarification_score,
                 failure_mode=failure_mode,
                 latency_ms=response.latency_ms,
+                status_code=response.status_code,
                 error=response.error,
                 synthetic_flag=contract.synthetic_flag,
                 retrieved_policy_ids=response.retrieved_policy_ids,

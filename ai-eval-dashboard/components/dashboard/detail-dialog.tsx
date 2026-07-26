@@ -173,11 +173,15 @@ export function DetailDialog({
           <div className="flex items-center gap-4 text-xs text-muted-foreground border-t border-border pt-3">
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" />
-              LLM: {record.system_reliability.llm_latency_ms}ms
+              LLM: {record.system_reliability.llm_latency_ms === null
+                ? "Unknown"
+                : `${record.system_reliability.llm_latency_ms}ms`}
             </span>
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" />
-              Guardrail: {record.system_reliability.guardrail_latency_ms}ms
+              Guardrail: {record.system_reliability.guardrail_latency_ms === null
+                ? "Unknown"
+                : `${record.system_reliability.guardrail_latency_ms}ms`}
             </span>
             <span>
               Variant: {record.variant}

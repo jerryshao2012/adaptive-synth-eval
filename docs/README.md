@@ -26,6 +26,7 @@ Use this page to choose the shortest path for your task. Configuration details l
 ## Operate continuously
 
 - [Monitoring](monitoring.md) — Evaluation operators can score existing run artifacts, manage incremental re-evaluation, and feed dashboard views.
+- [Triggered monitoring implementation](hindsight-implementation-summary.md) — Maintainers can review the conversation-safe selector, durable capture journals, provenance, and current artifact-source scope.
 - [Metrics API](metrics_api.md) — Integrators can discover packaged metric specifications and score independent payload tuples through the authenticated Python service.
 - [Loop architecture](loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) — Platform engineers can understand guarded repeat-run coordination and L0-L3 readiness.
 - [Loop operations runbook](loop_operations_runbook.md) — On-call operators can start, audit, pause, recover, and safely run continuous evaluations.

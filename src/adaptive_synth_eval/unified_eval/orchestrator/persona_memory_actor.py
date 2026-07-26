@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from adaptive_synth_eval.config.schemas import Persona
 from adaptive_synth_eval.generation.turns import PersonaMarkdownMemory
+
+if TYPE_CHECKING:
+    from adaptive_synth_eval.capture.producers import PersonaMemoryProducerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class PersonaMemoryConflictError(RuntimeError):
@@ -113,7 +119,13 @@ class PersonaMemoryActor:
     MAX_SUMMARY_NOTES = 10
     MAX_LONG_TERM_RECALL = 20
 
-    def __init__(self, *, persona: Persona, markdown_path: Path):
+    def __init__(
+        self,
+        *,
+        persona: Persona,
+        markdown_path: Path,
+        capture_adapter: PersonaMemoryProducerAdapter | None = None,
+    ):
         self.persona = persona
         self.markdown_path = Path(markdown_path)
         self.state_path = self.markdown_path.with_suffix(".json")
@@ -121,6 +133,7 @@ class PersonaMemoryActor:
         self._task: asyncio.Task[None] | None = None
         self._base: dict[str, Any] = {}
         self._updates: dict[str, dict[str, Any]] = {}
+        self.capture_adapter = capture_adapter
 
     async def start(self) -> None:
         if self._task is not None:
@@ -213,6 +226,19 @@ class PersonaMemoryActor:
             except Exception:
                 pass
             raise
+        if self.capture_adapter is not None:
+            try:
+                self.capture_adapter.emit_memory_commit(
+                    conversation_id=message.conversation_id,
+                    persona_id=self.persona.persona_id,
+                    memory_delta=payload,
+                )
+            except Exception:
+                logger.exception(
+                    "Capture failed for persona-memory commit conversation=%s persona=%s",
+                    message.conversation_id,
+                    self.persona.persona_id,
+                )
 
     def _snapshot(self) -> PersonaMemorySnapshot:
         merged = self._merged()

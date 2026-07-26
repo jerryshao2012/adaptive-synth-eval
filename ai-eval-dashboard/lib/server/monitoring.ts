@@ -173,6 +173,11 @@ export async function getMonitoringStatus(
     monitoringState?.next_line_index ?? monitoringState?.evaluated_rows ?? 0
   );
   const total = safeNumber(monitoringState?.total_lines ?? 0);
+  const rawTriggerMetrics =
+    monitoringState?.trigger_metrics &&
+    typeof monitoringState.trigger_metrics === "object"
+      ? (monitoringState.trigger_metrics as Record<string, unknown>)
+      : null;
 
   return {
     runId: normalizedRunId,
@@ -189,6 +194,22 @@ export async function getMonitoringStatus(
     state: monitoringState,
     hasMonitoringScores: hasScores,
     updatedAt: monitoringState?.updated_at ? String(monitoringState.updated_at) : undefined,
+    triggerMetrics: rawTriggerMetrics
+      ? {
+          triggersDetected: safeNumber(rawTriggerMetrics.triggers_detected),
+          rowsPromoted: safeNumber(rawTriggerMetrics.rows_promoted),
+          budgetUsed: safeNumber(rawTriggerMetrics.budget_used),
+          budgetAvailable: safeNumber(monitoringState?.sample_size),
+          budgetDrops: safeNumber(rawTriggerMetrics.budget_drops),
+          deduplicatedContext: safeNumber(
+            rawTriggerMetrics.deduplicated_context
+          ),
+          pendingLookahead: safeNumber(rawTriggerMetrics.pending_lookahead),
+          policyFingerprint: monitoringState?.trigger_policy_fingerprint
+            ? String(monitoringState.trigger_policy_fingerprint)
+            : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -196,13 +217,16 @@ export async function getMonitoringEvaluations(
   runId: string,
   from?: string,
   to?: string,
-  limit = DEFAULT_LIMIT
+  limit = DEFAULT_LIMIT,
+  repoRoot = REPO_ROOT
 ): Promise<EvaluationsResponse | null> {
-  const runDir = runDirPath(runId);
-  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
-  if (!(await fileExists(runDir))) {
+  let runDir: string;
+  try {
+    runDir = await resolveRunDirectory(runId, repoRoot);
+  } catch {
     return null;
   }
+  const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
   if (!(await fileExists(scoresPath))) {
     return {
       evaluations: [],
@@ -215,6 +239,9 @@ export async function getMonitoringEvaluations(
   const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
   const filtered = rows
     .filter((row) => {
+      if (row.selected_for_monitoring === false) {
+        return false;
+      }
       if (!row.timestamp) {
         return false;
       }
@@ -262,9 +289,9 @@ export async function getMonitoringTraceDetails(
   const chatHistoryPath = path.join(runDir, "chat_history.jsonl");
   const turnsPath = path.join(runDir, "turns.jsonl");
 
-  const evaluationRows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(
-    scoresPath
-  );
+  const evaluationRows = (
+    await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath)
+  ).filter((row) => row.selected_for_monitoring !== false);
 
   const matchedEvaluation =
     evaluationRows.find(

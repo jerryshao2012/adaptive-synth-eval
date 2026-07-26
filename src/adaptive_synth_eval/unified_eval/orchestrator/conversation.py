@@ -625,6 +625,7 @@ async def run_conversation(
             clarification_score=score_payload.get("clarification_score"),
             failure_mode=failure_mode,
             latency_ms=latency_ms,
+            status_code=response.status_code,
             error=effective_error,
             synthetic_flag=contract.suite.synthetic_flag,
             retrieved_policy_ids=response.retrieved_policy_ids,
