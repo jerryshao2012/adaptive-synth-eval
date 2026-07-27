@@ -295,11 +295,11 @@ def test_single_unexpected_failure_is_redacted_from_response_and_logs(caplog):
     assert "exception_type=RuntimeError" in caplog.text
 
 
-def test_openapi_and_documentation_routes_are_authenticated():
+def test_openapi_and_documentation_routes_are_unauthenticated():
     headers = {"X-API-Key": API_KEY}
     with TestClient(make_app()) as client:
         for path in ("/openapi.json", "/docs", "/redoc"):
-            assert client.get(path).status_code == 401
+            assert client.get(path).status_code == 200
         schema_response = client.get("/openapi.json", headers=headers)
         docs_response = client.get("/docs", headers=headers)
         redoc_response = client.get("/redoc", headers=headers)

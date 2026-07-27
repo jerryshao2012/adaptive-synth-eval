@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import secrets
 from contextlib import asynccontextmanager
 from functools import partial
-import json
-import secrets
-import asyncio
-import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,20 +17,20 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from adaptive_synth_eval.metrics_api.config import ApiSettings
 from adaptive_synth_eval.config.env import load_project_env
+from adaptive_synth_eval.metrics_api.config import ApiSettings
 from adaptive_synth_eval.metrics_api.errors import EvaluationServiceUnavailable
 from adaptive_synth_eval.metrics_api.schemas import (
-    MetricCatalogResponse,
-    MetricSpecResponse,
-    EvaluationRequest,
-    EvaluationResponse,
-    MetricResultResponse,
+    BatchErrorItem,
     BatchEvaluationRequest,
     BatchEvaluationResponse,
     BatchSuccessItem,
-    BatchErrorItem,
     ErrorBody,
+    EvaluationRequest,
+    EvaluationResponse,
+    MetricCatalogResponse,
+    MetricResultResponse,
+    MetricSpecResponse,
 )
 from adaptive_synth_eval.monitoring.evaluator import (
     EvaluationInput,
@@ -55,9 +55,9 @@ def _log_unexpected_failure(context: str, exc: Exception) -> None:
 
 def _embedded_openapi(app: FastAPI) -> str:
     """Serialize the schema safely for an inline JavaScript object literal."""
-    return json.dumps(
-        app.openapi(), ensure_ascii=True, separators=(",", ":")
-    ).replace("</", "<\\/")
+    return json.dumps(app.openapi(), ensure_ascii=True, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
 
 
 def _serialize_metric(metric: MetricSpec) -> MetricSpecResponse:
@@ -71,21 +71,25 @@ def _serialize_metric(metric: MetricSpec) -> MetricSpecResponse:
 
 
 def _serialize_evaluation(result) -> EvaluationResponse:
-    return EvaluationResponse(results=[
-        MetricResultResponse.model_validate({
-            "metric_key": metric.metric_key,
-            "score": metric.score,
-            "percent": metric.percent,
-            "status": metric.status,
-            "quality": metric.quality,
-            "detail": metric.detail,
-            "content_fingerprint": metric.content_fingerprint,
-            "policy_fingerprint": metric.policy_fingerprint,
-            "judge_fingerprint": metric.judge_fingerprint,
-            "reference_mode": metric.reference_mode,
-        })
-        for metric in result.results
-    ])
+    return EvaluationResponse(
+        results=[
+            MetricResultResponse.model_validate(
+                {
+                    "metric_key": metric.metric_key,
+                    "score": metric.score,
+                    "percent": metric.percent,
+                    "status": metric.status,
+                    "quality": metric.quality,
+                    "detail": metric.detail,
+                    "content_fingerprint": metric.content_fingerprint,
+                    "policy_fingerprint": metric.policy_fingerprint,
+                    "judge_fingerprint": metric.judge_fingerprint,
+                    "reference_mode": metric.reference_mode,
+                }
+            )
+            for metric in result.results
+        ]
+    )
 
 
 def create_app(
@@ -111,7 +115,7 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="Adaptive Synth Eval Metrics API",
+        title="AI Evals Metrics API",
         version="1.0.0",
         docs_url=None,
         redoc_url=None,
@@ -126,9 +130,9 @@ def create_app(
                 version=app.version,
                 routes=app.routes,
             )
-            schema.setdefault("components", {}).setdefault(
-                "securitySchemes", {}
-            )["ApiKeyAuth"] = {
+            schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+                "ApiKeyAuth"
+            ] = {
                 "type": "apiKey",
                 "in": "header",
                 "name": "X-API-Key",
@@ -165,7 +169,7 @@ def create_app(
 
     @app.middleware("http")
     async def require_api_key(request: Request, call_next):
-        if request.url.path == "/healthz":
+        if request.url.path in ("/healthz", "/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
         supplied = request.headers.get("X-API-Key", "")
         expected = resolved_settings.api_key if resolved_settings is not None else ""
@@ -196,7 +200,7 @@ def create_app(
             "<!DOCTYPE html><html><head>"
             f"<title>{app.title} - Swagger UI</title>"
             '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">'
-            "</head><body><div id=\"swagger-ui\"></div>"
+            '</head><body><div id="swagger-ui"></div>'
             '<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>'
             f"<script>SwaggerUIBundle({{spec:{schema},dom_id:'#swagger-ui',deepLinking:true}});</script>"
             "</body></html>"
@@ -208,7 +212,7 @@ def create_app(
         return HTMLResponse(
             "<!DOCTYPE html><html><head>"
             f"<title>{app.title} - ReDoc</title>"
-            "</head><body><div id=\"redoc-container\"></div>"
+            '</head><body><div id="redoc-container"></div>'
             '<script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>'
             f"<script>Redoc.init({schema},{{}},document.getElementById('redoc-container'));</script>"
             "</body></html>"
@@ -217,10 +221,12 @@ def create_app(
     @app.get("/v1/metrics", response_model=MetricCatalogResponse)
     async def list_metrics() -> MetricCatalogResponse:
         assert resolved_evaluator is not None
-        return MetricCatalogResponse(metrics=[
-            _serialize_metric(metric)
-            for metric in resolved_evaluator.metrics_config.metrics.values()
-        ])
+        return MetricCatalogResponse(
+            metrics=[
+                _serialize_metric(metric)
+                for metric in resolved_evaluator.metrics_config.metrics.values()
+            ]
+        )
 
     @app.get("/v1/metrics/{metric_key}", response_model=MetricSpecResponse)
     async def get_metric(metric_key: str):
@@ -376,9 +382,9 @@ def create_app(
                     }
                 },
             )
-        items = await asyncio.gather(*(
-            evaluate_batch_item(item) for item in request.items
-        ))
+        items = await asyncio.gather(
+            *(evaluate_batch_item(item) for item in request.items)
+        )
         return BatchEvaluationResponse(items=list(items))
 
     return app
