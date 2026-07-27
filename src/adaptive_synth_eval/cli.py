@@ -21,6 +21,14 @@ from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.config.env import load_project_env
 from adaptive_synth_eval.engines.chat_history_simulation import run_simulation
 from adaptive_synth_eval.evaluation.modes import get_mode
+from adaptive_synth_eval.learning.candidates import CandidateValidationError
+from adaptive_synth_eval.learning.coordinator import LearningCoordinator
+from adaptive_synth_eval.learning.models import LearningBundle
+from adaptive_synth_eval.learning.registry import (
+    LearningRegistry,
+    RegistryError,
+    load_bundle_reference,
+)
 from adaptive_synth_eval.live_status import LiveStatusBar
 from adaptive_synth_eval.loop.audit import build_loop_audit
 from adaptive_synth_eval.loop.planner import LoopReasoner
@@ -34,12 +42,14 @@ from adaptive_synth_eval.loop.scheduler import LoopScheduler, MultiLoopCoordinat
 from adaptive_synth_eval.loop.state_store import (
     get_loop_status,
     initialize_loop_assets,
+    record_learning_update,
     record_loop_cycle,
     set_loop_paused,
 )
 from adaptive_synth_eval.loop.verifier import LoopVerifier
 from adaptive_synth_eval.monitoring import run_monitoring
 from adaptive_synth_eval.prompt_toolkit_status import PromptToolkitStatusBar
+from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 
 logger = setup_logger(__name__)
 
@@ -471,6 +481,41 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(state, indent=2, default=str))
                 return 0
 
+        if args.command == "learn":
+            profile = load_loop_profile(args.profile, profiles_dir=args.profiles_dir)
+            output_dir = Path(args.output_dir)
+            coordinator = LearningCoordinator(profile, output_dir=output_dir)
+            if args.learn_command == "run":
+                payload = coordinator.run()
+            elif args.learn_command == "status":
+                payload = coordinator.status()
+            elif args.learn_command == "show":
+                payload = coordinator.show(args.candidate)
+            elif args.learn_command == "approve":
+                payload = coordinator.registry.approve(
+                    args.candidate,
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+            elif args.learn_command == "reject":
+                payload = coordinator.registry.reject(
+                    args.candidate,
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+            elif args.learn_command == "rollback":
+                payload = coordinator.registry.rollback(
+                    to_bundle_id=args.to,
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+            elif args.learn_command == "audit":
+                payload = coordinator.registry.audit()
+            else:
+                raise RegistryError(f"Unsupported learn command: {args.learn_command}")
+            print(json.dumps(payload, indent=2, default=str))
+            return 0
+
         if args.command == "validate-contract":
             mode_name = detect_mode_from_file(args.contract)
             mode = get_mode(mode_name)
@@ -482,6 +527,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "run":
+            learning_bundle = (
+                load_bundle_reference(args.learning_bundle)
+                if args.learning_bundle
+                else None
+            )
             summary = _execute_contract_run(
                 contract_path=args.contract,
                 dry_run=args.dry_run,
@@ -494,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_conversations=args.output_conversations,
                 interactive_realtime_controls=args.interactive_realtime_controls,
                 incomplete_run_action=args.incomplete_run_action,
+                learning_bundle=learning_bundle,
             )
 
             logger.info("Run complete: %s", summary["run_id"])
@@ -551,7 +602,13 @@ def main(argv: list[str] | None = None) -> int:
 
         parser.print_help()
         return 1
-    except (ContractError, LoopProfileError, SkillValidationError) as exc:
+    except (
+        CandidateValidationError,
+        ContractError,
+        LoopProfileError,
+        RegistryError,
+        SkillValidationError,
+    ) as exc:
         logger.error(str(exc))
         print(str(exc), file=sys.stderr)
         return 2
@@ -575,7 +632,7 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         title="commands",
         description="Available operations",
-        metavar="{validate-contract,run,summarize,skills,loop,monitor,metrics}",
+        metavar="{validate-contract,run,summarize,skills,loop,learn,monitor,metrics}",
     )
     skills = sub.add_parser(
         "skills",
@@ -661,6 +718,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--run-id",
         help="Override the run_id (unified contracts only)",
+    )
+    run.add_argument(
+        "--learning-bundle",
+        help=(
+            "Apply an explicit governed learning bundle by bundle ID, "
+            "candidate ID, or bundle.json path (unified contracts only)"
+        ),
     )
     run.add_argument(
         "--incomplete-run-action",
@@ -1022,6 +1086,72 @@ def _build_parser() -> argparse.ArgumentParser:
         default="outputs",
         help="Base output directory for loop state and markdown artifacts (default: outputs)",
     )
+
+    learn = sub.add_parser(
+        "learn",
+        help="Mine evidence and manage governed evaluator learning candidates",
+        description=(
+            "Run champion/challenger learning, inspect evidence, and record "
+            "human approval, rejection, or rollback decisions."
+        ),
+    )
+    learn_sub = learn.add_subparsers(
+        dest="learn_command",
+        required=True,
+        title="learn commands",
+        metavar="{run,status,show,approve,reject,rollback,audit}",
+    )
+
+    def add_learning_scope(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--profile",
+            required=True,
+            help="Loop profile ID or path",
+        )
+        command_parser.add_argument(
+            "--profiles-dir",
+            default="loops/profiles",
+            help="Directory containing loop profiles",
+        )
+        command_parser.add_argument(
+            "--output-dir",
+            default="outputs",
+            help="Base output directory for learning artifacts",
+        )
+
+    learn_run = learn_sub.add_parser(
+        "run", help="Mine eligible evidence and evaluate one candidate"
+    )
+    add_learning_scope(learn_run)
+    learn_status = learn_sub.add_parser(
+        "status", help="Show learning status and pending candidates"
+    )
+    add_learning_scope(learn_status)
+    learn_show = learn_sub.add_parser(
+        "show", help="Show a candidate, bundle, and evaluation evidence"
+    )
+    add_learning_scope(learn_show)
+    learn_show.add_argument("--candidate", required=True)
+    for command_name in ("approve", "reject"):
+        decision = learn_sub.add_parser(
+            command_name,
+            help=f"{command_name.title()} a learning candidate",
+        )
+        add_learning_scope(decision)
+        decision.add_argument("--candidate", required=True)
+        decision.add_argument("--actor", required=True)
+        decision.add_argument("--reason", required=True)
+    learn_rollback = learn_sub.add_parser(
+        "rollback", help="Reactivate a previously approved bundle"
+    )
+    add_learning_scope(learn_rollback)
+    learn_rollback.add_argument("--to", required=True, help="Approved bundle ID")
+    learn_rollback.add_argument("--actor", required=True)
+    learn_rollback.add_argument("--reason", required=True)
+    learn_audit = learn_sub.add_parser(
+        "audit", help="Verify learning lineage, digests, and approvals"
+    )
+    add_learning_scope(learn_audit)
     return parser
 
 
@@ -1059,10 +1189,17 @@ def _execute_contract_run(
     output_conversations: bool,
     interactive_realtime_controls: bool | None,
     incomplete_run_action: str,
+    learning_bundle: LearningBundle | None = None,
 ) -> dict[str, Any]:
     mode_name = detect_mode_from_file(contract_path)
     mode = get_mode(mode_name)
-    contract = mode.load_contract(contract_path)
+    if learning_bundle is not None and mode_name != "unified":
+        raise ContractError("--learning-bundle is supported only for unified contracts")
+    contract = (
+        load_unified_contract(contract_path, learning_bundle=learning_bundle)
+        if mode_name == "unified"
+        else mode.load_contract(contract_path)
+    )
     _log_run_configuration(
         contract,
         mode_name=mode_name,
@@ -1184,6 +1321,11 @@ def _run_loop_profile(
     reasoner = LoopReasoner(profile)
     policy_engine = LoopPolicyEngine(profile)
     verifier = LoopVerifier(profile)
+    active_learning_bundle = (
+        LearningRegistry(output_dir, profile.profile_id).active_bundle()
+        if profile.learning.enabled
+        else None
+    )
     planner_decision = reasoner.plan_cycle(loop_state)
     run_results: list[dict[str, Any]] = []
     assisted_actions_log: list[dict[str, Any]] = []
@@ -1285,6 +1427,7 @@ def _run_loop_profile(
             output_conversations=output_conversations,
             interactive_realtime_controls=None,
             incomplete_run_action=plan.incomplete_run_action,
+            learning_bundle=active_learning_bundle,
         )
         status = (
             "completed_with_errors"
@@ -1325,6 +1468,39 @@ def _run_loop_profile(
         assisted_actions=assisted_actions_log,
         state_updates=state_updates,
     )
+    learning_result: dict[str, Any] | None = None
+    if profile.learning.enabled:
+        if dry_run:
+            learning_result = {"status": "skipped_dry_run"}
+            state = record_learning_update(
+                profile,
+                output_dir=output_dir,
+                result=learning_result,
+            )
+        else:
+            try:
+                learning_result = LearningCoordinator(
+                    profile, output_dir=output_dir
+                ).run()
+                state = record_learning_update(
+                    profile,
+                    output_dir=output_dir,
+                    result=learning_result,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Learning cycle failed for profile %s",
+                    profile.profile_id,
+                )
+                learning_result = {
+                    "status": "failed",
+                    "error": str(exc),
+                }
+                state = record_learning_update(
+                    profile,
+                    output_dir=output_dir,
+                    error=str(exc),
+                )
     return {
         "profile_id": profile.profile_id,
         "status": state.get("status"),
@@ -1332,6 +1508,7 @@ def _run_loop_profile(
         "planner": planner_decision.__dict__,
         "reflection": reflection_decision.__dict__,
         "run_results": run_results,
+        "learning": learning_result,
         "state_path": str(
             (output_dir / "loops" / "state" / f"{profile.profile_id}.json").resolve()
         ),

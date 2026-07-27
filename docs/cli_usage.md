@@ -189,6 +189,27 @@ uv run ase loop start --profile "$PROFILE_ID" --once
 
 See [Loop engineering](loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) for readiness levels, profile schema, control guarantees, and artifacts. Use the [Loop operations runbook](loop_operations_runbook.md) for startup, kill-switch handling, audits, recovery, and guardrail tuning.
 
+## Learning command map
+
+`learn` manages versioned evaluator candidates associated with a loop profile.
+Candidate activation always requires a human actor and reason.
+
+```bash
+PROFILE_ID=continuous_learning_evaluator
+uv run ase learn run --profile "$PROFILE_ID"
+uv run ase learn status --profile "$PROFILE_ID"
+uv run ase learn show --profile "$PROFILE_ID" --candidate <candidate-id>
+uv run ase learn approve --profile "$PROFILE_ID" --candidate <candidate-id> --actor <id> --reason <text>
+uv run ase learn reject --profile "$PROFILE_ID" --candidate <candidate-id> --actor <id> --reason <text>
+uv run ase learn rollback --profile "$PROFILE_ID" --to <bundle-id> --actor <id> --reason <text>
+uv run ase learn audit --profile "$PROFILE_ID"
+```
+
+Use `ase run --learning-bundle <bundle-id-or-path>` to reproduce a direct
+unified run with an explicit bundle. See [Governed continuous
+learning](continuous_learning.md) for evidence eligibility, promotion gates,
+artifact layout, and rollback semantics.
+
 ## Command help
 
 The installed CLI is the final authority for available flags:
@@ -198,5 +219,6 @@ uv run ase --help
 uv run ase run --help
 uv run ase monitor run --help
 uv run ase loop --help
+uv run ase learn --help
 uv run ase skills --help
 ```

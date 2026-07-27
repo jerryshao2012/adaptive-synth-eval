@@ -30,6 +30,7 @@ Use this page to choose the shortest path for your task. Configuration details l
 - [Metrics API](metrics_api.md) — Integrators can discover packaged metric specifications and score independent payload tuples through the authenticated Python service.
 - [Loop architecture](loop_engineering_for_adversarial_adaptive_synthetic_evaluation.md) — Platform engineers can understand guarded repeat-run coordination and L0-L3 readiness.
 - [Loop operations runbook](loop_operations_runbook.md) — On-call operators can start, audit, pause, recover, and safely run continuous evaluations.
+- [Governed continuous learning](continuous_learning.md) — Evaluation owners can mine synthetic evidence, compare versioned challengers, approve bounded evaluator improvements, and roll back safely.
 
 ## Environment/deployment
 

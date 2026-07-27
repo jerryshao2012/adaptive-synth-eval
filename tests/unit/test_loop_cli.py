@@ -3,6 +3,7 @@ from pathlib import Path
 
 from adaptive_synth_eval.cli import main
 from adaptive_synth_eval.clients.llm import LLMResult
+from adaptive_synth_eval.learning.models import LearningBundle
 
 
 def test_cli_loop_init_creates_assets(tmp_path, capsys):
@@ -95,6 +96,116 @@ llm_config:
     assert exit_code == 0
     assert payload["profile_id"] == "demo"
     assert payload["status"] == "initialized"
+
+
+def test_cli_learning_status_and_run_use_profile_scoped_coordinator(
+    tmp_path, monkeypatch, capsys
+):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    (profiles_dir / "demo.yaml").write_text(
+        f"""
+profile_id: demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+learning:
+  enabled: true
+  validation_contracts:
+    - {contract}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class _Coordinator:
+        def __init__(self, profile, *, output_dir):
+            calls.append((profile.profile_id, Path(output_dir)))
+
+        def status(self):
+            return {"profile_id": "demo", "status": "waiting_for_evidence"}
+
+        def run(self):
+            return {"profile_id": "demo", "status": "candidate_passed"}
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.cli.LearningCoordinator", _Coordinator
+    )
+
+    status_code = main(
+        [
+            "learn",
+            "status",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    status_payload = json.loads(capsys.readouterr().out)
+    run_code = main(
+        [
+            "learn",
+            "run",
+            "--profile",
+            "demo",
+            "--profiles-dir",
+            str(profiles_dir),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+    run_payload = json.loads(capsys.readouterr().out)
+
+    assert status_code == 0
+    assert run_code == 0
+    assert status_payload["status"] == "waiting_for_evidence"
+    assert run_payload["status"] == "candidate_passed"
+    assert calls == [
+        ("demo", tmp_path / "outputs"),
+        ("demo", tmp_path / "outputs"),
+    ]
+
+
+def test_cli_run_loads_explicit_learning_bundle(tmp_path, monkeypatch, capsys):
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\neval_plan: {}\n", encoding="utf-8")
+    bundle = LearningBundle.create(
+        profile_id="demo",
+        parent_id=None,
+        patch=[],
+        policy={"ucb_exploration_c": 2.0},
+        provenance={},
+    )
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle.to_dict()), encoding="utf-8")
+    captured = {}
+
+    def execute(**kwargs):
+        captured["bundle"] = kwargs["learning_bundle"]
+        return {"run_id": "learned-run"}
+
+    monkeypatch.setattr("adaptive_synth_eval.cli._execute_contract_run", execute)
+
+    exit_code = main(
+        [
+            "run",
+            "--contract",
+            str(contract),
+            "--dry-run",
+            "--learning-bundle",
+            str(bundle_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["bundle"].digest == bundle.digest
+    assert "Run complete: learned-run" in capsys.readouterr().out
 
 
 def test_cli_loop_run_executes_target_and_updates_state(tmp_path, monkeypatch, capsys):

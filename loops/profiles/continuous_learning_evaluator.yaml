@@ -1,0 +1,40 @@
+profile_id: continuous_learning_evaluator
+readiness_level: L2
+cadence: "0 6 * * *"
+targets:
+  - contract: contracts/examples/unified_evaluation_demo.yaml
+    dry_run: false
+max_iterations_per_cycle: 1
+human_gates:
+  - learning_candidate_approval
+checker_policy:
+  safe_max_concurrency: 4
+  max_retry_attempts: 2
+llm_config:
+  provider: azure_openai
+  model_name: gpt-4-turbo
+  endpoint_url: ${AZURE_OPENAI_ENDPOINT:-https://example.invalid/openai}
+  max_tokens_per_call: 2000
+  temperature: 0.2
+learning:
+  enabled: true
+  evidence_source: synthetic_only
+  min_new_runs: 3
+  min_new_adversarial_conversations: 100
+  candidate_kinds:
+    - policy
+    - persona
+    - scenario
+  validation_contracts:
+    - contracts/examples/unified_evaluation_demo.yaml
+  require_human_approval: true
+  tournament:
+    initial_pairs: 20
+    batch_pairs: 20
+    max_pairs: 100
+  promotion:
+    novelty_weight: 0.7
+    coverage_weight: 0.3
+    max_detection_drop_points: 5.0
+    max_judge_error_increase_points: 1.0
+    max_token_cost_increase_ratio: 0.2

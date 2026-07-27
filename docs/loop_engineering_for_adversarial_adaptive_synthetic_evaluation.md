@@ -95,6 +95,9 @@ Common optional fields:
 - `denylist`
 - `checker_policy`
 - `llm_config`
+- `learning`: optional governed evaluator-learning configuration. When enabled,
+  it requires locked `validation_contracts`, accepts synthetic evidence only,
+  and keeps human approval mandatory.
 
 L3 scheduling and containment fields:
 
@@ -112,6 +115,9 @@ The checked-in examples are:
 
 - `loops/profiles/daily_triage.yaml` — an L1 report-only profile.
 - `loops/profiles/unified_regression_guard.yaml` — an L3 unattended profile with active-window, budget, and checker controls.
+- `loops/profiles/continuous_learning_evaluator.yaml` — an L2 profile that
+  mines live synthetic runs, evaluates bounded challengers, and queues passing
+  candidates for human approval.
 
 ## Artifact model
 
@@ -123,6 +129,8 @@ Initializing a profile creates shared operator views in the runtime output tree 
 - `state/<profile_id>.json`: machine-readable profile state, recent cycles, budget counters, checker failures, and assisted-action attempts.
 
 Target evaluation artifacts continue to live under `outputs/runs/<run_id>/`; the loop state references their outcomes rather than replacing them.
+Governed learning artifacts live under `outputs/learning/<profile_id>/`; see
+[Governed continuous learning](continuous_learning.md).
 
 ## Operational interface
 

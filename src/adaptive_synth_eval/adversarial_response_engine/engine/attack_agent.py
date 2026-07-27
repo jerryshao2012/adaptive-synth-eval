@@ -51,6 +51,7 @@ class AttackAgent:
         skill_executor: AttackSkillExecutor | None = None,
         skill_include: tuple[str, ...] = (),
         target_capabilities: dict | None = None,
+        exploration_c: float = 1.4,
     ):
         self.planner = planner
         self.generator = generator
@@ -62,6 +63,7 @@ class AttackAgent:
         self.skill_executor = skill_executor
         self.skill_include = tuple(skill_include)
         self.target_capabilities = dict(target_capabilities or {})
+        self.exploration_c = float(exploration_c)
         if (skill_registry is None) != (skill_executor is None):
             raise ValueError(
                 "skill_registry and skill_executor must be configured together"
@@ -123,6 +125,7 @@ class AttackAgent:
             self._session_angle = select_angle(
                 self.attack_memory,
                 self.rng,
+                c=self.exploration_c,
                 exclude=exclude,
                 candidates=candidates,
             )
@@ -145,6 +148,7 @@ class AttackAgent:
                     candidates,
                     self.attack_memory,
                     self.rng,
+                    c=self.exploration_c,
                 )
             try:
                 plan = self.skill_executor.plan(

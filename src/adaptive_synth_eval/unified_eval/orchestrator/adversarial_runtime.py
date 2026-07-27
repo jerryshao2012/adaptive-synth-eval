@@ -156,6 +156,7 @@ class AdversarialRuntime:
             skill_executor=skill_executor,
             skill_include=contract.attack_skills.include,
             target_capabilities=target_capabilities,
+            exploration_c=float(contract.learning_policy.get("ucb_exploration_c", 1.4)),
         )
         session = SessionState(
             session_id=session_id,

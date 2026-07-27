@@ -26,14 +26,14 @@ from adaptive_synth_eval.artifacts.run_state import (
     now_iso,
     write_run_state,
 )
-from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
-from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
 from adaptive_synth_eval.capture.producers import (
     AttackMemoryProducerAdapter,
     ChatHistoryProducerAdapter,
     PersonaMemoryProducerAdapter,
 )
 from adaptive_synth_eval.capture.runtime import capture_coordinator_from_env
+from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
+from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
@@ -1464,6 +1464,8 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
         target_system_prompt=contract.target_system_prompt,
         trajectory=contract.trajectory,
         attack_skills=contract.attack_skills,
+        learning_bundle=contract.learning_bundle,
+        learning_policy=dict(contract.learning_policy),
         warnings=list(contract.warnings) + ["dry_run: forced mock LLM providers"],
     )
 

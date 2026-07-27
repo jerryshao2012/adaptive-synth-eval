@@ -67,3 +67,80 @@ llm_config:
     persisted = get_loop_status(profile_ref="demo", output_dir=tmp_path / "outputs", profiles_dir=profiles_dir)
     assert persisted["profile_id"] == "demo"
     assert persisted["profile_path"] == str(profile.source_path)
+
+
+def test_learning_profile_defaults_are_safe_and_human_gated(tmp_path):
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    profile_path = tmp_path / "learning.yaml"
+    profile_path.write_text(
+        f"""
+profile_id: learning_demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+learning:
+  enabled: true
+  validation_contracts:
+    - {contract}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    profile = load_loop_profile(str(profile_path))
+
+    assert profile.learning.enabled is True
+    assert profile.learning.evidence_source == "synthetic_only"
+    assert profile.learning.min_new_runs == 3
+    assert profile.learning.min_new_adversarial_conversations == 100
+    assert profile.learning.candidate_kinds == ("policy", "persona", "scenario")
+    assert profile.learning.require_human_approval is True
+    assert profile.learning.tournament.initial_pairs == 20
+    assert profile.learning.tournament.batch_pairs == 20
+    assert profile.learning.tournament.max_pairs == 100
+
+
+def test_learning_profile_requires_locked_validation_contracts(tmp_path):
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    profile_path = tmp_path / "learning.yaml"
+    profile_path.write_text(
+        f"""
+profile_id: learning_demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+learning:
+  enabled: true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LoopProfileError, match="validation_contracts"):
+        load_loop_profile(str(profile_path))
+
+
+def test_learning_profile_rejects_non_synthetic_evidence(tmp_path):
+    contract = tmp_path / "contract.yaml"
+    contract.write_text("suite: demo\n", encoding="utf-8")
+    profile_path = tmp_path / "learning.yaml"
+    profile_path.write_text(
+        f"""
+profile_id: learning_demo
+readiness_level: L2
+cadence: hourly
+targets:
+  - contract: {contract}
+learning:
+  enabled: true
+  evidence_source: all_monitoring
+  validation_contracts:
+    - {contract}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LoopProfileError, match="synthetic_only"):
+        load_loop_profile(str(profile_path))

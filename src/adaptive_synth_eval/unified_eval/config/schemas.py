@@ -215,6 +215,8 @@ class UnifiedContract:
     target_system_prompt: str = ""  # Bot's behavioral prompt when target.mode == "llm"
     trajectory: TrajectoryConfig = field(default_factory=TrajectoryConfig)
     attack_skills: AttackSkillsConfig = field(default_factory=AttackSkillsConfig)
+    learning_bundle: dict[str, Any] | None = None
+    learning_policy: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def persona_by_id(self) -> dict[str, Persona]:
