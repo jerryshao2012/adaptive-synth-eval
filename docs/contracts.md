@@ -315,13 +315,17 @@ The target response may place its structured activity trace at `trace_field`. Em
 The current examples are under `contracts/examples/`:
 
 - `chatbot_test_contract.yaml` and `ten_k_conversations.yaml`: synth contracts.
-- `unified_evaluation_demo.yaml`, `unified_evaluation_demo_local.yaml`, `tfsa_assistant.yaml`, `tfsa_one_week_traffic.yaml`, and `tfsa_testing.yaml`: general unified examples.
+- `unified_evaluation_demo.yaml` and `unified_agent_skills_demo.yaml`: controlled baseline/Attack Skills pair with equivalent inputs and explicit `enabled: false`/`enabled: true` policies.
+- `unified_evaluation_demo_local.yaml`, `tfsa_assistant.yaml`, `tfsa_one_week_traffic.yaml`, and `tfsa_testing.yaml`: general unified examples.
 - `tfsa_aws_unified_evaluation_no_reasoning.yaml`, `tfsa_aws_unified_evaluation_reasoning.yaml`, and `wealth_advisory.yaml`: unified AgentCore/model examples.
 - `browser_chatbot_test.yaml`: browser target example.
 - `agent-runtime-logs-export.yaml`: AgentCore runtime-log export configuration used by supporting tooling.
 
-Validate any contract with:
+Validate and dry-run the controlled pair with:
 
 ```bash
 uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
+uv run ase validate-contract contracts/examples/unified_agent_skills_demo.yaml
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
+uv run ase run --contract contracts/examples/unified_agent_skills_demo.yaml --dry-run
 ```

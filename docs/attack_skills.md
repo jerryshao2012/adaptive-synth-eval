@@ -25,9 +25,29 @@ attack_skills:
   max_tool_calls_per_turn: 3
 ```
 
-The defaults are `enabled: false`, all curated skills, the five built-in read-only tools, and three tool calls per adversarial turn. See [`unified_agent_skills_demo.yaml`](../contracts/examples/unified_agent_skills_demo.yaml) for a runnable configuration.
+The defaults are `enabled: false`, all curated skills, the five built-in read-only tools, and three tool calls per adversarial turn.
 
 An enabled contract is validated before conversations start. `include` accepts only packaged skill names, and `allowed_tools` accepts only the built-in tool names. The selected skill names, versions, content digests, and tool policy enter the normalized contract fingerprint. Resume therefore rejects changed skill content or permissions.
+
+### Paired examples
+
+The checked-in examples form a controlled comparison:
+
+- [`unified_evaluation_demo.yaml`](../contracts/examples/unified_evaluation_demo.yaml) explicitly sets `attack_skills.enabled: false`.
+- [`unified_agent_skills_demo.yaml`](../contracts/examples/unified_agent_skills_demo.yaml) uses equivalent providers, target settings, personas, scenarios, schedules, scoring, and tool policy with `attack_skills.enabled: true`.
+
+The suite and run IDs differ so outputs and resume state cannot collide. Both
+contracts use `include: []` to select all curated skills. Other unified contracts
+remain opt-in because the schema default is still disabled.
+
+Validate or dry-run the pair side by side:
+
+```bash
+uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
+uv run ase validate-contract contracts/examples/unified_agent_skills_demo.yaml
+uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
+uv run ase run --contract contracts/examples/unified_agent_skills_demo.yaml --dry-run
+```
 
 ## Inspect and validate packages
 

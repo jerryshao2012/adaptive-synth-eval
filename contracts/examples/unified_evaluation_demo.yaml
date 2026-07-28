@@ -239,6 +239,18 @@ eval_plan:
         mode: bernoulli
         p_synth: 0.4
 
+# Paired comparison: the Agent Skills sample uses this policy with enabled: true.
+attack_skills:
+  enabled: false
+  include: [] # Empty selects all packaged skills
+  allowed_tools:
+    - read_skill_resource
+    - search_skill_resources
+    - inspect_target_capabilities
+    - query_attack_memory
+    - transform_payload
+  max_tool_calls_per_turn: 3
+
 scoring:
   synth:
     weights:

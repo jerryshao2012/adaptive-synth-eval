@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -58,12 +59,40 @@ def test_load_enabled_agent_skills_example_contract():
     contract = load_unified_contract(SKILLS_EXAMPLE)
 
     assert contract.suite.suite_id == "unified_agent_skills_demo"
+    assert len(contract.persona_pool) == 3
+    assert len(contract.scenario_catalog) == 4
+    assert len(contract.adversarial_scenario_catalog) == 4
+    assert len(contract.eval_plan.entries) == 6
     assert contract.attack_skills.enabled is True
-    assert contract.attack_skills.include == (
-        "indirect-priming",
-        "semantic-drift",
+    assert contract.attack_skills.include == ()
+    assert contract.attack_skills.max_tool_calls_per_turn == 3
+
+
+def _normalized_example_for_parity(path: Path) -> dict:
+    normalized = deepcopy(contract_to_dict(load_unified_contract(path)))
+    normalized["suite"]["suite_id"] = "<paired-suite>"
+    normalized["output"]["run_id"] = "<paired-run>"
+    normalized["attack_skills"]["enabled"] = False
+    normalized["attack_skills"]["catalog"] = []
+    return normalized
+
+
+def test_agent_skills_example_matches_baseline_except_skill_activation():
+    baseline = load_unified_contract(EXAMPLE)
+    enabled = load_unified_contract(SKILLS_EXAMPLE)
+
+    assert baseline.attack_skills.enabled is False
+    assert enabled.attack_skills.enabled is True
+    assert baseline.attack_skills.include == enabled.attack_skills.include == ()
+    assert baseline.attack_skills.allowed_tools == enabled.attack_skills.allowed_tools
+    assert (
+        baseline.attack_skills.max_tool_calls_per_turn
+        == (enabled.attack_skills.max_tool_calls_per_turn)
+        == 3
     )
-    assert contract.attack_skills.max_tool_calls_per_turn == 2
+    assert _normalized_example_for_parity(EXAMPLE) == (
+        _normalized_example_for_parity(SKILLS_EXAMPLE)
+    )
 
 
 def test_llm_for_inherits_top_level():
