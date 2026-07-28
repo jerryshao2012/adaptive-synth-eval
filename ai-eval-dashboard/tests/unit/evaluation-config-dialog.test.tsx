@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EvaluationConfigDialog } from "@/components/dashboard/evaluation-config-dialog";
 import type { EvalRunParameters, MonitoringAction } from "@/types/evaluation";
+import { renderWithDefaults } from "./test-utils";
 
 const INITIAL_VALUES: EvalRunParameters = {
   samplingStrategy: "systematic",
@@ -17,16 +18,15 @@ const INITIAL_VALUES: EvalRunParameters = {
 function renderDialog(
   overrides: Partial<React.ComponentProps<typeof EvaluationConfigDialog>> = {}
 ) {
-  const props: React.ComponentProps<typeof EvaluationConfigDialog> = {
+  const defaults: React.ComponentProps<typeof EvaluationConfigDialog> = {
     open: true,
     action: "start",
     initialValues: INITIAL_VALUES,
     onOpenChange: vi.fn(),
     onSubmit: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
   };
 
-  return { ...render(<EvaluationConfigDialog {...props} />), props };
+  return renderWithDefaults(EvaluationConfigDialog, defaults, overrides);
 }
 
 afterEach(cleanup);

@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,33 +12,20 @@ import type {
   MonitoringStartRequest,
   MonitoringStartResponse,
 } from "@/types/evaluation";
+import {
+  createGetRequest,
+  createJsonPostRequest,
+  createMalformedJsonPostRequest,
+} from "./test-utils";
 
 type StartFn = (
   request: MonitoringStartRequest
 ) => Promise<MonitoringStartResponse>;
 
-function jsonRequest(value: unknown): NextRequest {
-  return new NextRequest("http://localhost/api/evaluations/monitoring", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(value),
+function statusRequest(runId?: string) {
+  return createGetRequest("http://localhost/api/evaluations/monitoring", {
+    runId,
   });
-}
-
-function malformedJsonRequest(): NextRequest {
-  return new NextRequest("http://localhost/api/evaluations/monitoring", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{not-json",
-  });
-}
-
-function statusRequest(runId?: string): NextRequest {
-  const url = new URL("http://localhost/api/evaluations/monitoring");
-  if (runId !== undefined) {
-    url.searchParams.set("runId", runId);
-  }
-  return new NextRequest(url);
 }
 
 describe("GET /api/evaluations/monitoring", () => {
@@ -75,7 +61,7 @@ describe("handleMonitoringPost", () => {
     });
 
     const response = await handleMonitoringPost(
-      jsonRequest({
+      createJsonPostRequest("http://localhost/api/evaluations/monitoring", {
         runId: "run-1",
         action: "reevaluate",
         samplingStrategy: "systematic",
@@ -102,7 +88,7 @@ describe("handleMonitoringPost", () => {
     const startFn = vi.fn<StartFn>();
 
     const response = await handleMonitoringPost(
-      malformedJsonRequest(),
+      createMalformedJsonPostRequest("http://localhost/api/evaluations/monitoring"),
       startFn
     );
 
@@ -120,7 +106,10 @@ describe("handleMonitoringPost", () => {
   ])("returns 400 without launching for invalid request %j", async (body) => {
     const startFn = vi.fn<StartFn>();
 
-    const response = await handleMonitoringPost(jsonRequest(body), startFn);
+    const response = await handleMonitoringPost(
+      createJsonPostRequest("http://localhost/api/evaluations/monitoring", body),
+      startFn
+    );
 
     expect(response.status).toBe(400);
     expect((await response.json()).error).toEqual(expect.any(String));
@@ -133,7 +122,10 @@ describe("handleMonitoringPost", () => {
       .mockRejectedValue(new Error("launcher failed"));
 
     const response = await handleMonitoringPost(
-      jsonRequest({ runId: "run-1", action: "start" }),
+      createJsonPostRequest("http://localhost/api/evaluations/monitoring", {
+        runId: "run-1",
+        action: "start",
+      }),
       startFn
     );
 
@@ -147,7 +139,10 @@ describe("handleMonitoringPost", () => {
     );
 
     const response = await handleMonitoringPost(
-      jsonRequest({ runId: "run-1", action: "start" }),
+      createJsonPostRequest("http://localhost/api/evaluations/monitoring", {
+        runId: "run-1",
+        action: "start",
+      }),
       startFn
     );
 
@@ -160,7 +155,10 @@ describe("handleMonitoringPost", () => {
     );
 
     const response = await handleMonitoringPost(
-      jsonRequest({ runId: "missing-run", action: "start" }),
+      createJsonPostRequest("http://localhost/api/evaluations/monitoring", {
+        runId: "missing-run",
+        action: "start",
+      }),
       startFn
     );
 

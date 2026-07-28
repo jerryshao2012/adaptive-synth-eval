@@ -13,6 +13,11 @@ from adaptive_synth_eval.capture.producers import (
 from adaptive_synth_eval.capture.sinks import CaptureCoordinator, JSONLCaptureSink
 
 
+def _create_coordinator(run_dir: Path) -> CaptureCoordinator:
+    sink = JSONLCaptureSink(run_dir)
+    return CaptureCoordinator(run_dir, sink)
+
+
 class TestChatHistoryProducerAdapter:
     """Tests for chat history capture emission."""
 
@@ -20,8 +25,7 @@ class TestChatHistoryProducerAdapter:
         """Test that chat turn emission creates a proper envelope."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = ChatHistoryProducerAdapter(coordinator)
 
@@ -65,8 +69,7 @@ class TestChatHistoryProducerAdapter:
         """Test emitting multiple turns from one conversation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = ChatHistoryProducerAdapter(coordinator)
 
@@ -101,8 +104,7 @@ class TestPersonaMemoryProducerAdapter:
         """Test that memory commit creates a proper envelope."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = PersonaMemoryProducerAdapter(coordinator)
 
@@ -138,8 +140,7 @@ class TestPersonaMemoryProducerAdapter:
         """Test emitting memory commits for multiple conversations."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = PersonaMemoryProducerAdapter(coordinator)
 
@@ -182,8 +183,7 @@ class TestAttackMemoryProducerAdapter:
         """Test that attack memory session creates a proper envelope."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = AttackMemoryProducerAdapter(coordinator)
 
@@ -217,8 +217,7 @@ class TestAttackMemoryProducerAdapter:
         """Test emitting attack sessions for multiple conversations."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = AttackMemoryProducerAdapter(coordinator)
 
@@ -263,8 +262,7 @@ class TestProducerCoordination:
         """Test that multiple producers can emit to the same coordinator/sink."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             chat_adapter = ChatHistoryProducerAdapter(coordinator)
             memory_adapter = PersonaMemoryProducerAdapter(coordinator)
@@ -302,8 +300,7 @@ class TestProducerCoordination:
         """Test that different conversations don't interfere in per-producer buffers."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = ChatHistoryProducerAdapter(coordinator)
 
@@ -319,7 +316,7 @@ class TestProducerCoordination:
 
             coordinator.close()
 
-            # Verify all 9 turns were written (3 conversations × 3 turns)
+            # Verify all 9 turns were written (3 conversations Ã— 3 turns)
             skeleton_file = run_dir / "capture" / "skeleton.jsonl"
             with skeleton_file.open() as f:
                 lines = [l.strip() for l in f if l.strip()]
@@ -329,8 +326,7 @@ class TestProducerCoordination:
         """Test that re-emitting the same envelope is idempotent."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
-            coordinator = CaptureCoordinator(run_dir, sink)
+            coordinator = _create_coordinator(run_dir)
 
             adapter = ChatHistoryProducerAdapter(coordinator)
 

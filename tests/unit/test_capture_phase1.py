@@ -1,9 +1,5 @@
 """Unit tests for capture domain and trigger policy (Phase 1)."""
 
-import json
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from adaptive_synth_eval.capture.models import (
@@ -23,6 +19,33 @@ from adaptive_synth_eval.monitoring.triggers import (
     detect_response_empty,
     evaluate_row_triggers,
 )
+
+
+def _make_skeleton(skeleton_id="skel-1"):
+    return SkeletonRecord(
+        skeleton_id=skeleton_id,
+        producer_id="persona:P001",
+        conversation_id="conv-1",
+        turn_id=1,
+        timestamp="2026-07-24T12:34:56Z",
+        event_type="chat_turn",
+        content_digest="abc123",
+        content_size_bytes=512,
+        buffer_locator=None,
+        status="success",
+    )
+
+
+def _make_trigger(trigger_id="trig-1"):
+    return CaptureTrigger(
+        trigger_id=trigger_id,
+        source=TriggerSource.NATIVE_ROW_SIGNAL,
+        event_type="error",
+        severity=TriggerSeverity.HIGH,
+        detector_name="test",
+        reason="Test",
+        timestamp="2026-07-24T12:34:56Z",
+    )
 
 
 class TestCaptureModels:
@@ -45,18 +68,7 @@ class TestCaptureModels:
 
     def test_skeleton_record_creation(self):
         """Test creating a SkeletonRecord."""
-        skeleton = SkeletonRecord(
-            skeleton_id="skel-1",
-            producer_id="persona:P001",
-            conversation_id="conv-1",
-            turn_id=1,
-            timestamp="2026-07-24T12:34:56Z",
-            event_type="chat_turn",
-            content_digest="abc123def456",
-            content_size_bytes=512,
-            buffer_locator=None,
-            status="success",
-        )
+        skeleton = _make_skeleton("skel-1")
         assert skeleton.producer_id == "persona:P001"
         assert skeleton.content_size_bytes == 512
         assert skeleton.to_dict()["skeleton_id"] == "skel-1"
@@ -184,98 +196,44 @@ class TestTriggerPolicy:
 class TestJSONLCaptureSink:
     """Test JSONL capture sink."""
 
-    def test_sink_write_skeleton(self):
+    def test_sink_write_skeleton(self, tmp_path):
         """Test writing skeleton records."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
+        sink = JSONLCaptureSink(tmp_path)
+        sink.write_skeleton(_make_skeleton("skel-1"))
+        sink.close()
 
-            skeleton = SkeletonRecord(
-                skeleton_id="skel-1",
-                producer_id="persona:P001",
-                conversation_id="conv-1",
-                turn_id=1,
-                timestamp="2026-07-24T12:34:56Z",
-                event_type="chat_turn",
-                content_digest="abc123",
-                content_size_bytes=512,
-                buffer_locator=None,
-                status="success",
-            )
-            sink.write_skeleton(skeleton)
-            sink.close()
+        skeleton_file = tmp_path / "capture" / "skeleton.jsonl"
+        assert skeleton_file.exists()
+        assert "skel-1" in skeleton_file.read_text(encoding="utf-8")
 
-            # Verify the file exists and contains the record
-            skeleton_file = run_dir / "capture" / "skeleton.jsonl"
-            assert skeleton_file.exists()
-            with skeleton_file.open() as f:
-                content = f.read()
-                assert "skel-1" in content
-
-    def test_sink_idempotent_dedup(self):
+    def test_sink_idempotent_dedup(self, tmp_path):
         """Test that duplicate writes are deduplicated."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
+        sink = JSONLCaptureSink(tmp_path)
+        trigger = _make_trigger("trig-1")
 
-            trigger = CaptureTrigger(
-                trigger_id="trig-1",
-                source=TriggerSource.NATIVE_ROW_SIGNAL,
-                event_type="error",
-                severity=TriggerSeverity.HIGH,
-                detector_name="test",
-                reason="Test",
-                timestamp="2026-07-24T12:34:56Z",
-            )
+        sink.write_trigger(trigger)
+        sink.write_trigger(trigger)
+        sink.close()
 
-            # Write the same trigger twice
-            sink.write_trigger(trigger)
-            sink.write_trigger(trigger)
-            sink.close()
+        triggers_file = tmp_path / "capture" / "triggers.jsonl"
+        lines = [
+            line.strip()
+            for line in triggers_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(lines) == 1
 
-            # Should only have one line in the file
-            triggers_file = run_dir / "capture" / "triggers.jsonl"
-            with triggers_file.open() as f:
-                lines = [l.strip() for l in f if l.strip()]
-                assert len(lines) == 1
-
-    def test_sink_multiple_files(self):
+    def test_sink_multiple_files(self, tmp_path):
         """Test that sink creates separate JSONL files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            run_dir = Path(tmpdir)
-            sink = JSONLCaptureSink(run_dir)
+        sink = JSONLCaptureSink(tmp_path)
+        sink.write_skeleton(_make_skeleton("skel-1"))
+        sink.write_trigger(_make_trigger("trig-1"))
+        sink.close()
 
-            skeleton = SkeletonRecord(
-                skeleton_id="skel-1",
-                producer_id="persona:P001",
-                conversation_id="conv-1",
-                turn_id=1,
-                timestamp="2026-07-24T12:34:56Z",
-                event_type="chat_turn",
-                content_digest="abc123",
-                content_size_bytes=512,
-                buffer_locator=None,
-                status="success",
-            )
-            trigger = CaptureTrigger(
-                trigger_id="trig-1",
-                source=TriggerSource.NATIVE_ROW_SIGNAL,
-                event_type="error",
-                severity=TriggerSeverity.HIGH,
-                detector_name="test",
-                reason="Test",
-                timestamp="2026-07-24T12:34:56Z",
-            )
-
-            sink.write_skeleton(skeleton)
-            sink.write_trigger(trigger)
-            sink.close()
-
-            # Verify both files exist
-            skeleton_file = run_dir / "capture" / "skeleton.jsonl"
-            triggers_file = run_dir / "capture" / "triggers.jsonl"
-            assert skeleton_file.exists()
-            assert triggers_file.exists()
+        skeleton_file = tmp_path / "capture" / "skeleton.jsonl"
+        triggers_file = tmp_path / "capture" / "triggers.jsonl"
+        assert skeleton_file.exists()
+        assert triggers_file.exists()
 
 
 class TestIntegration:

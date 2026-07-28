@@ -61,55 +61,15 @@ async def test_bounded_results_stops_admission_and_drains_on_consumer_failure():
     assert started == [0, 1, 2]
 
 
-def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
-    contract_path = tmp_path / "contract.json"
-    contract_path.write_text(
-        json.dumps(
-            {
-                "simulation_suite": {
-                    "suite_id": "suite",
-                    "target_application": "hr_bot",
-                    "run_mode": "synthetic_chat_history_generation",
-                    "synthetic_flag": True,
-                },
-                "target": {"enabled": False},
-                "time_window": {
-                    "start_day": "2026-05-01",
-                    "num_synthetic_days": 1,
-                    "compressed_runtime_minutes": 60,
-                },
-                "persona_pool": [
-                    {
-                        "persona_id": "P001",
-                        "role": "new_employee",
-                        "location": "Canada",
-                        "seniority": "junior",
-                        "communication_style": "polite",
-                        "hr_familiarity": "low",
-                        "privacy_sensitivity": "medium",
-                    }
-                ],
-                "scenario_catalog": [
-                    {
-                        "scenario_id": "S001",
-                        "domain": "leave",
-                        "intent": "understand_eligibility",
-                        "expected_retrieval_topics": ["leave"],
-                        "failure_injection": {"ambiguity": 0.2},
-                        "success_criteria": {"answers_grounded_in_policy": True},
-                    }
-                ],
-                "traffic_orchestration": {
-                    "total_conversations": 2,
-                    "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [
-                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
-                    ],
-                    "random_seed": 3,
-                },
-                "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
-            }
-        )
+def test_run_simulation_dry_run_writes_expected_artifacts(
+    tmp_path, write_synth_contract_json
+):
+    contract_path, _ = write_synth_contract_json(
+        file_name="contract.json",
+        run_id="run1",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
     )
     contract = load_contract(contract_path)
 
@@ -131,16 +91,17 @@ def test_run_simulation_dry_run_writes_expected_artifacts(tmp_path):
     assert "Elapsed seconds:" in generation_report
 
 
-def test_effective_max_concurrency_is_one_for_browser_chatbot(tmp_path):
-    contract_path = tmp_path / "contract.json"
-    payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {
+def test_effective_max_concurrency_is_one_for_browser_chatbot(
+    tmp_path, write_synth_contract_json
+):
+    contract_path, _ = write_synth_contract_json(
+        file_name="contract.json",
+        run_id="run1",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
+        max_concurrency=5,
+        target={
             "enabled": True,
             "mode": "browser",
             "browser": {
@@ -150,56 +111,23 @@ def test_effective_max_concurrency_is_one_for_browser_chatbot(tmp_path):
                 "response_selector": ".bot-message",
             },
         },
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 2,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "max_concurrency": 5,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
-    }
-    contract_path.write_text(json.dumps(payload))
+    )
     contract = load_contract(contract_path)
 
     assert _effective_max_concurrency(contract) == 1
 
 
-def test_browser_mode_summary_reports_effective_max_concurrency_one(tmp_path):
-    contract_path = tmp_path / "contract_browser.json"
-    payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {
+def test_browser_mode_summary_reports_effective_max_concurrency_one(
+    tmp_path, write_synth_contract_json
+):
+    contract_path, _ = write_synth_contract_json(
+        file_name="contract_browser.json",
+        run_id="browser_run",
+        total_conversations=1,
+        turn_min=3,
+        turn_max=3,
+        max_concurrency=7,
+        target={
             "enabled": True,
             "mode": "browser",
             "browser": {
@@ -209,41 +137,7 @@ def test_browser_mode_summary_reports_effective_max_concurrency_one(tmp_path):
                 "response_selector": ".bot-message",
             },
         },
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 1,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "max_concurrency": 7,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "browser_run"},
-    }
-    contract_path.write_text(json.dumps(payload))
+    )
     contract = load_contract(contract_path)
 
     summary = run_simulation(contract, dry_run=True)
@@ -252,58 +146,15 @@ def test_browser_mode_summary_reports_effective_max_concurrency_one(tmp_path):
     assert summary["effective_max_concurrency"] == 1
 
 
-def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):
-    contract_path = tmp_path / "contract_async.json"
-    contract_path.write_text(
-        json.dumps(
-            {
-                "simulation_suite": {
-                    "suite_id": "suite",
-                    "target_application": "hr_bot",
-                    "run_mode": "synthetic_chat_history_generation",
-                    "synthetic_flag": True,
-                },
-                "target": {"enabled": False},
-                "time_window": {
-                    "start_day": "2026-05-01",
-                    "num_synthetic_days": 1,
-                    "compressed_runtime_minutes": 60,
-                },
-                "persona_pool": [
-                    {
-                        "persona_id": "P001",
-                        "role": "new_employee",
-                        "location": "Canada",
-                        "seniority": "junior",
-                        "communication_style": "polite",
-                        "hr_familiarity": "low",
-                        "privacy_sensitivity": "medium",
-                    }
-                ],
-                "scenario_catalog": [
-                    {
-                        "scenario_id": "S001",
-                        "domain": "leave",
-                        "intent": "understand_eligibility",
-                        "expected_retrieval_topics": ["leave"],
-                        "failure_injection": {"ambiguity": 0.2},
-                        "success_criteria": {"answers_grounded_in_policy": True},
-                    }
-                ],
-                "traffic_orchestration": {
-                    "total_conversations": 2,
-                    "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [
-                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
-                    ],
-                    "random_seed": 3,
-                },
-                "output": {
-                    "base_dir": str(tmp_path / "outputs"),
-                    "run_id": "run_async",
-                },
-            }
-        )
+def test_run_simulation_async_dry_run_writes_expected_artifacts(
+    tmp_path, write_synth_contract_json
+):
+    contract_path, _ = write_synth_contract_json(
+        file_name="contract_async.json",
+        run_id="run_async",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
     )
     contract = load_contract(contract_path)
 
@@ -315,55 +166,13 @@ def test_run_simulation_async_dry_run_writes_expected_artifacts(tmp_path):
     ).exists()
 
 
-def test_run_simulation_with_output_conversations(tmp_path):
-    contract_path = tmp_path / "contract.json"
-    contract_path.write_text(
-        json.dumps(
-            {
-                "simulation_suite": {
-                    "suite_id": "suite",
-                    "target_application": "hr_bot",
-                    "run_mode": "synthetic_chat_history_generation",
-                    "synthetic_flag": True,
-                },
-                "target": {"enabled": False},
-                "time_window": {
-                    "start_day": "2026-05-01",
-                    "num_synthetic_days": 1,
-                    "compressed_runtime_minutes": 60,
-                },
-                "persona_pool": [
-                    {
-                        "persona_id": "P001",
-                        "role": "new_employee",
-                        "location": "Canada",
-                        "seniority": "junior",
-                        "communication_style": "polite",
-                        "hr_familiarity": "low",
-                        "privacy_sensitivity": "medium",
-                    }
-                ],
-                "scenario_catalog": [
-                    {
-                        "scenario_id": "S001",
-                        "domain": "leave",
-                        "intent": "understand_eligibility",
-                        "expected_retrieval_topics": ["leave"],
-                        "failure_injection": {"ambiguity": 0.2},
-                        "success_criteria": {"answers_grounded_in_policy": True},
-                    }
-                ],
-                "traffic_orchestration": {
-                    "total_conversations": 2,
-                    "conversation_turns": {"min": 3, "max": 3},
-                    "mix": [
-                        {"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}
-                    ],
-                    "random_seed": 3,
-                },
-                "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
-            }
-        )
+def test_run_simulation_with_output_conversations(tmp_path, write_synth_contract_json):
+    contract_path, _ = write_synth_contract_json(
+        file_name="contract.json",
+        run_id="run1",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
     )
     contract = load_contract(contract_path)
 
@@ -381,49 +190,15 @@ def test_run_simulation_with_output_conversations(tmp_path):
     assert "Conversation ID:" in content
 
 
-def test_run_simulation_realtime_chat_display_multi_persona(tmp_path, monkeypatch):
-    base_contract = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 1,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "random_seed": 3,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run1"},
-    }
+def test_run_simulation_realtime_chat_display_multi_persona(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    base_contract = build_synth_contract_payload(
+        run_id="run1",
+        total_conversations=1,
+        turn_min=3,
+        turn_max=3,
+    )
 
     realtime_calls = []
 
@@ -462,49 +237,15 @@ def test_run_simulation_realtime_chat_display_multi_persona(tmp_path, monkeypatc
     assert len(realtime_calls) > 0
 
 
-def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 1,
-            "conversation_turns": {"min": 5, "max": 5},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "random_seed": 3,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_stop"},
-    }
+def test_run_simulation_realtime_can_stop_early(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    contract_payload = build_synth_contract_payload(
+        run_id="run_stop",
+        total_conversations=1,
+        turn_min=5,
+        turn_max=5,
+    )
 
     contract_path = tmp_path / "contract_stop.json"
     contract_path.write_text(json.dumps(contract_payload))
@@ -556,54 +297,16 @@ def test_run_simulation_realtime_can_stop_early(tmp_path, monkeypatch):
 
 
 def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, build_synth_contract_payload
 ):
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {
-            "enabled": True,
-            "endpoint": "http://chat.example.com",
-        },
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 2,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "max_concurrency": 1,
-            "random_seed": 3,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_stop_all"},
-    }
+    contract_payload = build_synth_contract_payload(
+        run_id="run_stop_all",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
+        max_concurrency=1,
+        target={"enabled": True, "endpoint": "http://chat.example.com"},
+    )
     contract_path = tmp_path / "contract_stop_all.json"
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
@@ -636,58 +339,17 @@ def test_run_simulation_stops_all_processes_when_target_chatbot_unavailable(
 
 
 def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, build_synth_contract_payload
 ):
     """HTTP 200 with an error body (e.g. 403/CosmosDB key expired) must also stop all processes."""
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {
-            "enabled": True,
-            "endpoint": "http://chat.example.com",
-        },
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 2,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "max_concurrency": 1,
-            "random_seed": 3,
-        },
-        "output": {
-            "base_dir": str(tmp_path / "outputs"),
-            "run_id": "run_stop_200_error",
-        },
-    }
+    contract_payload = build_synth_contract_payload(
+        run_id="run_stop_200_error",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
+        max_concurrency=1,
+        target={"enabled": True, "endpoint": "http://chat.example.com"},
+    )
     contract_path = tmp_path / "contract_stop_200.json"
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
@@ -724,52 +386,15 @@ def test_run_simulation_stops_when_chatbot_returns_http200_with_error_body(
     assert calls["count"] == 1
 
 
-def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkeypatch):
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
-            {
-                "persona_id": "P001",
-                "role": "new_employee",
-                "location": "Canada",
-                "seniority": "junior",
-                "communication_style": "polite",
-                "hr_familiarity": "low",
-                "privacy_sensitivity": "medium",
-            }
-        ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
-        ],
-        "traffic_orchestration": {
-            "total_conversations": 1,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [{"persona_id": "P001", "scenario_id": "S001", "weight": 1.0}],
-            "random_seed": 3,
-        },
-        "output": {
-            "base_dir": str(tmp_path / "outputs"),
-            "run_id": "run_non_interactive",
-        },
-    }
+def test_realtime_controller_only_used_when_interactive_enabled(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    contract_payload = build_synth_contract_payload(
+        run_id="run_non_interactive",
+        total_conversations=1,
+        turn_min=3,
+        turn_max=3,
+    )
 
     contract_path = tmp_path / "contract_non_interactive.json"
     contract_path.write_text(json.dumps(contract_payload))
@@ -797,26 +422,18 @@ def test_realtime_controller_only_used_when_interactive_enabled(tmp_path, monkey
     assert summary["total_turns"] == 3
 
 
-def test_run_simulation_with_persona_filter(tmp_path):
+def test_run_simulation_with_persona_filter(tmp_path, build_synth_contract_payload):
     import pytest
 
     from adaptive_synth_eval.config.contract import ContractError
 
     contract_path = tmp_path / "contract_filter.json"
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
+    contract_payload = build_synth_contract_payload(
+        run_id="run_filter",
+        total_conversations=4,
+        turn_min=3,
+        turn_max=3,
+        persona_pool=[
             {
                 "persona_id": "P001",
                 "role": "new_employee",
@@ -836,27 +453,11 @@ def test_run_simulation_with_persona_filter(tmp_path):
                 "privacy_sensitivity": "medium",
             },
         ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
+        mix=[
+            {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+            {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
         ],
-        "traffic_orchestration": {
-            "total_conversations": 4,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [
-                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
-                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
-            ],
-            "random_seed": 3,
-        },
-        "output": {"base_dir": str(tmp_path / "outputs"), "run_id": "run_filter"},
-    }
+    )
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
 
@@ -880,23 +481,15 @@ def test_run_simulation_with_persona_filter(tmp_path):
 
 
 def test_realtime_controller_seeded_with_filtered_persona_before_start(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, build_synth_contract_payload
 ):
     contract_path = tmp_path / "contract_filter_realtime.json"
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
+    contract_payload = build_synth_contract_payload(
+        run_id="run_filter_realtime",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
+        persona_pool=[
             {
                 "persona_id": "P001",
                 "role": "new_employee",
@@ -916,30 +509,11 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(
                 "privacy_sensitivity": "medium",
             },
         ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
+        mix=[
+            {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+            {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
         ],
-        "traffic_orchestration": {
-            "total_conversations": 2,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [
-                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
-                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
-            ],
-            "random_seed": 3,
-        },
-        "output": {
-            "base_dir": str(tmp_path / "outputs"),
-            "run_id": "run_filter_realtime",
-        },
-    }
+    )
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
 
@@ -990,23 +564,15 @@ def test_realtime_controller_seeded_with_filtered_persona_before_start(
 
 
 def test_realtime_controller_defaults_to_first_contract_persona_before_start(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, build_synth_contract_payload
 ):
     contract_path = tmp_path / "contract_first_persona_realtime.json"
-    contract_payload = {
-        "simulation_suite": {
-            "suite_id": "suite",
-            "target_application": "hr_bot",
-            "run_mode": "synthetic_chat_history_generation",
-            "synthetic_flag": True,
-        },
-        "target": {"enabled": False},
-        "time_window": {
-            "start_day": "2026-05-01",
-            "num_synthetic_days": 1,
-            "compressed_runtime_minutes": 60,
-        },
-        "persona_pool": [
+    contract_payload = build_synth_contract_payload(
+        run_id="run_first_persona_realtime",
+        total_conversations=2,
+        turn_min=3,
+        turn_max=3,
+        persona_pool=[
             {
                 "persona_id": "P001",
                 "role": "new_employee",
@@ -1026,30 +592,11 @@ def test_realtime_controller_defaults_to_first_contract_persona_before_start(
                 "privacy_sensitivity": "medium",
             },
         ],
-        "scenario_catalog": [
-            {
-                "scenario_id": "S001",
-                "domain": "leave",
-                "intent": "understand_eligibility",
-                "expected_retrieval_topics": ["leave"],
-                "failure_injection": {"ambiguity": 0.2},
-                "success_criteria": {"answers_grounded_in_policy": True},
-            }
+        mix=[
+            {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
+            {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
         ],
-        "traffic_orchestration": {
-            "total_conversations": 2,
-            "conversation_turns": {"min": 3, "max": 3},
-            "mix": [
-                {"persona_id": "P001", "scenario_id": "S001", "weight": 0.5},
-                {"persona_id": "P002", "scenario_id": "S001", "weight": 0.5},
-            ],
-            "random_seed": 3,
-        },
-        "output": {
-            "base_dir": str(tmp_path / "outputs"),
-            "run_id": "run_first_persona_realtime",
-        },
-    }
+    )
     contract_path.write_text(json.dumps(contract_payload))
     contract = load_contract(contract_path)
 

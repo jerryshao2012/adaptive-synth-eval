@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { handleMonitoringLogGet } from "@/app/api/evaluations/monitoring/log/route";
@@ -11,6 +10,7 @@ import {
   MONITORING_LOG_TAIL_MAX_BYTES,
   readMonitoringLogTail,
 } from "@/lib/server/monitoring-launch";
+import { createGetRequest } from "./test-utils";
 
 const temporaryDirectories: string[] = [];
 
@@ -25,12 +25,10 @@ async function createRepository(runId = "run-1"): Promise<{
   return { repoRoot, runDirectory };
 }
 
-function logRequest(runId?: string): NextRequest {
-  const url = new URL("http://localhost/api/evaluations/monitoring/log");
-  if (runId !== undefined) {
-    url.searchParams.set("runId", runId);
-  }
-  return new NextRequest(url);
+function logRequest(runId?: string) {
+  return createGetRequest("http://localhost/api/evaluations/monitoring/log", {
+    runId,
+  });
 }
 
 afterEach(async () => {

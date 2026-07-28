@@ -9,6 +9,7 @@ import type {
   MonitoringRunStatus,
   RunSummary,
 } from "@/types/evaluation";
+import { renderWithDefaults } from "./test-utils";
 
 function makeRun(
   monitoringStatus: RunSummary["monitoringStatus"]
@@ -44,7 +45,7 @@ function renderHeader(
   overrides: Partial<React.ComponentProps<typeof RunSelectorHeader>> = {}
 ) {
   const selectedRun = makeRun(status);
-  const props: React.ComponentProps<typeof RunSelectorHeader> = {
+  const defaults: React.ComponentProps<typeof RunSelectorHeader> = {
     selectedRun,
     monitoringStatus: makeStatus(status),
     runs: [selectedRun],
@@ -52,10 +53,9 @@ function renderHeader(
     onLaunchIntent: vi.fn(),
     pendingLaunchKey: null,
     onRefresh: vi.fn(),
-    ...overrides,
   };
 
-  return { ...render(<RunSelectorHeader {...props} />), props };
+  return renderWithDefaults(RunSelectorHeader, defaults, overrides);
 }
 
 beforeAll(() => {

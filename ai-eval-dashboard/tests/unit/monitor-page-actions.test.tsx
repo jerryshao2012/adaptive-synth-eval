@@ -9,6 +9,7 @@ import type {
   MonitoringStartRequest,
   RunSummary,
 } from "@/types/evaluation";
+import { resetMocks, resetMocksWithResolvedValue } from "./test-utils";
 
 const hookState = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
@@ -116,15 +117,14 @@ beforeEach(() => {
   hookState.statuses = { "run-1": completedStatus };
   hookState.statusUpdatedAt = { "run-1": 1 };
   hookState.latestSuccessfulStatusRequestId = { "run-1": 1 };
-  hookState.mutateAsync.mockReset();
+  resetMocks([hookState.mutateAsync]);
   hookState.mutateAsync.mockResolvedValue({
     runId: "run-1",
     started: true,
     command: "uv run ase monitor run",
     monitoringStatus: "queued",
   });
-  hookState.refetchRuns.mockReset().mockResolvedValue({});
-  hookState.refetchStatus.mockReset().mockResolvedValue({});
+  resetMocksWithResolvedValue([hookState.refetchRuns, hookState.refetchStatus], {});
   hookState.prepareStatusRefreshAfterLaunch
     .mockReset()
     .mockImplementation((runId) =>
@@ -139,7 +139,7 @@ beforeEach(() => {
         }),
       })
     );
-  hookState.refetchEvaluations.mockReset().mockResolvedValue({});
+  resetMocksWithResolvedValue([hookState.refetchEvaluations], {});
 });
 
 afterEach(cleanup);

@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvaluationLogPanel } from "@/components/dashboard/evaluation-log-panel";
 import { useMonitoringLog } from "@/hooks/use-evaluations";
 import type { MonitoringLogResponse } from "@/types/evaluation";
+import { createQueryClientWrapper, createTestQueryClient } from "./test-utils";
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -46,37 +47,21 @@ function jsonFetch(data: MonitoringLogResponse): ReturnType<typeof fetch> {
   );
 }
 
-function createClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: Infinity,
-      },
-    },
-  });
-}
-
-function wrapper(client: QueryClient) {
-  return function QueryWrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
-    );
-  };
-}
+const createClient = () => createTestQueryClient();
 
 function renderPanel(
   props: Partial<React.ComponentProps<typeof EvaluationLogPanel>> = {},
   client = createClient()
 ) {
+  const Wrapper = createQueryClientWrapper(client);
   const result = render(
-    <QueryClientProvider client={client}>
+    <Wrapper>
       <EvaluationLogPanel
         runId="run-1"
         monitoringStatus="completed"
         {...props}
       />
-    </QueryClientProvider>
+    </Wrapper>
   );
   return { ...result, client };
 }
@@ -116,7 +101,7 @@ describe("useMonitoringLog", () => {
       ({ open }) => useMonitoringLog("run-1", open, false),
       {
         initialProps: { open: false },
-        wrapper: wrapper(client),
+        wrapper: createQueryClientWrapper(client),
       }
     );
 
@@ -134,7 +119,7 @@ describe("useMonitoringLog", () => {
     fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
     const inactiveClient = createClient();
     renderHook(() => useMonitoringLog("run-1", true, false), {
-      wrapper: wrapper(inactiveClient),
+      wrapper: createQueryClientWrapper(inactiveClient),
     });
     const options = queryOptions(inactiveClient, ["monitoring-log", "run-1"]);
     expect(options?.refetchInterval).toBe(false);
@@ -150,7 +135,7 @@ describe("useMonitoringLog", () => {
       ({ open }) => useMonitoringLog("run-1", open, true),
       {
         initialProps: { open: true },
-        wrapper: wrapper(client),
+        wrapper: createQueryClientWrapper(client),
       }
     );
 
@@ -174,7 +159,7 @@ describe("useMonitoringLog", () => {
       ({ active }) => useMonitoringLog("run-1", true, active),
       {
         initialProps: { active: true },
-        wrapper: wrapper(client),
+        wrapper: createQueryClientWrapper(client),
       }
     );
 
@@ -195,7 +180,7 @@ describe("useMonitoringLog", () => {
       ({ runId, open }) => useMonitoringLog(runId, open, true),
       {
         initialProps: { runId: "run-1", open: true },
-        wrapper: wrapper(client),
+        wrapper: createQueryClientWrapper(client),
       }
     );
 

@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 
-import type { PropsWithChildren } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useMonitoringStatus } from "@/hooks/use-evaluations";
 import type { MonitoringRunStatus } from "@/types/evaluation";
+import { createQueryClientWrapper, createTestQueryClient } from "./test-utils";
 
 const terminalStatus: MonitoringRunStatus = {
   runId: "run-1",
@@ -25,14 +24,10 @@ function jsonResponse(body: unknown): Response {
 }
 
 function createWrapper() {
-  const client = new QueryClient({
+  const client = createTestQueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return function Wrapper({ children }: PropsWithChildren) {
-    return (
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
-    );
-  };
+  return createQueryClientWrapper(client);
 }
 
 afterEach(() => {

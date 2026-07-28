@@ -9,6 +9,7 @@ import type {
   GoldenDatasetVersion,
   GoldenExample,
 } from "@/types/evaluation";
+import { resetMocksWithResolvedValue } from "./test-utils";
 
 const state = vi.hoisted(() => ({
   createCollection: vi.fn(),
@@ -154,7 +155,7 @@ import GoldenDatasetPage from "@/app/(dashboard)/golden-dataset/page";
 import { defaultMembershipAnnotations } from "@/components/golden/collection-workspace";
 
 beforeEach(() => {
-  Object.values(state).forEach((mock) => mock.mockReset().mockResolvedValue({}));
+  resetMocksWithResolvedValue(Object.values(state), {});
 });
 
 afterEach(cleanup);
