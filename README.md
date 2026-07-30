@@ -91,20 +91,11 @@ The service exposes the ten packaged YAML specifications and stateless single or
 
 ## Compact architecture
 
-```mermaid
-flowchart LR
-    Contract["YAML contract"] --> Synth["Synth evaluation"]
-    Contract --> Unified["Unified evaluation"]
-    Synth --> Target["Target chatbot"]
-    Unified --> Target
-    Target --> Artifacts["Run artifacts"]
-    Artifacts --> Monitoring["Monitoring"]
-    Artifacts --> Dashboard["Dashboard"]
-    Monitoring --> Dashboard
-    Loops["Guarded loops"] -. coordinate repeat runs .-> Contract
-```
+[![Adaptive Synthetic Evaluation system architecture](docs/architecture/adaptive-synth-eval-architecture.png)](docs/architecture/adaptive-synth-eval-architecture.drawio)
 
-The CLI parses and validates a contract, dispatches it to the synth or unified runner, invokes the configured target, and stores results under `outputs/runs/<run_id>/`. Unified runs use the adversarial response engine for attack planning and safety judging. Loops coordinate repeated runs, while monitoring evaluates existing artifacts for the dashboard.
+The [editable draw.io source](docs/architecture/adaptive-synth-eval-architecture.drawio) separates control surfaces, runtime execution, external providers, and governed evidence flows. The CLI parses and validates contracts, dispatches synth or unified execution, invokes the configured target, and stores run-scoped results under `outputs/runs/<run_id>/`. Unified runs combine benign persona simulation with the adversarial response engine and shared scoring.
+
+Monitoring incrementally evaluates persisted chat history for the file-backed dashboard and human review workflow. Approved reviews can become versioned golden datasets, while eligible synthetic runs feed the bounded champion/challenger learning workflow. Guarded loops apply approved bundles only at run boundaries. The standalone Metrics API reuses the metric registry and evaluator but remains outside the run-artifact and dashboard process boundary.
 
 ## Dashboard
 
