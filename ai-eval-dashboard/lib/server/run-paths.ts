@@ -1,7 +1,22 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const DEFAULT_REPO_ROOT = path.resolve(process.cwd(), "..");
+function inferDefaultRepoRoot(): string {
+  return process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..");
+}
+
+const DEFAULT_REPO_ROOT = inferDefaultRepoRoot();
+export function resolveRunsDirectory(repoRoot = DEFAULT_REPO_ROOT): string {
+  return (
+    process.env.ASE_DASHBOARD_RUNS_DIR ||
+    process.env.ASE_RUNS_DIR ||
+    path.resolve(repoRoot, "outputs", "runs")
+  );
+}
+
+const DEFAULT_RUNS_DIR = resolveRunsDirectory();
+
+process.env.ASE_REPO_ROOT ??= DEFAULT_REPO_ROOT;
 
 export class RunPathValidationError extends Error {
   constructor(message = "runId must be one safe path segment.") {
@@ -37,10 +52,7 @@ export async function resolveRunDirectory(
     throw new RunPathValidationError();
   }
 
-  // Support environment variable override for runs directory (useful when project is on OneDrive)
-  const runsDirectory =
-    process.env.ASE_RUNS_DIR ||
-    path.resolve(repoRoot, "outputs", "runs");
+  const runsDirectory = resolveRunsDirectory(repoRoot);
   const runDirectory = path.resolve(runsDirectory, normalized);
   const relative = path.relative(runsDirectory, runDirectory);
   if (

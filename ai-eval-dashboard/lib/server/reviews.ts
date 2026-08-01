@@ -7,6 +7,7 @@ import {
   getMonitoringEvaluations,
   listRunSummaries,
 } from "@/lib/server/monitoring";
+import { resolveRunsDirectory } from "@/lib/server/run-paths";
 import type {
   EvaluationRecord,
   HumanReview,
@@ -19,8 +20,7 @@ import type {
 const REPO_ROOT = path.resolve(
   process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..")
 );
-const RUNS_DIR =
-  process.env.ASE_RUNS_DIR || path.join(REPO_ROOT, "outputs", "runs");
+const RUNS_DIR = resolveRunsDirectory(REPO_ROOT);
 const HUMAN_REVIEWS_FILE = "human_reviews.jsonl";
 
 function runDirPath(runId: string): string {

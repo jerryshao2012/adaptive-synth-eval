@@ -6,7 +6,10 @@ import {
   projectMonitoringRun,
   startMonitoringRun,
 } from "@/lib/server/monitoring-launch";
-import { resolveRunDirectory } from "@/lib/server/run-paths";
+import {
+  resolveRunDirectory,
+  resolveRunsDirectory,
+} from "@/lib/server/run-paths";
 
 import type {
   EvaluationRecord,
@@ -18,8 +21,10 @@ import type {
   TraceDetailsResponse,
 } from "@/types/evaluation";
 
-const REPO_ROOT = path.resolve(process.cwd(), "..");
-const RUNS_DIR = path.join(REPO_ROOT, "outputs", "runs");
+const REPO_ROOT = path.resolve(
+  process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..")
+);
+const RUNS_DIR = resolveRunsDirectory(REPO_ROOT);
 const DEFAULT_LIMIT = 2000;
 
 function stringField(row: Record<string, unknown>, field: string): string | null {

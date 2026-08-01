@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
+import { resolveRunsDirectory } from "@/lib/server/run-paths";
 import { validateRunArtifacts } from "@/lib/server/validation";
 
 export const runtime = "nodejs";
 
-const REPO_ROOT = path.resolve(process.cwd(), "..");
-const RUNS_DIR = path.join(REPO_ROOT, "outputs", "runs");
+const REPO_ROOT = path.resolve(
+  process.env.ASE_REPO_ROOT || path.resolve(process.cwd(), "..")
+);
+const RUNS_DIR = resolveRunsDirectory(REPO_ROOT);
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

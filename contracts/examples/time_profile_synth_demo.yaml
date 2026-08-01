@@ -6,6 +6,11 @@
 #     OPENAI_API_KEY= OLLAMA_BASE_URL= OLLAMA_API_BASE= \
 #     AWS_BEARER_TOKEN_BEDROCK= \
 #     uv run ase run --contract contracts/examples/time_profile_synth_demo.yaml --dry-run
+#
+#   uv run ase validate-contract .\contracts\examples\time_profile_synth_demo.yaml
+#   uv run ase run --contract .\contracts\examples\time_profile_synth_demo.yaml
+#   uv run ase monitor run --run-folder .\outputs\runs\time_profile_synth_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
+
 
 simulation_suite:
   suite_id: time_profile_synth_demo
