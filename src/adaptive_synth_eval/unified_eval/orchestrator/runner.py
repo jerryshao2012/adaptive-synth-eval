@@ -5,17 +5,17 @@ writes unified artifacts.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
 import random
 import time
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timedelta
 from glob import glob
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from adaptive_synth_eval.adversarial_response_engine.core.models import AttackMemory
 from adaptive_synth_eval.adversarial_response_engine.core.token_budget import (
@@ -26,6 +26,9 @@ from adaptive_synth_eval.artifacts.run_state import (
     now_iso,
     write_run_state,
 )
+from adaptive_synth_eval.artifacts.fingerprints import (
+    fingerprint_payload as _fingerprint_payload,
+)
 from adaptive_synth_eval.capture.producers import (
     AttackMemoryProducerAdapter,
     ChatHistoryProducerAdapter,
@@ -35,7 +38,13 @@ from adaptive_synth_eval.capture.runtime import capture_coordinator_from_env
 from adaptive_synth_eval.clients.chatbot_factory import create_chatbot_client
 from adaptive_synth_eval.clients.logger_utils import attach_run_file_log
 from adaptive_synth_eval.config.contract import ContractError
+from adaptive_synth_eval.config.schemas import TimeProfile
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
+from adaptive_synth_eval.generation.time_profile import (
+    build_time_profile_plan,
+    profile_provenance,
+    summarize_profile_plan,
+)
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
 from adaptive_synth_eval.unified_eval.config.schemas import UnifiedContract
 from adaptive_synth_eval.unified_eval.orchestrator.artifact_actor import ArtifactActor
@@ -60,39 +69,6 @@ from adaptive_synth_eval.unified_eval.providers.llm_target_client import LLMTarg
 logger = logging.getLogger(__name__)
 
 
-def _secret_safe_payload(value: Any, *, redact: bool = False) -> Any:
-    if redact:
-        if isinstance(value, dict):
-            return {str(key): "<redacted>" for key in value}
-        return "<redacted>"
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            lowered = str(key).lower()
-            sensitive = (
-                lowered == "auth"
-                or "password" in lowered
-                or "secret" in lowered
-                or ("token" in lowered and lowered != "max_tokens")
-                or ("api_key" in lowered and lowered != "api_key_env")
-            )
-            out[str(key)] = _secret_safe_payload(item, redact=sensitive)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [_secret_safe_payload(item) for item in value]
-    return value
-
-
-def _fingerprint_payload(payload: Any) -> str:
-    canonical = json.dumps(
-        _secret_safe_payload(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def _validate_resume_fingerprints(
     state: dict[str, Any], *, contract_fingerprint: str, plan_fingerprint: str
 ) -> None:
@@ -115,6 +91,17 @@ def _validate_resume_fingerprints(
         raise ContractError(
             "Cannot resume: the filtered run plan differs from the run-state checkpoint."
         )
+
+
+async def _await_sequence_ack(operation: Awaitable[None]) -> None:
+    """Let an actor acknowledgement finish even if its caller is cancelled."""
+
+    completion = asyncio.create_task(operation)
+    try:
+        await asyncio.shield(completion)
+    except asyncio.CancelledError:
+        await completion
+        raise
 
 
 async def _run_sliding_window(
@@ -161,6 +148,43 @@ async def _run_sliding_window(
         # cancellation cannot stop. Drain it on worker failure, supervisor
         # cancellation, or any other exceptional exit before resources close.
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _run_profiled_sliding_window(
+    items: list[dict[str, Any]],
+    *,
+    worker,
+    max_concurrency: int,
+    can_admit,
+) -> None:
+    """Apply the concurrency window independently to each profile period."""
+
+    index = 0
+    while index < len(items):
+        instance_id = items[index]["profile_period_instance_id"]
+        end = index + 1
+        while (
+            end < len(items)
+            and items[end]["profile_period_instance_id"] == instance_id
+        ):
+            end += 1
+        group = items[index:end]
+        started = 0
+
+        async def counted(item):
+            nonlocal started
+            started += 1
+            await worker(item)
+
+        await _run_sliding_window(
+            group,
+            worker=counted,
+            max_concurrency=max_concurrency,
+            can_admit=can_admit,
+        )
+        if started < len(group):
+            return
+        index = end
 
 
 async def _prepare_client(client: Any) -> None:
@@ -401,6 +425,7 @@ async def run_unified_async(
     writer = UnifiedArtifactWriter(
         contract.output.base_dir,
         run_id=run_id,
+        profile_enabled=contract.time_profile is not None,
         capture_adapter=chat_capture_adapter,
     )
     # Persist this run's log lines (including the per-turn trajectory logs) to run.log
@@ -559,13 +584,11 @@ async def run_unified_async(
             unlimited=False,
         )
 
-    if realtime_chat and persona_filter and plan:
-        # Interactive persona-filtered realtime runs should represent exactly one live chat.
-        plan = [plan[0]]
-    elif realtime_chat and plan:
-        plan = _round_robin_plan_by_persona(
+    if realtime_chat:
+        plan = _prepare_realtime_plan(
             plan,
-            [p.persona_id for p in contract.persona_pool],
+            contract=contract,
+            persona_filter=persona_filter,
         )
 
     for idx, planned in enumerate(plan, start=1):
@@ -689,7 +712,14 @@ async def run_unified_async(
             },
         )
 
-    artifact_actor = ArtifactActor(_persist_result)
+    artifact_actor = ArtifactActor(
+        _persist_result,
+        expected_sequences=(
+            [planned["sequence"] for planned in plan]
+            if contract.time_profile is not None
+            else None
+        ),
+    )
 
     effective_max_concurrency = (
         1
@@ -744,6 +774,7 @@ async def run_unified_async(
 
     async def _one(planned):
         async with semaphore:
+            sequence_disposition_started = False
             if realtime_controller:
                 realtime_controller.register_conversation_session(
                     planned["conversation_id"],
@@ -751,72 +782,135 @@ async def run_unified_async(
                     total_turns=planned["turn_count"],
                 )
             started = time.perf_counter()
+            memory_commit_cancellation: asyncio.CancelledError | None = None
             try:
-                conversation_llms = {
-                    name: provided.for_conversation(
-                        make_conversation_rng(
-                            contract.run.random_seed,
-                            f"{planned['conversation_key']}:{name}",
-                        ).getrandbits(32)
+                try:
+                    conversation_llms = {
+                        name: provided.for_conversation(
+                            make_conversation_rng(
+                                contract.run.random_seed,
+                                f"{planned['conversation_key']}:{name}",
+                            ).getrandbits(32)
+                        )
+                        for name, provided in llms.items()
+                    }
+                    memory_snapshot = await persona_memory_actors[
+                        planned["persona_id"]
+                    ].snapshot()
+                    res = await run_conversation(
+                        entry=planned["entry"],
+                        persona=personas_by_id[planned["persona_id"]],
+                        synth_scenario=scenarios_by_id[planned["synth_scenario_id"]],
+                        adv_scenario=adversarial_by_id[
+                            planned["adversarial_scenario_id"]
+                        ],
+                        contract=contract,
+                        llms=conversation_llms,
+                        target=target,
+                        conversation_id=planned["conversation_id"],
+                        rng=make_conversation_rng(
+                            contract.run.random_seed, planned["conversation_key"]
+                        ),
+                        token_budget=token_budget,
+                        attack_memory=memory_registry.for_persona(
+                            planned["persona_id"]
+                        ),
+                        persona_memory_snapshot=memory_snapshot,
+                        turn_count=planned["turn_count"],
+                        realtime_chat=realtime_chat,
+                        realtime_controller=realtime_controller,
+                        meter=meter,
+                        planned_profile=(
+                            planned if contract.time_profile is not None else None
+                        ),
                     )
-                    for name, provided in llms.items()
-                }
-                memory_snapshot = await persona_memory_actors[
-                    planned["persona_id"]
-                ].snapshot()
-                res = await run_conversation(
-                    entry=planned["entry"],
-                    persona=personas_by_id[planned["persona_id"]],
-                    synth_scenario=scenarios_by_id[planned["synth_scenario_id"]],
-                    adv_scenario=adversarial_by_id[planned["adversarial_scenario_id"]],
-                    contract=contract,
-                    llms=conversation_llms,
-                    target=target,
-                    conversation_id=planned["conversation_id"],
-                    rng=make_conversation_rng(
-                        contract.run.random_seed, planned["conversation_key"]
-                    ),
-                    token_budget=token_budget,
-                    attack_memory=memory_registry.for_persona(planned["persona_id"]),
-                    persona_memory_snapshot=memory_snapshot,
-                    turn_count=planned["turn_count"],
-                    realtime_chat=realtime_chat,
-                    realtime_controller=realtime_controller,
-                    meter=meter,
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Conversation failed and will be recorded as an error: %s (%s)",
+                        planned["conversation_id"],
+                        type(exc).__name__,
+                    )
+                    res = _failed_conversation_result(
+                        planned=planned,
+                        error=f"{type(exc).__name__}: {exc}",
+                        elapsed_seconds=round(time.perf_counter() - started, 2),
+                    )
+
+                if (
+                    res.termination_reason == "budget_exhausted"
+                    and not res.chat_history
+                ):
+                    if contract.time_profile is not None:
+                        sequence_disposition_started = True
+                        await _await_sequence_ack(
+                            artifact_actor.skip(planned["sequence"])
+                        )
+                    return
+
+                if res.persona_memory_delta is not None:
+                    try:
+                        await persona_memory_actors[planned["persona_id"]].commit(
+                            planned["conversation_id"],
+                            planned["sequence"],
+                            res.persona_memory_delta,
+                        )
+                    except asyncio.CancelledError as exc:
+                        memory_commit_cancellation = exc
+                        logger.warning(
+                            "Persona memory commit was cancelled; persisting completed "
+                            "conversation %s before cancellation propagates",
+                            planned["conversation_id"],
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        error = f"{type(exc).__name__}: {exc}"
+                        logger.exception(
+                            "Persona memory commit failed for %s; preserving the "
+                            "completed conversation artifact",
+                            planned["conversation_id"],
+                        )
+                        res.conversation_row["persona_memory_error"] = error
+                        res.failed_rows.append(
+                            {
+                                "conversation_id": planned["conversation_id"],
+                                "turn_id": 0,
+                                "turn_type": "system_error",
+                                "failure_mode": "persona_memory_commit",
+                                "error": error,
+                            }
+                        )
+                        res.errors += 1
+
+                sequence_disposition_started = True
+                await _await_sequence_ack(
+                    artifact_actor.submit(
+                        planned["sequence"], planned["persona_id"], res
+                    )
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "Conversation failed and will be recorded as an error: %s (%s)",
-                    planned["conversation_id"],
-                    type(exc).__name__,
-                )
-                res = _failed_conversation_result(
-                    planned=planned,
-                    error=f"{type(exc).__name__}: {exc}",
-                    elapsed_seconds=round(time.perf_counter() - started, 2),
-                )
+                if memory_commit_cancellation is not None:
+                    raise memory_commit_cancellation
+                await progress.mark_completed(planned["conversation_id"])
             finally:
                 token_budget.release_reservations_for_prefix(
                     f"{planned['conversation_id']}:"
                 )
-
-            if res.termination_reason == "budget_exhausted" and not res.chat_history:
-                return
-
-            if res.persona_memory_delta is not None:
-                await persona_memory_actors[planned["persona_id"]].commit(
-                    planned["conversation_id"],
-                    planned["sequence"],
-                    res.persona_memory_delta,
-                )
-
-            await artifact_actor.submit(planned["sequence"], planned["persona_id"], res)
-            await progress.mark_completed(planned["conversation_id"])
+                if (
+                    contract.time_profile is not None
+                    and not sequence_disposition_started
+                ):
+                    sequence_disposition_started = True
+                    await _await_sequence_ack(
+                        artifact_actor.skip(planned["sequence"])
+                    )
 
     budget_stopped = False
     start_time = time.time()
     try:
-        await _run_sliding_window(
+        run_window = (
+            _run_profiled_sliding_window
+            if contract.time_profile is not None
+            else _run_sliding_window
+        )
+        await run_window(
             plan,
             worker=_one,
             max_concurrency=effective_max_concurrency,
@@ -853,7 +947,7 @@ async def run_unified_async(
         contract=contract,
         writer=writer,
         tracker=tracker,
-        plan=plan,
+        plan=full_plan,
         run_id=run_id,
         dry_run=dry_run,
         memory_registry=memory_registry,
@@ -1309,6 +1403,66 @@ def _build_plan(
         if unlimited or contract.eval_plan.total_conversations is None
         else contract.eval_plan.total_conversations
     )
+    if contract.time_profile is not None:
+        known_recipe_ids = {entry.recipe_id for entry in entries}
+        filtered_windows = []
+        for window in contract.time_profile.windows:
+            weights = {
+                recipe_id: weight
+                for recipe_id, weight in window.recipe_weights.items()
+                if recipe_id in known_recipe_ids and weight > 0
+            }
+            if weights:
+                filtered_windows.append(replace(window, recipe_weights=weights))
+        if not filtered_windows:
+            return []
+        profile = TimeProfile(windows=tuple(filtered_windows))
+        profiled = build_time_profile_plan(
+            profile=profile,
+            time_window=contract.time_window,
+            total_conversations=total,
+            recipes=entries,
+            random_seed=contract.run.random_seed,
+        )
+        turn_rng = random.Random(contract.run.random_seed or 0)
+        plan: list[dict[str, Any]] = []
+        recipe_counts: dict[str, int] = {}
+        for item in profiled:
+            entry = item.recipe
+            recipe_counts[item.recipe_id] = recipe_counts.get(item.recipe_id, 0) + 1
+            occurrence = recipe_counts[item.recipe_id]
+            turn_count = entry.max_turns or turn_rng.randint(
+                contract.eval_plan.conversation_turns.min,
+                contract.eval_plan.conversation_turns.max,
+            )
+            plan.append(
+                {
+                    "entry": entry,
+                    "persona_id": entry.persona_id,
+                    "synth_scenario_id": entry.synth_scenario_id,
+                    "adversarial_scenario_id": entry.adversarial_scenario_id,
+                    "turn_count": int(turn_count),
+                    "conversation_key": (
+                        f"{entry.persona_id}:{entry.synth_scenario_id}:"
+                        f"{entry.adversarial_scenario_id}:{item.recipe_id}:{occurrence}"
+                    ),
+                    "schedule": entry.schedule,
+                    "recipe_id": item.recipe_id,
+                    "synthetic_timestamp": item.synthetic_timestamp,
+                    "synthetic_slot": item.synthetic_slot,
+                    "synthetic_day": item.synthetic_timestamp.date(),
+                    "profile_period_id": item.profile_period_id,
+                    "profile_period_instance_id": item.instance_id,
+                    "profile_period_start": item.start,
+                    "profile_period_end": item.end,
+                    "conversation_mode": item.conversation_mode,
+                    "behavior_mode": item.behavior_mode,
+                    "traffic_weight": item.traffic_weight,
+                    "recipe_weights": item.recipe_weights,
+                }
+            )
+        return plan
+
     weights = [max(0.0, e.weight) for e in entries]
     total_weight = sum(weights) or 1.0
 
@@ -1380,6 +1534,41 @@ def _round_robin_plan_by_persona(
     return interleaved
 
 
+def _prepare_realtime_plan(
+    plan: list[dict[str, Any]],
+    *,
+    contract: UnifiedContract,
+    persona_filter: str | None,
+) -> list[dict[str, Any]]:
+    """Order realtime work without crossing profile-period barriers."""
+
+    if not plan:
+        return plan
+    if contract.time_profile is None:
+        if persona_filter:
+            return [plan[0]]
+        return _round_robin_plan_by_persona(
+            plan, [persona.persona_id for persona in contract.persona_pool]
+        )
+    if persona_filter:
+        return plan
+
+    ordered: list[dict[str, Any]] = []
+    index = 0
+    persona_order = [persona.persona_id for persona in contract.persona_pool]
+    while index < len(plan):
+        instance_id = plan[index]["profile_period_instance_id"]
+        end = index + 1
+        while (
+            end < len(plan)
+            and plan[end]["profile_period_instance_id"] == instance_id
+        ):
+            end += 1
+        ordered.extend(_round_robin_plan_by_persona(plan[index:end], persona_order))
+        index = end
+    return ordered
+
+
 def _effective_max_concurrency(contract: UnifiedContract) -> int:
     if contract.target.mode == "browser":
         return 1
@@ -1393,35 +1582,44 @@ def _failed_conversation_result(
     elapsed_seconds: float,
 ) -> ConversationResult:
     conv_id = planned["conversation_id"]
+    conversation_row = {
+        "conversation_id": conv_id,
+        "session_id": conv_id,
+        "persona_id": planned["persona_id"],
+        "scenario_id": planned["synth_scenario_id"],
+        "adversarial_scenario_id": planned["adversarial_scenario_id"],
+        "synthetic_day": (
+            planned["synthetic_day"].isoformat()
+            if planned.get("synthetic_day") is not None
+            else ""
+        ),
+        "turn_count": 0,
+        "synth_turns": 0,
+        "adversarial_turns": 0,
+        "elapsed_seconds": elapsed_seconds,
+        "target_latency_seconds": 0.0,
+        "best_failure_score": 0,
+        "best_effective_failure_score": 0,
+        "failure_threshold": 0,
+        "is_breach": False,
+        "termination_reason": "runner_exception",
+    }
+    error_row = {
+        "conversation_id": conv_id,
+        "turn_id": 0,
+        "turn_type": "system_error",
+        "error": error,
+        "failure_mode": "runner_exception",
+    }
+    if "profile_period_id" in planned:
+        provenance = profile_provenance(planned)
+        timestamp = planned["synthetic_timestamp"].isoformat()
+        conversation_row.update(timestamp=timestamp, **provenance)
+        error_row.update(timestamp=timestamp, **provenance)
     return ConversationResult(
-        conversation_row={
-            "conversation_id": conv_id,
-            "session_id": conv_id,
-            "persona_id": planned["persona_id"],
-            "scenario_id": planned["synth_scenario_id"],
-            "adversarial_scenario_id": planned["adversarial_scenario_id"],
-            "synthetic_day": "",
-            "turn_count": 0,
-            "synth_turns": 0,
-            "adversarial_turns": 0,
-            "elapsed_seconds": elapsed_seconds,
-            "target_latency_seconds": 0.0,
-            "best_failure_score": 0,
-            "best_effective_failure_score": 0,
-            "failure_threshold": 0,
-            "is_breach": False,
-            "termination_reason": "runner_exception",
-        },
+        conversation_row=conversation_row,
         chat_history=[],
-        turn_rows=[
-            {
-                "conversation_id": conv_id,
-                "turn_id": 0,
-                "turn_type": "system_error",
-                "error": error,
-                "failure_mode": "runner_exception",
-            }
-        ],
+        turn_rows=[error_row],
         score_rows=[],
         failed_rows=[],
         adversarial_session=None,
@@ -1467,6 +1665,7 @@ def _force_mock_providers(contract: UnifiedContract) -> UnifiedContract:
         learning_bundle=contract.learning_bundle,
         learning_policy=dict(contract.learning_policy),
         warnings=list(contract.warnings) + ["dry_run: forced mock LLM providers"],
+        time_profile=contract.time_profile,
     )
 
 
@@ -1686,6 +1885,8 @@ def _persist_and_summarize(
         "performance": performance_stats,
         "scale_projections": scale_projections,
     }
+    if contract.time_profile is not None:
+        summary["profile_counts"] = summarize_profile_plan(plan)
     if contract.trajectory.enabled:
         summary["trajectory"] = {
             "max_trace_severity_score": (
@@ -1736,19 +1937,36 @@ def _percentiles(values):
 def _serialize_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for p in plan:
-        rows.append(
-            {
-                "persona_id": p["persona_id"],
-                "conversation_id": p["conversation_id"],
-                "synth_scenario_id": p["synth_scenario_id"],
-                "adversarial_scenario_id": p["adversarial_scenario_id"],
-                "turn_count": p["turn_count"],
-                "conversation_key": p["conversation_key"],
-                "weight": p["entry"].weight,
-                "schedule": p["entry"].schedule.__dict__,
-                "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
-            }
-        )
+        row = {
+            "persona_id": p["persona_id"],
+            "conversation_id": p["conversation_id"],
+            "synth_scenario_id": p["synth_scenario_id"],
+            "adversarial_scenario_id": p["adversarial_scenario_id"],
+            "turn_count": p["turn_count"],
+            "conversation_key": p["conversation_key"],
+            "weight": p["entry"].weight,
+            "schedule": p["entry"].schedule.__dict__,
+            "synth_to_adversarial_ratio": p["entry"].synth_to_adversarial_ratio,
+        }
+        if "profile_period_id" in p:
+            row.update(
+                {
+                    "sequence": p["sequence"],
+                    "recipe_id": p["recipe_id"],
+                    "synthetic_timestamp": p["synthetic_timestamp"].isoformat(),
+                    "synthetic_slot": p["synthetic_slot"],
+                    "synthetic_day": p["synthetic_day"].isoformat(),
+                    "profile_period_id": p["profile_period_id"],
+                    "profile_period_instance_id": p["profile_period_instance_id"],
+                    "profile_period_start": p["profile_period_start"].isoformat(),
+                    "profile_period_end": p["profile_period_end"].isoformat(),
+                    "conversation_mode": p["conversation_mode"],
+                    "behavior_mode": p["behavior_mode"],
+                    "traffic_weight": p["traffic_weight"],
+                    "recipe_weights": dict(p["recipe_weights"]),
+                }
+            )
+        rows.append(row)
     return rows
 
 

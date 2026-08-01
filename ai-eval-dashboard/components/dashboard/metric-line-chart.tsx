@@ -9,12 +9,17 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
 import { format, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
-import type { MetricPointIdentity, TimePeriodPreset } from "@/types/evaluation";
+import type {
+  MetricPointIdentity,
+  ProfilePeriod,
+  TimePeriodPreset,
+} from "@/types/evaluation";
 
 interface ChartDataPoint {
   timestamp: string;
@@ -33,6 +38,23 @@ interface MetricLineChartProps {
   valueFormatter?: (v: number) => string;
   className?: string;
   onPointClick?: (point: MetricPointIdentity) => void;
+  profilePeriods?: ProfilePeriod[];
+}
+
+const PHASE_COLORS = [
+  "hsl(206 85% 42%)",
+  "hsl(270 65% 52%)",
+  "hsl(157 62% 38%)",
+  "hsl(32 85% 48%)",
+  "hsl(338 68% 50%)",
+];
+
+function phaseColor(periodId: string): string {
+  let hash = 0;
+  for (const character of periodId) {
+    hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  }
+  return PHASE_COLORS[Math.abs(hash) % PHASE_COLORS.length];
 }
 
 export function MetricLineChart({
@@ -44,6 +66,7 @@ export function MetricLineChart({
   valueFormatter = (v) => `${v}`,
   className,
   onPointClick,
+  profilePeriods = [],
 }: MetricLineChartProps) {
   const lineColor = "hsl(206 85% 42%)";
   const [clickedPointKey, setClickedPointKey] = useState<string | null>(null);
@@ -101,9 +124,11 @@ export function MetricLineChart({
     onPointClick(point);
   };
 
-  const formatTick = (isoTime: string) => {
-    const date = parseISO(isoTime);
+  const formatTick = (timeMs: number) => {
+    const date = new Date(timeMs);
     switch (period) {
+      case "full-run":
+        return format(date, "MMM d, yy");
       case "this-week":
       case "last-7-days":
         return format(date, "EEE d");
@@ -123,13 +148,45 @@ export function MetricLineChart({
       data.map((d) => ({
         ...d,
         isoTime: d.timestamp,
-      })),
+        timeMs: Date.parse(d.timestamp),
+      })).filter((point) => Number.isFinite(point.timeMs)),
     [data]
   );
-  const chartRenderKey =
-    `${period ?? "default"}-${formattedData[0]?.isoTime ?? ""}-${formattedData[formattedData.length - 1]?.isoTime ?? ""}-${formattedData.length}`;
+  const phaseBands = useMemo(() => {
+    if (formattedData.length === 0 || profilePeriods.length === 0) return [];
 
-  if (data.length === 0) {
+    const firstTimeMs = formattedData[0].timeMs;
+    const lastTimeMs = formattedData[formattedData.length - 1].timeMs;
+    const extentStart = Math.min(firstTimeMs, lastTimeMs);
+    const extentEnd = Math.max(firstTimeMs, lastTimeMs);
+    const labeledPeriodIds = new Set<string>();
+
+    return profilePeriods.flatMap((profilePeriod) => {
+      const startMs = Date.parse(profilePeriod.start);
+      const endMs = Date.parse(profilePeriod.end);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return [];
+
+      const x1 = Math.max(Math.min(startMs, endMs), extentStart);
+      const x2 = Math.min(Math.max(startMs, endMs), extentEnd);
+      if (x2 <= x1) return [];
+
+      const showLabel = !labeledPeriodIds.has(profilePeriod.periodId);
+      labeledPeriodIds.add(profilePeriod.periodId);
+      return [
+        {
+          ...profilePeriod,
+          x1,
+          x2,
+          color: phaseColor(profilePeriod.periodId),
+          showLabel,
+        },
+      ];
+    });
+  }, [formattedData, profilePeriods]);
+  const chartRenderKey =
+    `${period ?? "default"}-${formattedData[0]?.isoTime ?? ""}-${formattedData[formattedData.length - 1]?.isoTime ?? ""}-${formattedData.length}-${phaseBands.length}`;
+
+  if (formattedData.length === 0) {
     return (
       <div className="flex items-center justify-center h-50 text-sm text-muted-foreground">
         No data for this period
@@ -149,11 +206,11 @@ export function MetricLineChart({
 
             const maybeState = state as {
               activePayload?: Array<{ payload?: ChartDataPoint }>;
-              activeLabel?: string;
+              activeLabel?: number;
             };
             const fromPayload = maybeState.activePayload?.[0]?.payload?.pointIdentity;
-            const fromActiveLabel = maybeState.activeLabel
-              ? formattedData.find((d) => d.isoTime === maybeState.activeLabel)?.pointIdentity
+            const fromActiveLabel = maybeState.activeLabel !== undefined
+              ? formattedData.find((d) => d.timeMs === Number(maybeState.activeLabel))?.pointIdentity
               : undefined;
             const fallbackPoint = fromPayload || fromActiveLabel;
             selectPoint(fallbackPoint);
@@ -166,12 +223,15 @@ export function MetricLineChart({
             vertical
           />
           <XAxis
-            dataKey="isoTime"
+            dataKey="timeMs"
+            type="number"
+            scale="time"
+            domain={["dataMin", "dataMax"]}
             tick={{ fontSize: 11, fill: "hsl(210 12% 35%)" }}
             tickLine={false}
             axisLine={{ stroke: "hsl(210 18% 72%)" }}
             interval="preserveStartEnd"
-            tickFormatter={(value) => formatTick(String(value))}
+            tickFormatter={(value) => formatTick(Number(value))}
             height={32}
             minTickGap={20}
           />
@@ -202,6 +262,28 @@ export function MetricLineChart({
               <stop offset="100%" stopColor={lineColor} stopOpacity={0.025} />
             </linearGradient>
           </defs>
+          {phaseBands.map((band) => (
+            <ReferenceArea
+              key={band.instanceId}
+              x1={band.x1}
+              x2={band.x2}
+              fill={band.color}
+              fillOpacity={0.08}
+              stroke={band.color}
+              strokeOpacity={0.14}
+              ifOverflow="hidden"
+              label={
+                band.showLabel
+                  ? {
+                      value: band.periodId,
+                      position: "insideTopLeft",
+                      fontSize: 9,
+                      fill: band.color,
+                    }
+                  : undefined
+              }
+            />
+          ))}
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -276,7 +358,7 @@ export function MetricLineChart({
             strokeWidth={3}
             isAnimationActive={false}
             dot={
-              data.length <= 50
+              formattedData.length <= 50
                 ? (dotProps: unknown) => {
                     const p = dotProps as {
                       cx?: number;

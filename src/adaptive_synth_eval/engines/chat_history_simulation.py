@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
+from adaptive_synth_eval.artifacts.fingerprints import fingerprint_payload
 from adaptive_synth_eval.artifacts.run_state import (
     load_run_state,
     now_iso,
@@ -25,7 +26,16 @@ from adaptive_synth_eval.clients.utils import (
 from adaptive_synth_eval.config.contract import ContractError, contract_to_dict
 from adaptive_synth_eval.config.schemas import SimulationContract
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
-from adaptive_synth_eval.generation.traffic import build_run_plan
+from adaptive_synth_eval.generation.time_profile import (
+    profile_provenance,
+    profile_turn_provenance,
+    resolve_behavior_override,
+    summarize_profile_plan,
+)
+from adaptive_synth_eval.generation.traffic import (
+    build_profiled_run_plan,
+    build_run_plan,
+)
 from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.scoring.response_quality import score_response
@@ -55,6 +65,27 @@ UNAVAILABLE_BODY_MARKERS = (
     "service unavailable",
     "internal server error",
 )
+
+
+def _validate_profiled_resume_fingerprints(
+    state: dict[str, Any], *, contract_fingerprint: str, plan_fingerprint: str
+) -> None:
+    version = int(state.get("version", 1) or 1)
+    if version != 2:
+        raise ContractError(
+            "Cannot resume a profiled synth run without a v2 fingerprint checkpoint. "
+            "Restart the run."
+        )
+    if state.get("contract_fingerprint") != contract_fingerprint:
+        raise ContractError(
+            "Cannot resume: the effective contract differs from the profiled "
+            "synth run-state checkpoint."
+        )
+    if state.get("plan_fingerprint") != plan_fingerprint:
+        raise ContractError(
+            "Cannot resume: the full profiled run plan differs from the run-state "
+            "checkpoint."
+        )
 
 
 async def _bounded_results(
@@ -94,6 +125,57 @@ async def _bounded_results(
         # Closing this generator after result persistence fails must not abandon
         # already-admitted work, including non-cancellable to_thread calls.
         await asyncio.gather(*(pending | unconsumed), return_exceptions=True)
+
+
+async def _profiled_bounded_results(
+    items: list[Any],
+    *,
+    worker: Callable[[Any], Awaitable[Any]],
+    max_concurrency: int,
+    can_admit: Callable[[], bool],
+) -> AsyncIterator[Any]:
+    """Run one profile period at a time and emit each period in planned order."""
+
+    index = 0
+    while index < len(items):
+        instance_id = items[index].profile_period_instance_id
+        end = index + 1
+        while (
+            end < len(items)
+            and items[end].profile_period_instance_id == instance_id
+        ):
+            end += 1
+        group = items[index:end]
+
+        async def indexed(item):
+            return item.sequence, await worker(item)
+
+        completed: dict[int, Any] = {}
+        expected_sequences = [item.sequence for item in group]
+        expected_index = 0
+        completed_count = 0
+        results = _bounded_results(
+            group,
+            worker=indexed,
+            max_concurrency=max_concurrency,
+            can_admit=can_admit,
+        )
+        try:
+            async for sequence, result in results:
+                completed_count += 1
+                completed[sequence] = result
+                while (
+                    expected_index < len(expected_sequences)
+                    and expected_sequences[expected_index] in completed
+                ):
+                    next_sequence = expected_sequences[expected_index]
+                    expected_index += 1
+                    yield completed.pop(next_sequence)
+        finally:
+            await results.aclose()
+        if completed_count < len(group):
+            return
+        index = end
 
 
 def run_simulation(
@@ -139,22 +221,28 @@ async def run_simulation_async(
     run_start = time.perf_counter()
     run_id = contract.output.run_id or f"run_{int(time.time())}"
     run_dir = Path(contract.output.base_dir) / "runs" / run_id
-    capture_coordinator = capture_coordinator_from_env(run_dir)
-    writer = ArtifactWriter(
-        contract.output.base_dir,
-        run_id=run_id,
-        capture_adapter=(
-            ChatHistoryProducerAdapter(capture_coordinator)
-            if capture_coordinator is not None
-            else None
-        ),
-    )
-    full_plan = build_run_plan(contract.traffic, contract.time_window)
-    plan = list(full_plan)
     personas = contract.persona_by_id()
     scenarios = contract.scenario_by_id()
     matched_persona_id: str | None = None
-    resumed_state = load_run_state(writer.run_dir) if resume_incomplete else None
+    if persona_filter:
+        for pid in personas:
+            if pid.lower() == persona_filter.lower():
+                matched_persona_id = pid
+                break
+        if not matched_persona_id:
+            raise ContractError(
+                f"Specified persona '{persona_filter}' not found in contract's persona pool: {list(personas.keys())}"
+            )
+    try:
+        full_plan = (
+            build_profiled_run_plan(contract, persona_id=matched_persona_id)
+            if contract.time_profile is not None
+            else build_run_plan(contract.traffic, contract.time_window)
+        )
+    except ValueError as exc:
+        raise ContractError(str(exc)) from exc
+    plan = list(full_plan)
+    resumed_state = load_run_state(run_dir) if resume_incomplete else None
     started_at = (resumed_state or {}).get("started_at") or now_iso()
     completed_conversation_ids = set()
     if resumed_state:
@@ -165,23 +253,56 @@ async def run_simulation_async(
         }
 
     if persona_filter:
-        for pid in personas:
-            if pid.lower() == persona_filter.lower():
-                matched_persona_id = pid
-                break
-        if not matched_persona_id:
-            raise ContractError(
-                f"Specified persona '{persona_filter}' not found in contract's persona pool: {list(personas.keys())}"
-            )
-        full_plan = [
-            planned for planned in full_plan if planned.persona_id == matched_persona_id
-        ]
-        plan = [planned for planned in plan if planned.persona_id == matched_persona_id]
+        if contract.time_profile is None:
+            full_plan = [
+                planned
+                for planned in full_plan
+                if planned.persona_id == matched_persona_id
+            ]
+            plan = [
+                planned for planned in plan if planned.persona_id == matched_persona_id
+            ]
         if not plan:
             logger.warning(
                 "No conversations planned for persona '%s' in this run.",
                 matched_persona_id,
             )
+
+    normalized_contract = contract_to_dict(contract)
+    serialized_full_plan = _serialize_synth_plan(full_plan)
+    run_state_version = 1
+    fingerprint_state: dict[str, Any] = {}
+    if contract.time_profile is not None:
+        run_state_version = 2
+        contract_fingerprint = fingerprint_payload(normalized_contract)
+        plan_fingerprint = fingerprint_payload(serialized_full_plan)
+        fingerprint_state = {
+            "contract_fingerprint": contract_fingerprint,
+            "plan_fingerprint": plan_fingerprint,
+        }
+        if resume_incomplete:
+            if resumed_state is None:
+                raise ContractError(
+                    "Cannot resume a profiled synth run without a run-state "
+                    "checkpoint. Restart the run."
+                )
+            _validate_profiled_resume_fingerprints(
+                resumed_state,
+                contract_fingerprint=contract_fingerprint,
+                plan_fingerprint=plan_fingerprint,
+            )
+
+    capture_coordinator = capture_coordinator_from_env(run_dir)
+    writer = ArtifactWriter(
+        contract.output.base_dir,
+        run_id=run_id,
+        profile_enabled=contract.time_profile is not None,
+        capture_adapter=(
+            ChatHistoryProducerAdapter(capture_coordinator)
+            if capture_coordinator is not None
+            else None
+        ),
+    )
 
     if completed_conversation_ids:
         plan = [
@@ -243,7 +364,7 @@ async def run_simulation_async(
         write_run_state(
             writer.run_dir,
             {
-                "version": 1,
+                "version": run_state_version,
                 "mode": "synth",
                 "status": "in_progress",
                 "run_id": run_id,
@@ -260,6 +381,7 @@ async def run_simulation_async(
                     "chatbot_prompt_tokens": 0,
                     "chatbot_completion_tokens": 0,
                 },
+                **fingerprint_state,
             },
         )
     processed_conversation_ids = set(completed_conversation_ids)
@@ -333,15 +455,21 @@ async def run_simulation_async(
 
     async def process_conversation(planned):
         if stop_all_requested.is_set():
+            row = {
+                "conversation_id": planned.conversation_id,
+                "session_id": planned.session_id,
+                "persona_id": planned.persona_id,
+                "scenario_id": planned.scenario_id,
+                "synthetic_day": planned.synthetic_day.isoformat(),
+                "turn_count": 0,
+            }
+            if contract.time_profile is not None:
+                row.update(
+                    timestamp=planned.synthetic_timestamp.isoformat(),
+                    **profile_provenance(planned),
+                )
             return (
-                {
-                    "conversation_id": planned.conversation_id,
-                    "session_id": planned.session_id,
-                    "persona_id": planned.persona_id,
-                    "scenario_id": planned.scenario_id,
-                    "synthetic_day": planned.synthetic_day.isoformat(),
-                    "turn_count": 0,
-                },
+                row,
                 [],
                 [],
                 [],
@@ -352,15 +480,21 @@ async def run_simulation_async(
 
     async def _process_conversation_locked(planned):
         if stop_all_requested.is_set():
+            row = {
+                "conversation_id": planned.conversation_id,
+                "session_id": planned.session_id,
+                "persona_id": planned.persona_id,
+                "scenario_id": planned.scenario_id,
+                "synthetic_day": planned.synthetic_day.isoformat(),
+                "turn_count": 0,
+            }
+            if contract.time_profile is not None:
+                row.update(
+                    timestamp=planned.synthetic_timestamp.isoformat(),
+                    **profile_provenance(planned),
+                )
             return (
-                {
-                    "conversation_id": planned.conversation_id,
-                    "session_id": planned.session_id,
-                    "persona_id": planned.persona_id,
-                    "scenario_id": planned.scenario_id,
-                    "synthetic_day": planned.synthetic_day.isoformat(),
-                    "turn_count": 0,
-                },
+                row,
                 [],
                 [],
                 [],
@@ -393,6 +527,11 @@ async def run_simulation_async(
             "synthetic_day": planned.synthetic_day.isoformat(),
             "turn_count": 0,
         }
+        if contract.time_profile is not None:
+            local_conversation_row.update(
+                timestamp=planned.synthetic_timestamp.isoformat(),
+                **profile_provenance(planned),
+            )
 
         previous_bot_response = None
         chatbot_history_tokens = 0
@@ -412,12 +551,21 @@ async def run_simulation_async(
                     break
 
             # Get behavior mode for the current persona (persona-specific or global fallback)
-            behavior_override = (
-                realtime_controller.get_behavior_for_persona(
-                    simulator.persona.persona_id
+            behavior_override = resolve_behavior_override(
+                (
+                    planned.behavior_mode
+                    if contract.time_profile is not None
+                    else None
+                ),
+                realtime_controller,
+                simulator.persona.persona_id,
+            )
+            turn_profile = (
+                profile_turn_provenance(
+                    planned, turn_id=turn_id, turn_count=planned.turn_count
                 )
-                if realtime_controller
-                else None
+                if contract.time_profile is not None
+                else {}
             )
             logger.info(
                 "[%s|turn=%s] Persona thinking started (provider=%s, behavior=%s)...",
@@ -477,6 +625,7 @@ async def run_simulation_async(
                     "persona_id": simulator.persona.persona_id,
                     "scenario_id": planned.scenario_id,
                     "synthetic": True,
+                    **turn_profile,
                 },
             )
             chatbot_wait_ms = (time.perf_counter() - chatbot_wait_start) * 1000
@@ -555,6 +704,7 @@ async def run_simulation_async(
                 retrieved_policy_ids=response.retrieved_policy_ids,
                 response_raw=response.raw,
                 generation_metadata=gen_meta,
+                **turn_profile,
             )
             local_records.append(record)
             local_turn_rows.append(record.to_dict())
@@ -568,6 +718,7 @@ async def run_simulation_async(
                     "safety_score": score.safety_score,
                     "clarification_score": score.clarification_score,
                     "failure_mode": failure_mode,
+                    **turn_profile,
                 }
             )
 
@@ -601,7 +752,12 @@ async def run_simulation_async(
 
     try:
         max_concurrency = _effective_max_concurrency(contract)
-        completed_results = _bounded_results(
+        results_factory = (
+            _profiled_bounded_results
+            if contract.time_profile is not None
+            else _bounded_results
+        )
+        completed_results = results_factory(
             plan,
             worker=process_conversation,
             max_concurrency=max_concurrency,
@@ -691,7 +847,7 @@ async def run_simulation_async(
                 write_run_state(
                     writer.run_dir,
                     {
-                        "version": 1,
+                        "version": run_state_version,
                         "mode": "synth",
                         "status": "in_progress",
                         "run_id": run_id,
@@ -710,6 +866,7 @@ async def run_simulation_async(
                             "chatbot_prompt_tokens": chatbot_prompt_tokens,
                             "chatbot_completion_tokens": chatbot_completion_tokens,
                         },
+                        **fingerprint_state,
                     },
                 )
         except BaseException:
@@ -949,8 +1106,10 @@ async def run_simulation_async(
         "scale_projections": scale_projections,
         "production_realism": production_realism,
     }
-    writer.write_json("contract.normalized.json", contract_to_dict(contract))
-    writer.write_json("run_plan.json", [item.__dict__ for item in full_plan])
+    if contract.time_profile is not None:
+        summary["profile_counts"] = summarize_profile_plan(full_plan)
+    writer.write_json("contract.normalized.json", normalized_contract)
+    writer.write_json("run_plan.json", serialized_full_plan)
 
     if not wrote_chat_history:
         writer.append_chat_history_rows([], overwrite=True)
@@ -969,7 +1128,7 @@ async def run_simulation_async(
     write_run_state(
         writer.run_dir,
         {
-            "version": 1,
+            "version": run_state_version,
             "mode": "synth",
             "status": "completed",
             "run_id": run_id,
@@ -988,6 +1147,7 @@ async def run_simulation_async(
                 "chatbot_completion_tokens": chatbot_completion_tokens,
             },
             "summary": summary,
+            **fingerprint_state,
         },
     )
 
@@ -998,3 +1158,23 @@ def _effective_max_concurrency(contract: SimulationContract) -> int:
     if contract.target.mode == "browser":
         return 1
     return max(1, int(getattr(contract.traffic, "max_concurrency", 5) or 5))
+
+
+def _serialize_synth_plan(plan: list[Any]) -> list[dict[str, Any]]:
+    if not plan or not hasattr(plan[0], "profile_period_id"):
+        return [item.__dict__ for item in plan]
+    rows = []
+    for item in plan:
+        rows.append(
+            {
+                "conversation_id": item.conversation_id,
+                "session_id": item.session_id,
+                "persona_id": item.persona_id,
+                "scenario_id": item.scenario_id,
+                "synthetic_day": item.synthetic_day.isoformat(),
+                "turn_count": item.turn_count,
+                "sequence": item.sequence,
+                **profile_provenance(item),
+            }
+        )
+    return rows

@@ -13,6 +13,7 @@ import type {
   EvaluationsResponse,
   MetricPointIdentity,
   MonitoringRunStatus,
+  ProfilePeriod,
   RunSummary,
   TraceDetailsResponse,
 } from "@/types/evaluation";
@@ -20,6 +21,63 @@ import type {
 const REPO_ROOT = path.resolve(process.cwd(), "..");
 const RUNS_DIR = path.join(REPO_ROOT, "outputs", "runs");
 const DEFAULT_LIMIT = 2000;
+
+function stringField(row: Record<string, unknown>, field: string): string | null {
+  const value = row[field];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function profilePeriodsFromRunPlan(value: unknown): ProfilePeriod[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const periods = new Map<string, ProfilePeriod>();
+  for (const valueRow of value) {
+    if (!valueRow || typeof valueRow !== "object" || Array.isArray(valueRow)) {
+      continue;
+    }
+    const row = valueRow as Record<string, unknown>;
+    const instanceId = stringField(row, "profile_period_instance_id");
+    const periodId = stringField(row, "profile_period_id");
+    const start = stringField(row, "profile_period_start");
+    const end = stringField(row, "profile_period_end");
+    const conversationMode = stringField(row, "conversation_mode");
+    const behaviorMode = stringField(row, "behavior_mode");
+    if (
+      !instanceId ||
+      !periodId ||
+      !start ||
+      !end ||
+      !conversationMode ||
+      !behaviorMode
+    ) {
+      continue;
+    }
+
+    const existing = periods.get(instanceId);
+    if (existing) {
+      existing.plannedConversations += 1;
+      continue;
+    }
+    const syntheticDay = stringField(row, "synthetic_day");
+    periods.set(instanceId, {
+      instanceId,
+      periodId,
+      start,
+      end,
+      conversationMode,
+      behaviorMode,
+      plannedConversations: 1,
+      ...(syntheticDay ? { syntheticDay } : {}),
+    });
+  }
+
+  return [...periods.values()].sort((left, right) => {
+    const byStart = left.start.localeCompare(right.start);
+    return byStart || left.instanceId.localeCompare(right.instanceId);
+  });
+}
 
 function runDirPath(runId: string): string {
   return path.join(RUNS_DIR, runId);
@@ -217,7 +275,7 @@ export async function getMonitoringEvaluations(
   runId: string,
   from?: string,
   to?: string,
-  limit = DEFAULT_LIMIT,
+  limit: number | null = DEFAULT_LIMIT,
   repoRoot = REPO_ROOT
 ): Promise<EvaluationsResponse | null> {
   let runDir: string;
@@ -226,10 +284,13 @@ export async function getMonitoringEvaluations(
   } catch {
     return null;
   }
+  const runPlan = await readJsonFile<unknown>(path.join(runDir, "run_plan.json"));
+  const profilePeriods = profilePeriodsFromRunPlan(runPlan);
   const scoresPath = path.join(runDir, "monitoring_scores.jsonl");
   if (!(await fileExists(scoresPath))) {
     return {
       evaluations: [],
+      profilePeriods,
       total: 0,
       from: from || "",
       to: to || "",
@@ -237,7 +298,7 @@ export async function getMonitoringEvaluations(
   }
 
   const rows = await readJsonLines<EvaluationRecord & Record<string, unknown>>(scoresPath);
-  const filtered = rows
+  const eligible = rows
     .filter((row) => {
       if (row.selected_for_monitoring === false) {
         return false;
@@ -253,8 +314,9 @@ export async function getMonitoringEvaluations(
       }
       return true;
     })
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    .slice(0, limit)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const returned = limit === null ? eligible : eligible.slice(0, limit);
+  const evaluations = returned
     .map((row) => ({
       ...row,
       run_id: runId,
@@ -262,8 +324,9 @@ export async function getMonitoringEvaluations(
     }));
 
   return {
-    evaluations: filtered,
-    total: filtered.length,
+    evaluations,
+    profilePeriods,
+    total: evaluations.length,
     from: from || "",
     to: to || "",
   };

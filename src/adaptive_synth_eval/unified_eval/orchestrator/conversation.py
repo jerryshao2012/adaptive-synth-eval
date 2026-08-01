@@ -33,6 +33,11 @@ from adaptive_synth_eval.clients.utils import count_tokens
 from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.engines.realtime_controls import RealtimeChatController
 from adaptive_synth_eval.generation.turns import UserSimulator
+from adaptive_synth_eval.generation.time_profile import (
+    profile_provenance,
+    profile_turn_provenance,
+    resolve_behavior_override,
+)
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 from adaptive_synth_eval.unified_eval.config.schemas import (
     AdversarialScenario,
@@ -113,10 +118,15 @@ async def run_conversation(
     realtime_chat: bool = False,
     realtime_controller: RealtimeChatController | None = None,
     meter=None,  # BudgetMeter | None
+    planned_profile: dict[str, Any] | None = None,
 ) -> ConversationResult:
     conversation_start = time.perf_counter()
     session_id = conversation_id  # one ARE SessionState per conversation
-    synthetic_day = contract.time_window.start_day
+    synthetic_day = (
+        planned_profile["synthetic_day"]
+        if planned_profile is not None
+        else contract.time_window.start_day
+    )
 
     # ----- ASE simulator (synth turn producer) -----
     sim_provider = llms["user_simulator"].spec.provider
@@ -178,6 +188,13 @@ async def run_conversation(
     chatbot_history_tokens = 0
     for turn_id in range(1, turn_count + 1):
         mode = planned_modes[turn_id - 1]
+        turn_profile = (
+            profile_turn_provenance(
+                planned_profile, turn_id=turn_id, turn_count=turn_count
+            )
+            if planned_profile is not None
+            else {}
+        )
 
         # ----- realtime controller checks -----
         if realtime_controller and realtime_controller.stop_requested:
@@ -202,10 +219,14 @@ async def run_conversation(
             break
 
         # Get per-persona behavior override from controller (synth turns only).
-        behavior_override = (
-            realtime_controller.get_behavior_for_persona(persona.persona_id)
-            if realtime_controller
-            else None
+        behavior_override = resolve_behavior_override(
+            (
+                planned_profile["behavior_mode"]
+                if planned_profile is not None
+                else None
+            ),
+            realtime_controller,
+            persona.persona_id,
         )
 
         # ----- generate user_input -----
@@ -258,6 +279,7 @@ async def run_conversation(
                             "turn_type": "adversarial",
                             "strategy": error_strategy,
                         },
+                        **turn_profile,
                     }
                 )
                 token_budget.release_reservation_for(reservation_key)
@@ -313,6 +335,7 @@ async def run_conversation(
                 "adversarial_scenario_id": adv_scenario.scenario_id,
                 "turn_type": mode,
                 "synthetic": True,
+                **turn_profile,
             },
         )
         effective_error = response.error
@@ -574,6 +597,7 @@ async def run_conversation(
                         "is_breach": outcome.is_breach,
                         "harm_potential": verdict.harm_potential,
                         "short_reason": verdict.short_reason,
+                        **turn_profile,
                     }
                 )
 
@@ -637,6 +661,7 @@ async def run_conversation(
                 "chatbot_prompt_tokens": chatbot_prompt_tokens,
                 "chatbot_completion_tokens": chatbot_completion_tokens,
             },
+            **turn_profile,
         )
         chat_history.append(record)
         turn_row = {
@@ -670,6 +695,7 @@ async def run_conversation(
                     for key, value in score_payload.items()
                     if not key.startswith("_")
                 },
+                **turn_profile,
             }
         )
         token_budget.release_reservation_for(reservation_key)
@@ -731,6 +757,11 @@ async def run_conversation(
         "is_breach": session.best_effective_failure_score >= threshold,
         "termination_reason": termination_reason,
     }
+    if planned_profile is not None:
+        conv_row.update(
+            timestamp=planned_profile["synthetic_timestamp"].isoformat(),
+            **profile_provenance(planned_profile),
+        )
     if trajectory_enabled:
         conv_row["best_trace_score"] = session.best_trace_score
 

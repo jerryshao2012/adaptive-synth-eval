@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import type {
   EvalRunParameters,
-  EvaluationRecord,
   FailureGroup,
   MetricPointIdentity,
   MonitoringAction,
@@ -21,12 +20,16 @@ import type {
 import { normalizeMonitoringParameters } from "@/lib/monitoring-config";
 import { METRIC_THRESHOLDS, LATENCY_WARN_MS, LATENCY_FAIL_MS, LATENCY_DESCRIPTIONS, AVAILABILITY_DESCRIPTION } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
-import { getTimePeriod } from "@/lib/time-periods";
+import {
+  filterEvaluationsByPeriod,
+  resolveWidestTimePeriod,
+} from "@/lib/time-periods";
 import {
   computeKpiSummary,
   extractMetricTimeSeries,
   extractLatencyTimeSeries,
   computeChartSummary,
+  computeProfilePeriodSummaries,
 } from "@/lib/aggregation";
 import {
   computeInvestigationSummary,
@@ -55,6 +58,8 @@ import ChartSummaryBar, { ChartCard } from "@/components/dashboard/chart-card";
 import { MetricLineChart } from "@/components/dashboard/metric-line-chart";
 import { EmptyState, ErrorCard } from "@/components/shared/empty-state";
 import { TraceDrawer } from "@/components/dashboard/trace-drawer";
+import { ProfilePhaseComparison } from "@/components/dashboard/profile-phase-comparison";
+import { DashboardPeriodSelector } from "@/components/dashboard/dashboard-period-selector";
 
 // ---- Constants ----
 const SAFETY_METRICS = ["toxicity", "bias_fairness", "robustness", "compliance"] as const;
@@ -72,19 +77,6 @@ const LATENCY_METRICS = [
   { key: "llm_latency_ms" as const, label: "LLM Latency", fullWidth: false },
   { key: "guardrail_latency_ms" as const, label: "Guardrail Latency", fullWidth: false },
 ];
-
-function filterEvaluationsByPeriod(
-  rows: EvaluationRecord[],
-  preset: TimePeriodPreset
-): EvaluationRecord[] {
-  const { from, to } = getTimePeriod(preset);
-  const fromMs = from.getTime();
-  const toMs = to.getTime();
-  return rows.filter((row) => {
-    const ts = new Date(row.timestamp).getTime();
-    return Number.isFinite(ts) && ts >= fromMs && ts <= toMs;
-  });
-}
 
 interface AcceptedLaunchOverlay {
   key: string;
@@ -138,9 +130,13 @@ function hasPostAcceptanceStatusEvidence(
 
 export default function DashboardPage() {
   // ---- State ----
-  const [globalPeriod] = useState<TimePeriodPreset>("last-90-days");
+  const [globalPeriodsByRun, setGlobalPeriodsByRun] = useState<
+    Record<string, TimePeriodPreset>
+  >({});
   const [selectedRunId, setSelectedRunId] = useState<string>("");
-  const [chartPeriods, setChartPeriods] = useState<Record<string, TimePeriodPreset>>({});
+  const [chartPeriodsByRun, setChartPeriodsByRun] = useState<
+    Record<string, Record<string, TimePeriodPreset>>
+  >({});
   const [selectedPoint, setSelectedPoint] = useState<MetricPointIdentity | null>(null);
 
   // Failure analysis group filter state
@@ -176,6 +172,11 @@ export default function DashboardPage() {
     () => runSummaries.find((run) => run.runId === activeRunId) || null,
     [activeRunId, runSummaries]
   );
+  const globalPeriod = globalPeriodsByRun[activeRunId] ?? "last-90-days";
+  const evaluationsQueryPeriod = resolveWidestTimePeriod([
+    globalPeriod,
+    ...Object.values(chartPeriodsByRun[activeRunId] ?? {}),
+  ]);
 
   const {
     data: monitoringStatus,
@@ -200,11 +201,22 @@ export default function DashboardPage() {
     isError,
     error,
     refetch,
+    profilePeriods,
   } = useEvaluations(
-    "last-90-days",
+    evaluationsQueryPeriod,
     activeRunId || undefined,
     canLoadEvaluations
   );
+  if (
+    activeRunId &&
+    profilePeriods.length > 0 &&
+    !globalPeriodsByRun[activeRunId]
+  ) {
+    setGlobalPeriodsByRun((current) => ({
+      ...current,
+      [activeRunId]: "full-run",
+    }));
+  }
   const { data: previousEvaluations } =
     usePreviousPeriodEvaluations(
       globalPeriod,
@@ -378,32 +390,39 @@ export default function DashboardPage() {
   }
 
   // ---- Computed data ----
-  const kpiEvaluations = useMemo(
+  const globalScopedEvaluations = useMemo(
     () => filterEvaluationsByPeriod(evaluations || [], globalPeriod),
     [evaluations, globalPeriod]
   );
 
   const kpi = useMemo(
-    () => computeKpiSummary(kpiEvaluations, previousEvaluations || []),
-    [kpiEvaluations, previousEvaluations]
+    () => computeKpiSummary(globalScopedEvaluations, previousEvaluations || []),
+    [globalScopedEvaluations, previousEvaluations]
+  );
+  const profilePeriodSummaries = useMemo(
+    () => computeProfilePeriodSummaries(globalScopedEvaluations, profilePeriods),
+    [globalScopedEvaluations, profilePeriods]
   );
 
   // Investigation summary
   const investigationSummary = useMemo(
     () => {
-      if (!evaluations || evaluations.length === 0) return null;
-      return computeInvestigationSummary(evaluations, previousEvaluations);
+      if (globalScopedEvaluations.length === 0) return null;
+      return computeInvestigationSummary(
+        globalScopedEvaluations,
+        previousEvaluations
+      );
     },
-    [evaluations, previousEvaluations]
+    [globalScopedEvaluations, previousEvaluations]
   );
 
   // Failed metric rankings
   const failedMetrics = useMemo(
     () => {
-      if (!evaluations || evaluations.length === 0) return [];
-      return rankFailedMetrics(evaluations);
+      if (globalScopedEvaluations.length === 0) return [];
+      return rankFailedMetrics(globalScopedEvaluations);
     },
-    [evaluations]
+    [globalScopedEvaluations]
   );
 
   // Group filter handlers
@@ -428,10 +447,28 @@ export default function DashboardPage() {
 
   // Per-chart period resolution
   function getChartPeriod(chartKey: string): TimePeriodPreset {
-    return chartPeriods[chartKey] || globalPeriod;
+    return chartPeriodsByRun[activeRunId]?.[chartKey] || globalPeriod;
   }
 
-  const hasData = Boolean(evaluations && evaluations.length > 0);
+  function setChartPeriod(chartKey: string, period: TimePeriodPreset) {
+    setChartPeriodsByRun((current) => ({
+      ...current,
+      [activeRunId]: {
+        ...current[activeRunId],
+        [chartKey]: period,
+      },
+    }));
+  }
+
+  function setGlobalPeriod(period: TimePeriodPreset) {
+    if (!activeRunId) return;
+    setGlobalPeriodsByRun((current) => ({
+      ...current,
+      [activeRunId]: period,
+    }));
+  }
+
+  const hasData = globalScopedEvaluations.length > 0;
   const runStatus =
     displayedMonitoringStatus?.monitoringStatus ??
     selectedRun?.monitoringStatus;
@@ -456,7 +493,7 @@ export default function DashboardPage() {
           latestValue={latest ? `${latest.value}%` : undefined}
           period={period}
           onPeriodChange={(p) =>
-            setChartPeriods((prev) => ({ ...prev, [key]: p }))
+            setChartPeriod(key, p)
           }
           isLoading={isLoading}
           colSpan={i === 0 ? "full" : "half"}
@@ -483,6 +520,7 @@ export default function DashboardPage() {
             failThreshold={threshold.failBelow}
             valueFormatter={(v) => `${v}%`}
             onPointClick={(point) => setSelectedPoint(point)}
+            profilePeriods={profilePeriods}
           />
         </ChartCard>
       );
@@ -508,7 +546,7 @@ export default function DashboardPage() {
           latestValue={latest ? `${latest.value}%` : undefined}
           period={period}
           onPeriodChange={(p) =>
-            setChartPeriods((prev) => ({ ...prev, [key]: p }))
+            setChartPeriod(key, p)
           }
           colSpan={i === 0 ? "full" : "half"}
           summary={
@@ -534,6 +572,7 @@ export default function DashboardPage() {
             failThreshold={threshold.failBelow}
             valueFormatter={(v) => `${v}%`}
             onPointClick={(point) => setSelectedPoint(point)}
+            profilePeriods={profilePeriods}
           />
         </ChartCard>
       );
@@ -560,7 +599,7 @@ export default function DashboardPage() {
               latestValue={latest ? `${latest.value}ms` : undefined}
               period={period}
               onPeriodChange={(p) =>
-                setChartPeriods((prev) => ({ ...prev, [key]: p }))
+                setChartPeriod(key, p)
               }
               colSpan={fullWidth ? "full" : "half"}
               summary={
@@ -582,6 +621,7 @@ export default function DashboardPage() {
                 yDomain={[0, "auto"]}
                 valueFormatter={(v) => `${v}ms`}
                 onPointClick={(point) => setSelectedPoint(point)}
+                profilePeriods={profilePeriods}
               />
             </ChartCard>
           );
@@ -632,7 +672,7 @@ export default function DashboardPage() {
               latestValue={latest ? `${latest.value}%` : undefined}
               period={period}
               onPeriodChange={(p) =>
-                setChartPeriods((prev) => ({ ...prev, [key]: p }))
+                setChartPeriod(key, p)
               }
               colSpan="half"
               summary={
@@ -653,6 +693,7 @@ export default function DashboardPage() {
                 failThreshold={95}
                 valueFormatter={(v) => `${v}%`}
                 onPointClick={(point) => setSelectedPoint(point)}
+                profilePeriods={profilePeriods}
               />
             </ChartCard>
           );
@@ -697,6 +738,10 @@ export default function DashboardPage() {
                 }
                 onRefresh={refreshAll}
               />
+              <DashboardPeriodSelector
+                value={globalPeriod}
+                onChange={setGlobalPeriod}
+              />
               {displayedMonitoringStatus?.triggerMetrics && (
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-3 lg:grid-cols-6">
                   <span>Triggers: {displayedMonitoringStatus.triggerMetrics.triggersDetected}</span>
@@ -739,7 +784,7 @@ export default function DashboardPage() {
               ============================================ */}
           {hasData && !isLoading && failedMetrics.length > 0 && (
             <FailureAnalysis
-              evaluations={evaluations!}
+              evaluations={globalScopedEvaluations}
               failedMetrics={failedMetrics}
               activeGroupFilter={activeGroupFilter}
               activeGroupKey={activeGroupKey}
@@ -753,7 +798,7 @@ export default function DashboardPage() {
               ============================================ */}
           {hasData && !isLoading && (
             <ConversationQueue
-              evaluations={evaluations!}
+              evaluations={globalScopedEvaluations}
               activeRunId={activeRunId}
               onSelectConversation={(point) => setSelectedPoint(point)}
               groupFilter={
@@ -775,6 +820,10 @@ export default function DashboardPage() {
           {/* ============================================
               5. KPI CARDS (moved down)
               ============================================ */}
+          {!isLoading && profilePeriods.length > 0 && (
+            <ProfilePhaseComparison summaries={profilePeriodSummaries} />
+          )}
+
           {hasData && !isLoading && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <KpiCard
@@ -866,7 +915,7 @@ export default function DashboardPage() {
           )}
 
           {/* Empty state for no evaluation data */}
-          {!isLoading && !isError && evaluations?.length === 0 && runSummaries.length > 0 && (
+          {!isLoading && !isError && globalScopedEvaluations.length === 0 && runSummaries.length > 0 && (
             <EmptyState
               message={
                 selectedRun?.monitoringStatus === "completed"

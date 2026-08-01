@@ -1,4 +1,100 @@
-import type { EvaluationRecord, MetricPointIdentity } from "@/types/evaluation";
+import type {
+  EvaluationRecord,
+  MetricPointIdentity,
+  ProfilePeriod,
+} from "@/types/evaluation";
+
+export interface ProfilePeriodSummary {
+  periodId: string;
+  modeLabel: string;
+  timeLabel: string;
+  evaluationCount: number;
+  passRate: number;
+  failRate: number;
+  toxicitySafetyScore: number | null;
+  safetyAverage: number | null;
+  performanceAverage: number | null;
+}
+
+function average(values: number[]): number | null {
+  const finiteValues = values.filter(Number.isFinite);
+  if (finiteValues.length === 0) return null;
+  return Math.round(
+    finiteValues.reduce((sum, value) => sum + value, 0) /
+      finiteValues.length
+  );
+}
+
+function availableMetricPercents(metrics: unknown): number[] {
+  if (!metrics || typeof metrics !== "object") return [];
+  return Object.values(metrics).flatMap((metric) => {
+    if (!metric || typeof metric !== "object" || !("percent" in metric)) {
+      return [];
+    }
+    const percent = metric.percent;
+    return typeof percent === "number" && Number.isFinite(percent)
+      ? [percent]
+      : [];
+  });
+}
+
+function isoTimeLabel(value: string): string {
+  const match = value.match(/T(\d{2}:\d{2})/);
+  return match?.[1] ?? value;
+}
+
+export function computeProfilePeriodSummaries(
+  evaluations: EvaluationRecord[],
+  profilePeriods: ProfilePeriod[]
+): ProfilePeriodSummary[] {
+  const firstPeriodById = new Map<string, ProfilePeriod>();
+  for (const period of profilePeriods) {
+    if (!firstPeriodById.has(period.periodId)) {
+      firstPeriodById.set(period.periodId, period);
+    }
+  }
+
+  return Array.from(firstPeriodById.values()).map((period) => {
+    const rows = evaluations.filter(
+      (evaluation) => evaluation.profile_period_id === period.periodId
+    );
+    const total = rows.length;
+    const passCount = rows.filter(
+      (row) =>
+        row.safety_status === "pass" && row.performance_status === "pass"
+    ).length;
+    const failCount = rows.filter(
+      (row) =>
+        row.safety_status === "fail" || row.performance_status === "fail"
+    ).length;
+    const safetyValues = rows.flatMap((row) =>
+      availableMetricPercents(row.safety_metrics)
+    );
+    const performanceValues = rows.flatMap((row) =>
+      availableMetricPercents(row.performance_metrics)
+    );
+    const toxicityValues = rows.flatMap((row) => {
+      const toxicity = row.safety_metrics?.toxicity;
+      return toxicity && Number.isFinite(toxicity.percent)
+        ? [toxicity.percent]
+        : [];
+    });
+
+    return {
+      periodId: period.periodId,
+      modeLabel: [period.conversationMode, period.behaviorMode]
+        .filter(Boolean)
+        .join(" · "),
+      timeLabel: `${isoTimeLabel(period.start)}–${isoTimeLabel(period.end)} daily`,
+      evaluationCount: total,
+      passRate: total > 0 ? Math.round((passCount / total) * 100) : 0,
+      failRate: total > 0 ? Math.round((failCount / total) * 100) : 0,
+      toxicitySafetyScore: average(toxicityValues),
+      safetyAverage: average(safetyValues),
+      performanceAverage: average(performanceValues),
+    };
+  });
+}
 
 export interface KpiSummary {
   totalEvaluations: number;

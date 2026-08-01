@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from adaptive_synth_eval.clients.llm import LLMClient, LLMResult
 from adaptive_synth_eval.config.schemas import FailureInjection, Persona, Scenario
 from adaptive_synth_eval.generation.turns import UserSimulator, generate_turns
@@ -133,6 +135,45 @@ def test_generate_turn_behavior_override_changes_fallback_and_metadata():
 
     assert turn.generation_metadata["behavior_mode"] == "aggressive"
     assert "I need a clear answer now" in turn.user_message
+
+
+@pytest.mark.parametrize(
+    ("behavior_mode", "expected"),
+    [
+        ("stressed", "I am under a lot of pressure"),
+        ("toxic", "This is unacceptable"),
+    ],
+)
+def test_generate_turn_supports_profile_behavior_fallbacks(behavior_mode, expected):
+    persona = Persona(
+        persona_id="P001",
+        role="new_employee",
+        location="Canada",
+        seniority="junior",
+        communication_style="polite",
+        hr_familiarity="low",
+        privacy_sensitivity="medium",
+    )
+    scenario = Scenario(
+        scenario_id="S001",
+        domain="benefits",
+        intent="ask_about_coverage",
+        expected_retrieval_topics=[],
+        failure_injection=FailureInjection(),
+        success_criteria={},
+    )
+    simulator = UserSimulator(persona=persona, scenario=scenario, turn_count=2, seed=1)
+
+    with patch.object(simulator.llm_client, "complete") as complete:
+        complete.return_value = LLMResult(
+            content="", raw={"mock": True}, error="llm_disabled"
+        )
+        turn = simulator.generate_turn(1, behavior_override=behavior_mode)
+
+    assert turn.generation_metadata["behavior_mode"] == behavior_mode
+    assert expected in turn.user_message
+    prompt = complete.call_args.args[0]
+    assert f"Runtime behavior mode: {behavior_mode}." in prompt
 
 
 def test_user_simulator_with_markdown_memory(tmp_path):

@@ -218,6 +218,153 @@ def test_monitoring_cli_completed_unchanged_rescan_reuses_scores(tmp_path):
     assert state["evaluated_rows"] == 0
 
 
+def test_monitoring_scores_copy_profile_provenance_without_changing_timestamp(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_profiled"
+    _write_chat_history(run_dir, total_rows=1)
+    history_path = run_dir / "chat_history.jsonl"
+    chat_row = _read_jsonl(history_path)[0]
+    chat_row.update(
+        {
+            "timestamp": "2026-05-02T08:15:30.123456",
+            "recipe_id": "recipe-support",
+            "profile_period_id": "morning",
+            "profile_period_instance_id": "2026-05-02/morning",
+            "profile_period_start": "2026-05-02T08:00:00",
+            "profile_period_end": "2026-05-02T10:00:00",
+            "conversation_mode": "support",
+            "behavior_mode": "polite",
+            "synthetic_slot": 3,
+            "synthetic_day": "2026-05-02",
+            "scenario_id": "scenario-1",
+            "adversarial_scenario_id": "attack-1",
+        }
+    )
+    history_path.write_text(json.dumps(chat_row) + "\n", encoding="utf-8")
+
+    assert main(_monitor_args(run_dir, sample_size=1)) == 0
+
+    score = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    for field in (
+        "recipe_id",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "profile_period_start",
+        "profile_period_end",
+        "conversation_mode",
+        "behavior_mode",
+        "synthetic_slot",
+        "synthetic_day",
+        "scenario_id",
+        "adversarial_scenario_id",
+        "persona_id",
+    ):
+        assert score[field] == chat_row[field]
+    assert score["timestamp"] == chat_row["timestamp"]
+    assert score["sample_window_id"] == 1
+
+
+def test_monitoring_resume_retains_profile_provenance(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_profiled_resume"
+    _write_chat_history(run_dir, total_rows=2)
+    history_path = run_dir / "chat_history.jsonl"
+    chat_rows = _read_jsonl(history_path)
+    for index, chat_row in enumerate(chat_rows, 1):
+        chat_row.update(
+            {
+                "profile_period_id": "morning" if index == 1 else "afternoon",
+                "profile_period_instance_id": (
+                    "2026-01-01/morning" if index == 1 else "2026-01-01/afternoon"
+                ),
+                "profile_period_start": f"2026-01-01T0{7 + index}:00:00",
+                "profile_period_end": f"2026-01-01T{9 + index:02d}:00:00",
+                "conversation_mode": "support",
+                "behavior_mode": "polite",
+                "synthetic_slot": index,
+                "synthetic_day": "2026-01-01",
+                "recipe_id": f"recipe-{index}",
+            }
+        )
+    history_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in chat_rows), encoding="utf-8"
+    )
+
+    first_args = _monitor_args(
+        run_dir, sample_size=1, max_windows=1, interval_minutes=1
+    )
+    assert main(first_args) == 0
+    assert main(_monitor_args(run_dir, sample_size=1, interval_minutes=1)) == 0
+
+    scores = _read_jsonl(run_dir / "monitoring_scores.jsonl")
+    assert [row["profile_period_instance_id"] for row in scores] == [
+        "2026-01-01/morning",
+        "2026-01-01/afternoon",
+    ]
+    assert [row["sample_window_id"] for row in scores] == [1, 2]
+
+
+def test_monitoring_rescan_refreshes_reused_row_provenance_only(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_profiled_rescan"
+    _write_chat_history(run_dir, total_rows=1)
+    history_path = run_dir / "chat_history.jsonl"
+    chat_row = _read_jsonl(history_path)[0]
+    chat_row.update(
+        {
+            "timestamp": "2026-01-01T00:00:00.111222",
+            "profile_period_id": "morning",
+            "profile_period_instance_id": "2026-01-01/morning",
+            "profile_period_start": "2026-01-01T08:00:00",
+            "profile_period_end": "2026-01-01T10:00:00",
+        }
+    )
+    history_path.write_text(json.dumps(chat_row) + "\n", encoding="utf-8")
+    args = _monitor_args(run_dir, sample_size=1)
+    assert main(args) == 0
+
+    before = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    chat_row["timestamp"] = "2026-01-01T00:00:00.987654"
+    chat_row["profile_period_id"] = "peak"
+    chat_row["profile_period_instance_id"] = "2026-01-01/peak"
+    chat_row["profile_period_start"] = "2026-01-01T09:00:00"
+    chat_row.pop("profile_period_end")
+    history_path.write_text(json.dumps(chat_row) + "\n", encoding="utf-8")
+
+    assert main([*args, "--rescan"]) == 0
+
+    after = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    assert after["profile_period_id"] == "peak"
+    assert after["profile_period_instance_id"] == "2026-01-01/peak"
+    assert after["profile_period_start"] == "2026-01-01T09:00:00"
+    assert "profile_period_end" not in after
+    assert after["timestamp"] == chat_row["timestamp"]
+    assert after["timestamp"] != before["timestamp"]
+    assert after["sample_window_id"] == before["sample_window_id"]
+    assert after["safety_metrics"] == before["safety_metrics"]
+    assert after["performance_metrics"] == before["performance_metrics"]
+
+
+def test_legacy_monitoring_scores_omit_profile_fields(tmp_path):
+    run_dir = tmp_path / "outputs" / "runs" / "run_legacy"
+    _write_chat_history(run_dir, total_rows=1)
+
+    assert main(_monitor_args(run_dir, sample_size=1)) == 0
+
+    score = _read_jsonl(run_dir / "monitoring_scores.jsonl")[0]
+    for field in (
+        "recipe_id",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "profile_period_start",
+        "profile_period_end",
+        "conversation_mode",
+        "behavior_mode",
+        "synthetic_slot",
+        "synthetic_day",
+        "scenario_id",
+        "adversarial_scenario_id",
+    ):
+        assert field not in score
+
+
 def test_monitoring_cli_rescan_with_broader_systematic_sample_adds_rows(tmp_path):
     run_dir = tmp_path / "outputs" / "runs" / "run_broader_rescan"
     _write_chat_history(run_dir, total_rows=10)

@@ -11,6 +11,7 @@ from adaptive_synth_eval.config.schemas import (
     Persona,
     Scenario,
     TargetChatbot,
+    TimeProfile,
     TimeWindow,
 )
 
@@ -142,6 +143,7 @@ class EvalPlanEntry:
     # DEPRECATED — kept for backwards compatibility with older contracts.
     # If set and `schedule` is the default, parser populates Schedule(mode=bernoulli, p_synth=this).
     synth_to_adversarial_ratio: float | None = None
+    recipe_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +220,7 @@ class UnifiedContract:
     learning_bundle: dict[str, Any] | None = None
     learning_policy: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    time_profile: TimeProfile | None = None
 
     def persona_by_id(self) -> dict[str, Persona]:
         return {p.persona_id: p for p in self.persona_pool}

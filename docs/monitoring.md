@@ -62,6 +62,23 @@ are saved in `monitoring_state.json`. The dashboard uses those persisted values
 to prefill a later Continue or Re-evaluate dialog. A blank dashboard Max windows
 field is stored as `null` and means unlimited.
 
+### Profile-aware sampling and scores
+
+For chat rows produced by a `time_profile` contract, monitoring preserves the
+simulation provenance rather than rebuilding it. Each `monitoring_scores.jsonl`
+row copies the source `timestamp`, `recipe_id`, `profile_period_id`,
+`profile_period_instance_id`, `profile_period_start`, `profile_period_end`,
+`conversation_mode`, `behavior_mode`, `synthetic_slot`, `synthetic_day`,
+`scenario_id`, `adversarial_scenario_id`, and `persona_id` when present. Rescan
+and cache-reconciliation paths refresh these values from the current source row,
+so reused metric values still carry current artifact provenance.
+
+`sample_window_id` is not a profile phase ID. It is the monitoring runner's
+sequential processing-window number, determined by `--interval-minutes` and the
+monitoring cursor. Use `profile_period_id` to compare a recurring phase such as
+`regular_hours` against `toxicity_drill`, and
+`profile_period_instance_id` to isolate one phase on one synthetic day.
+
 ## Incremental and scheduled monitoring
 
 Progress is stored in `monitoring_state.json`. When the evaluation and policy fingerprints are unchanged, a later invocation resumes from `next_line_index`; if new rows were appended to `chat_history.jsonl`, only the appended range needs processing. When there are no new rows, the command completes without scoring calls.
@@ -177,6 +194,32 @@ not expose or accept `--dry-run`, `--metrics-config`, or other custom CLI
 arguments. Use the CLI directly when deterministic dry-run scoring or a custom
 metrics file is required.
 
+### Profile-aware dashboard views
+
+When the selected run's `run_plan.json` contains profile periods, the dashboard
+loads the complete local run and defaults the dashboard period to **Full Run**.
+The dashboard-period selector scopes KPI summaries, failure analysis,
+conversation queues, counts, and default chart ranges; individual chart period
+selectors may still override that range. Full Run avoids applying real-world
+"last N days" filters to synthetic dates.
+
+The **Phase comparison** table groups repeated daily instances by
+`profile_period_id`. It displays each phase's conversation/behavior modes and
+daily hours, evaluation count, pass/fail rate, toxicity safety score, average
+safety, and average performance. Comparative highlighting calls out the higher
+fail rate and lower toxicity-safety score when phases differ. Metric charts use
+`profile_period_start` and `profile_period_end` from the plan to draw labeled,
+lightly shaded phase bands across the synthetic timeline.
+
+These views evaluate already-written artifacts. They do not cause a phase to
+start, allocate conversations, invoke a target, or schedule simulation work.
+`time_profile` performs within-run simulation planning, while `ase loop` remains
+the scheduler for recurring whole runs.
+
+For exact one-day commands covering the Agent Skills example, provenance
+assertions, deterministic monitoring, dashboard checks, and safe fingerprint
+rejection, use the [time-profile verification guide](time_profile_verification.md).
+
 ### Dashboard evaluation log
 
 For each accepted dashboard launch, the server appends a timestamped launch
@@ -223,6 +266,10 @@ Changes to evaluation or policy fingerprints trigger reconciliation from the sta
 ## Timestamps and provenance
 
 Each monitoring score uses the source chat row's original time as its primary `timestamp`. Dashboard date filters and charts therefore follow when the conversation occurred, not when monitoring ran. Evaluation time is retained separately in `value_versions.generated_at`, together with model identity and content/policy fingerprints.
+
+For profiled rows, that source value is the deterministic turn timestamp and is
+preserved exactly when it is a valid ISO datetime. The associated profile fields
+listed above make the timestamp's recurring phase and daily instance explicit.
 
 If a source row lacks a usable timestamp, the runner derives a deterministic fallback for windowing and output ordering. See [Output artifacts](output_artifacts.md) for the complete field definitions.
 

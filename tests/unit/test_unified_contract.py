@@ -380,7 +380,7 @@ def test_explicit_scenario_threshold_overrides_global_threshold():
     assert contract.adversarial_scenario_catalog[0].failure_threshold == 2
 
 
-def test_contract_v2_round_trip_preserves_nested_llms_schedule_target_and_trajectory():
+def test_contract_v2_input_normalizes_to_v3_and_preserves_nested_fields():
     payload = _base_payload()
     payload["schema_version"] = 2
     payload["llm"] = {
@@ -422,7 +422,7 @@ def test_contract_v2_round_trip_preserves_nested_llms_schedule_target_and_trajec
     normalized = contract_to_dict(original)
     reparsed = parse_unified_contract(normalized)
 
-    assert normalized["schema_version"] == 2
+    assert normalized["schema_version"] == 3
     assert normalized["llm"]["bedrock"]["endpoint"] == "https://bedrock.example"
     assert "bedrock_endpoint" not in normalized["llm"]
     assert normalized["eval_plan"]["entries"][0]["schedule"]["mode"] == "phased"
@@ -479,7 +479,7 @@ def test_nested_llm_fields_win_over_legacy_fields_with_warning():
 
 def test_future_contract_schema_version_is_rejected():
     payload = _base_payload()
-    payload["schema_version"] = 3
+    payload["schema_version"] = 4
 
     with pytest.raises(ContractError, match="schema_version"):
         parse_unified_contract(payload)
@@ -488,6 +488,11 @@ def test_future_contract_schema_version_is_rejected():
 def test_normalized_contract_redacts_target_auth_secrets():
     payload = _base_payload()
     payload["target"]["auth"] = {
+        "type": "api_key",
+        "env_var": "TARGET_API_KEY",
+        "header_name": "x-api-key",
+        "scheme": "ApiKey",
+        "value": "literal-target-secret",
         "Authorization": "Bearer super-secret-token",
         "password": "do-not-write-me",
     }
@@ -497,4 +502,10 @@ def test_normalized_contract_redacts_target_auth_secrets():
 
     assert "super-secret-token" not in serialized
     assert "do-not-write-me" not in serialized
+    assert "literal-target-secret" not in serialized
+    assert normalized["target"]["auth"]["type"] == "api_key"
+    assert normalized["target"]["auth"]["env_var"] == "TARGET_API_KEY"
+    assert normalized["target"]["auth"]["header_name"] == "x-api-key"
+    assert normalized["target"]["auth"]["scheme"] == "ApiKey"
+    assert normalized["target"]["auth"]["value"] == "<redacted>"
     assert normalized["target"]["auth"]["Authorization"] == "<redacted>"

@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   MonitoringRunStatus,
+  ProfilePeriod,
   MonitoringStartRequest,
   RunSummary,
+  TimePeriodPreset,
 } from "@/types/evaluation";
 import { resetMocks, resetMocksWithResolvedValue } from "./test-utils";
 
@@ -21,6 +23,11 @@ const hookState = vi.hoisted(() => ({
   statuses: {} as Record<string, MonitoringRunStatus | undefined>,
   statusUpdatedAt: {} as Record<string, number>,
   latestSuccessfulStatusRequestId: {} as Record<string, number>,
+  profilePeriodsByRun: {} as Record<string, ProfilePeriod[]>,
+  evaluationRequests: [] as Array<{
+    period: TimePeriodPreset;
+    runId?: string;
+  }>,
 }));
 
 const completedRun: RunSummary = {
@@ -80,13 +87,17 @@ vi.mock("@/hooks/use-evaluations", () => ({
     mutateAsync: hookState.mutateAsync,
     isPending: false,
   }),
-  useEvaluations: () => ({
-    data: [],
-    isLoading: false,
-    isError: false,
-    error: null,
-    refetch: hookState.refetchEvaluations,
-  }),
+  useEvaluations: (period: TimePeriodPreset, runId?: string) => {
+    hookState.evaluationRequests.push({ period, runId });
+    return {
+      data: [],
+      profilePeriods: runId ? hookState.profilePeriodsByRun[runId] ?? [] : [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: hookState.refetchEvaluations,
+    };
+  },
   usePreviousPeriodEvaluations: () => ({ data: [] }),
   useTraceDetails: () => ({
     data: null,
@@ -117,6 +128,8 @@ beforeEach(() => {
   hookState.statuses = { "run-1": completedStatus };
   hookState.statusUpdatedAt = { "run-1": 1 };
   hookState.latestSuccessfulStatusRequestId = { "run-1": 1 };
+  hookState.profilePeriodsByRun = {};
+  hookState.evaluationRequests = [];
   resetMocks([hookState.mutateAsync]);
   hookState.mutateAsync.mockResolvedValue({
     runId: "run-1",
@@ -145,6 +158,81 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Monitor page evaluation configuration", () => {
+  it("keeps the legacy selected-run default at the last 90 days", () => {
+    render(<DashboardPage />);
+
+    expect(hookState.evaluationRequests).toContainEqual({
+      period: "last-90-days",
+      runId: "run-1",
+    });
+  });
+
+  it("switches a profiled run from the discovery query to full-run once", async () => {
+    hookState.profilePeriodsByRun["run-1"] = [
+      {
+        instanceId: "business:day-1",
+        periodId: "business",
+        start: "2026-01-01T09:00:00Z",
+        end: "2026-01-01T17:00:00Z",
+        conversationMode: "synth",
+        behaviorMode: "benign",
+        plannedConversations: 1,
+      },
+    ];
+
+    render(<DashboardPage />);
+
+    await waitFor(() =>
+      expect(hookState.evaluationRequests).toContainEqual({
+        period: "full-run",
+        runId: "run-1",
+      })
+    );
+    expect(
+      hookState.evaluationRequests.filter(
+        (request) =>
+          request.runId === "run-1" && request.period === "full-run"
+      ).length
+    ).toBeLessThanOrEqual(3);
+  });
+
+  it("resolves a newly selected legacy run back to its own 90-day default", async () => {
+    const user = userEvent.setup();
+    hookState.runs = [
+      completedRun,
+      { ...completedRun, runId: "run-2" },
+    ];
+    hookState.profilePeriodsByRun["run-1"] = [
+      {
+        instanceId: "business:day-1",
+        periodId: "business",
+        start: "2026-01-01T09:00:00Z",
+        end: "2026-01-01T17:00:00Z",
+        conversationMode: "synth",
+        behaviorMode: "benign",
+        plannedConversations: 1,
+      },
+    ];
+
+    render(<DashboardPage />);
+    await waitFor(() =>
+      expect(hookState.evaluationRequests).toContainEqual({
+        period: "full-run",
+        runId: "run-1",
+      })
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Select evaluation run"),
+      "run-2"
+    );
+
+    await waitFor(() =>
+      expect(hookState.evaluationRequests).toContainEqual({
+        period: "last-90-days",
+        runId: "run-2",
+      })
+    );
+  });
   it("renders the collapsed evaluation log directly below the selected run header", () => {
     render(<DashboardPage />);
 

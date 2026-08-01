@@ -19,9 +19,11 @@ from adaptive_synth_eval.adversarial_response_engine.skills.registry import (
     SkillValidationError,
     get_builtin_registry,
 )
+from adaptive_synth_eval.artifacts.fingerprints import secret_safe_payload
 from adaptive_synth_eval.config.contract import (
     ContractError,
     _parse_persona,
+    _parse_recipe_id,
     _parse_scenario,
     _parse_target_chatbot,
     _require_keys,
@@ -31,6 +33,12 @@ from adaptive_synth_eval.config.schemas import (
     Persona,
     Scenario,
     TimeWindow,
+)
+from adaptive_synth_eval.config.time_profile import (
+    TimeProfileError,
+    parse_time_profile,
+    time_profile_to_dict,
+    validate_time_profile,
 )
 from adaptive_synth_eval.learning.candidates import CandidateValidator
 from adaptive_synth_eval.learning.models import LearningBundle
@@ -106,9 +114,9 @@ def parse_unified_contract(
 ) -> UnifiedContract:
     warnings: list[str] = []
     schema_version = int(payload.get("schema_version", 1))
-    if schema_version not in {1, 2}:
+    if schema_version not in {1, 2, 3}:
         raise ContractError(
-            f"Unsupported unified contract schema_version {schema_version}; supported versions are 1 and 2."
+            f"Unsupported unified contract schema_version {schema_version}; supported versions are 1, 2, and 3."
         )
     for key in _REQUIRED_TOP:
         if key not in payload:
@@ -173,6 +181,17 @@ def parse_unified_contract(
                 )
 
     eval_plan = _parse_eval_plan(payload["eval_plan"], warnings)
+    try:
+        time_profile = parse_time_profile(payload.get("time_profile"))
+        validate_time_profile(
+            time_profile,
+            recipes=eval_plan.entries,
+            total_conversations=eval_plan.total_conversations,
+            num_synthetic_days=window.num_synthetic_days,
+            unbounded=run.until_budget_exhausted,
+        )
+    except TimeProfileError as exc:
+        raise ContractError(str(exc)) from exc
     trajectory = TrajectoryConfig(
         **_filter_keys(payload.get("trajectory", {}) or {}, TrajectoryConfig)
     )
@@ -208,6 +227,7 @@ def parse_unified_contract(
         output=output,
         target_llm=target_llm,
         target_system_prompt=target_system_prompt,
+        time_profile=time_profile,
         trajectory=trajectory,
         attack_skills=attack_skills,
         warnings=warnings,
@@ -259,8 +279,8 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
         if contract.attack_skills.enabled
         else ()
     )
-    return {
-        "schema_version": 2,
+    payload = {
+        "schema_version": 3,
         "suite": contract.suite.__dict__,
         "run": contract.run.__dict__,
         "llm": _llm_to_dict(contract.llm),
@@ -293,6 +313,15 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
                     "weight": entry.weight,
                     "schedule": entry.schedule.__dict__,
                     "max_turns": entry.max_turns,
+                    **(
+                        {
+                            "recipe_id": _parse_recipe_id(
+                                entry.__dict__, label="eval_plan entry"
+                            )
+                        }
+                        if entry.recipe_id is not None
+                        else {}
+                    ),
                 }
                 for entry in contract.eval_plan.entries
             ],
@@ -325,6 +354,9 @@ def contract_to_dict(contract: UnifiedContract) -> dict[str, Any]:
             "run_id": contract.output.run_id,
         },
     }
+    if contract.time_profile is not None:
+        payload["time_profile"] = time_profile_to_dict(contract.time_profile)
+    return payload
 
 
 def _filter_keys(payload: dict[str, Any], cls) -> dict[str, Any]:
@@ -595,6 +627,7 @@ def _parse_entry(payload: dict[str, Any], warnings: list[str]) -> EvalPlanEntry:
         weight=float(payload.get("weight", 1.0)),
         schedule=schedule,
         max_turns=payload.get("max_turns"),
+        recipe_id=_parse_recipe_id(payload, label="eval_plan entry"),
         synth_to_adversarial_ratio=(
             float(legacy_ratio) if legacy_ratio is not None else None
         ),
@@ -714,7 +747,7 @@ def _scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
 def _target_to_dict(target) -> dict[str, Any]:
     out = target.__dict__.copy()
     if isinstance(out.get("auth"), dict):
-        out["auth"] = {key: "<redacted>" for key in out["auth"]}
+        out["auth"] = secret_safe_payload({"auth": out["auth"]})["auth"]
     if target.browser is not None:
         out["browser"] = target.browser.__dict__
     if target.agentcore is not None:

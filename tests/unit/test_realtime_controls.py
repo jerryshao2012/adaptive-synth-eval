@@ -424,6 +424,16 @@ def test_realtime_controller_prompt_text_shows_persona():
     assert controller_single.prompt_text == "⚡> [P001] "
 
 
+def test_realtime_controller_supports_stressed_and_toxic_behaviors():
+    controller = RealtimeChatController()
+
+    assert {"stressed", "toxic"} <= controller.SUPPORTED_BEHAVIORS
+    usage = controller.apply_command("style")
+    assert "stressed" in usage and "toxic" in usage
+    assert "Behavior updated" in controller.apply_command("style stressed")
+    assert controller.get_behavior_override_for_persona() == "stressed"
+
+
 def test_switch_without_active_sessions_returns_clear_message():
     controller = RealtimeChatController(
         initial_delay_seconds=0.5, personas={"P1": {}, "P2": {}}

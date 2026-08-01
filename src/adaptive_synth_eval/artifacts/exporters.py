@@ -39,6 +39,21 @@ class ArtifactWriter:
         "retrieved_policy_ids",
         "generation_metadata",
     ]
+    PROFILE_CSV_FIELDNAMES = [
+        "timestamp",
+        "sequence",
+        "recipe_id",
+        "synthetic_timestamp",
+        "synthetic_slot",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "profile_period_start",
+        "profile_period_end",
+        "conversation_mode",
+        "behavior_mode",
+        "traffic_weight",
+        "recipe_weights",
+    ]
 
     def __init__(
         self,
@@ -46,12 +61,17 @@ class ArtifactWriter:
         *,
         run_id: str,
         capture_adapter: ChatHistoryProducerAdapter | None = None,
+        profile_enabled: bool = False,
     ):
         self.base_dir = Path(base_dir)
         self.run_id = run_id
         self.run_dir = self.base_dir / "runs" / run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.capture_adapter = capture_adapter
+        self.profile_enabled = bool(profile_enabled)
+        self.chat_history_csv_fieldnames = list(self.CHAT_HISTORY_CSV_FIELDNAMES)
+        if self.profile_enabled:
+            self.chat_history_csv_fieldnames.extend(self.PROFILE_CSV_FIELDNAMES)
 
     def write_json(self, name: str, payload) -> Path:
         path = self.run_dir / name
@@ -331,10 +351,21 @@ class ArtifactWriter:
 
     def _write_csv(self, name: str, rows: list[dict], *, append: bool = False) -> Path:
         path = self.run_dir / name
-        mode = "a" if append else "w"
+        fieldnames = self.chat_history_csv_fieldnames
+        append_existing = append and path.exists() and path.stat().st_size > 0
+        if append_existing:
+            with path.open(encoding="utf-8", newline="") as existing:
+                existing_header = next(csv.reader(existing), [])
+            if existing_header != fieldnames:
+                raise RuntimeError(
+                    "Chat history CSV schema does not match the active profile mode"
+                )
+        mode = "a" if append_existing else "w"
         with path.open(mode, encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=self.CHAT_HISTORY_CSV_FIELDNAMES, extrasaction="ignore")
-            if not append:
+            writer = csv.DictWriter(
+                handle, fieldnames=fieldnames, extrasaction="ignore"
+            )
+            if not append_existing:
                 writer.writeheader()
             for row in rows:
                 writer.writerow(row)

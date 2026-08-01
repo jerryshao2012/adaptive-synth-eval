@@ -52,32 +52,95 @@ Notes:
   dashboard launches monitoring, or when a terminal command is explicitly
   redirected to that path.
 
-For **unified runs**, `contract.normalized.json` uses canonical unified contract schema version 2. Provider
+For **unified runs**, `contract.normalized.json` uses canonical unified contract schema version 3. Provider
 settings are emitted in nested `azure`, `bedrock`, and `ollama` blocks, schedules are
 fully serialized, and literal target authentication values are redacted.
-The parser also accepts schema-v1 contracts and legacy flat `LLMSpec` fields, including
+The parser also accepts schema-v1 and schema-v2 contracts and legacy flat `LLMSpec` fields, including
 `bedrock_endpoint`, at the top-level, component, and target LLM locations. If a nested and
 legacy field conflict, the nested value wins with a warning. Unsupported future schema
 versions fail validation. `judge_overrides` is round-tripped with a warning but is not
 currently applied to judge behavior. Synth runs serialize their separate synth contract
-shape and do not label it unified schema version 2.
+shape and do not label it with a unified schema version.
 
 For **unified runs**, `run_state.json` version 2 tracks completed conversation IDs, rolling metrics, actual
 token/component usage, committed attack memory, and fingerprints of both the effective
 contract and exact filtered run plan. Resume rejects a changed v2 contract or plan;
 legacy v1 state remains best-effort with a warning. Transient in-flight token
-reservations are deliberately not persisted. Synth runs currently write run-state
-version 1; the unified v2 fingerprint and memory semantics do not apply to synth state.
+reservations are deliberately not persisted.
+
+**Unprofiled legacy synth runs** continue to write run-state version 1 and do not make
+contract- or plan-fingerprint guarantees. **Profiled synth runs** write run-state
+version 2 with SHA-256 fingerprints of the normalized synth contract and the exact
+serialized full run plan. On resume, profiled synth requires a version 2 checkpoint and
+validates both fingerprints before any writer or artifact mutation; a changed effective
+contract or full plan rejects resume and requires a restart. Unified memory and token-
+reservation semantics remain specific to unified runs.
 
 For **unified runs**, `run_plan.json` is the exact ordered and filtered conversation plan,
 including each resolved turn schedule. The plan and canonical secret-safe contract are
-independently fingerprinted with SHA-256 in unified run-state version 2. Synth also emits
-a run plan, but it is not covered by these unified-v2 fingerprint claims.
+independently fingerprinted with SHA-256 in unified run-state version 2. For **profiled
+synth runs**, `run_plan.json` contains the exact serialized full profiled plan, and its
+fingerprint is computed before completed conversations are filtered during resume. Run
+plans from unprofiled legacy synth runs remain outside these fingerprint guarantees.
 
 Budget-driven unified runs are currently sequential. Finite plans use a bounded sliding
 window, with per-turn reservations acquired by a conversation task immediately before
 turn work. If an admitted task cannot reserve its first turn, no zero-turn conversation
 row is written and its ID is not marked complete.
+
+### Time-profile provenance
+
+When a contract contains `time_profile`, the run plan and downstream artifacts carry
+the selected phase and recipe. These fields are optional so artifacts from contracts
+that omit `time_profile` retain their legacy shape.
+
+| Field | Type | Meaning |
+| :--- | :--- | :--- |
+| `sequence` | `int` | Stable 1-based profiled plan order |
+| `recipe_id` | `str` | Selected synth mix item or unified eval-plan entry |
+| `synthetic_timestamp` | `str` | Conversation anchor inside its period, serialized with Python `datetime.isoformat()` |
+| `synthetic_slot` | `int` | 1-based conversation slot within the daily period instance |
+| `profile_period_id` | `str` | Recurring window ID from the contract |
+| `profile_period_instance_id` | `str` | Daily instance ID, exactly `<YYYY-MM-DD>/<period_id>` |
+| `profile_period_start` | `str` | Daily instance start as an ISO local datetime |
+| `profile_period_end` | `str` | Daily instance end as an ISO local datetime |
+| `conversation_mode` | `str` | Contract label used to group the window |
+| `behavior_mode` | `str` | Planned simulated-user style for the window |
+| `traffic_weight` | `float` | Window weight used for conversation allocation |
+| `recipe_weights` | `object` | Complete configured recipe-weight map for the window |
+| `timestamp` | `str` | Artifact event time; turn-specific for per-turn rows and the conversation anchor for conversation rows |
+
+The timestamp strings are timezone-naive ISO 8601 local synthetic times, for example
+`2026-08-03T10:00:00`; fractional seconds appear only when the deterministic allocation
+requires them. If an instance contains `N` conversations, slot `s` receives:
+
+```text
+period_start + (period_end - period_start) * s / (N + 1)
+```
+
+Within a conversation, turn 1 uses that anchor. Later turns increase by at most one
+second each and never pass `profile_period_end`. `synthetic_timestamp` remains the
+conversation anchor on every turn, while `timestamp` is the turn event time.
+
+Field propagation is intentionally artifact-specific:
+
+| Artifact | Profile metadata |
+| :--- | :--- |
+| `run_plan.json` | All fields above except event `timestamp`; includes the exact ordered profiled plan |
+| `chat_history.jsonl` | All provenance fields, including turn `timestamp` |
+| `chat_history.csv` | Appends the same profile columns to the legacy header |
+| `turns.jsonl` | All provenance fields, including turn `timestamp` |
+| `scores.jsonl` | All provenance fields, including turn `timestamp` |
+| `conversations.jsonl` | All provenance fields; `timestamp` is the conversation anchor |
+| `monitoring_scores.jsonl` | Copies the source `timestamp`, `recipe_id`, `profile_period_id`, `profile_period_instance_id`, `profile_period_start`, `profile_period_end`, `conversation_mode`, `behavior_mode`, `synthetic_slot`, `synthetic_day`, `scenario_id`, `adversarial_scenario_id`, and `persona_id` when present |
+
+Profiled `run_summary.json` also adds `profile_counts`, grouped by period, daily
+period instance, recipe, conversation mode, and behavior mode.
+
+CSV compatibility is mode-stable: unprofiled runs keep the pre-profile CSV header and
+do not emit empty profile columns. Profiled runs append the profile columns. Resume
+refuses to append if the existing CSV header does not match the active profile mode,
+preventing a file from silently mixing schemas.
 
 Unified adversarial rows in `scores.jsonl` and `turns.jsonl` retain the response-only
 `failure_score`/`best_failure_score` and add `effective_failure_score`,
@@ -266,6 +329,9 @@ The principal files `chat_history.jsonl` and `chat_history.csv` document every t
 - `response_raw` (`dict`): The raw JSON payload returned by the chatbot endpoint.
 - `generation_metadata` (`dict`): Generation metadata; unified rows include turn type (`synth` or `adversarial`) and adversarial strategy fields where applicable.
 - `capture_events` (`list`): Optional typed events emitted by an instrumented producer.
+- Profile provenance fields: present only for contracts with `time_profile`; see
+  [Time-profile provenance](#time-profile-provenance) for the complete field and
+  artifact matrix.
 
 `response_raw` is retained in `chat_history.jsonl` but intentionally omitted from the
 CSV field list. `retrieved_policy_ids` and `generation_metadata` are present in both

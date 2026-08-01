@@ -37,6 +37,7 @@ class RealtimeControlState:
     persona_behavior_modes: dict[str, str] | None = (
         None  # Per-persona behavior tracking
     )
+    global_behavior_explicit: bool = False
 
 
 if Completer is not None:
@@ -111,6 +112,8 @@ class RealtimeChatController:
         "concise",
         "confused",
         "anxious",
+        "stressed",
+        "toxic",
     }
 
     COMMAND_HELP = (
@@ -370,12 +373,16 @@ class RealtimeChatController:
             parts = normalized.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 return (
-                    "Usage: style <default|aggressive|polite|concise|confused|anxious>"
+                    "Usage: style "
+                    "<default|aggressive|polite|concise|confused|anxious|stressed|toxic>"
                 )
             requested = parts[1].strip()
             return self._set_behavior_mode(requested)
         if normalized in {"style", "behavior", "mode"}:
-            return "Usage: style <default|aggressive|polite|concise|confused|anxious>"
+            return (
+                "Usage: style "
+                "<default|aggressive|polite|concise|confused|anxious|stressed|toxic>"
+            )
         if normalized in {"+", "f", "faster"}:
             with self._state_cv:
                 self._state.delay_seconds = max(
@@ -569,6 +576,7 @@ class RealtimeChatController:
             else:
                 # No active persona, apply globally (backward compatibility)
                 self._state.behavior_mode = requested
+                self._state.global_behavior_explicit = True
         return self._status_text(prefix=status_prefix)
 
     def list_switch_targets(self) -> list[str]:
@@ -670,6 +678,20 @@ class RealtimeChatController:
                     target_id, self._state.behavior_mode
                 )
             return self._state.behavior_mode  # Fallback to global
+
+    def get_behavior_override_for_persona(
+        self, persona_id: str | None = None
+    ) -> str | None:
+        """Return only a behavior explicitly selected through live controls."""
+
+        with self._state_cv:
+            target_id = persona_id or self._state.active_persona_id
+            if target_id and self._state.persona_behavior_modes:
+                if target_id in self._state.persona_behavior_modes:
+                    return self._state.persona_behavior_modes[target_id]
+            if self._state.global_behavior_explicit:
+                return self._state.behavior_mode
+            return None
 
     async def _input_loop_async(self) -> None:
         if PromptSession is None or patch_stdout is None:

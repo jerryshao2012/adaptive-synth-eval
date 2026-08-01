@@ -75,6 +75,18 @@ export interface EvaluationRecord {
   value_versions?: ValueVersions;
   sample_window_id?: number;
   source_line_index?: number;
+  recipe_id?: string;
+  profile_period_id?: string;
+  profile_period_instance_id?: string;
+  profile_period_start?: string;
+  profile_period_end?: string;
+  conversation_mode?: string;
+  behavior_mode?: string;
+  synthetic_slot?: number;
+  synthetic_day?: string;
+  scenario_id?: string;
+  adversarial_scenario_id?: string;
+  persona_id?: string;
   // Optional metadata from the evaluation pipeline
   scenario?: string;
   persona?: string;
@@ -94,8 +106,20 @@ export interface EvaluationRecord {
   };
 }
 
+export interface ProfilePeriod {
+  instanceId: string;
+  periodId: string;
+  start: string;
+  end: string;
+  conversationMode: string;
+  behaviorMode: string;
+  plannedConversations: number;
+  syntheticDay?: string;
+}
+
 export interface EvaluationsResponse {
   evaluations: EvaluationRecord[];
+  profilePeriods: ProfilePeriod[];
   total: number;
   from: string;
   to: string;
@@ -219,6 +243,7 @@ export interface MetricThreshold {
 
 // Time period selection
 export type TimePeriodPreset =
+  | "full-run"
   | "this-week"
   | "this-month"
   | "this-quarter"

@@ -661,6 +661,13 @@ class UserSimulator:
             return "Sound uncertain and ask for clarification on key terms."
         if behavior_mode == "anxious":
             return "Convey concern and urgency without hostility."
+        if behavior_mode == "stressed":
+            return "Sound pressured and overwhelmed while remaining constructive."
+        if behavior_mode == "toxic":
+            return (
+                "Sound sharply dissatisfied and confrontational without profanity, "
+                "threats, or abuse."
+            )
         return ""
 
     def _apply_behavior_to_fallback(self, message: str, *, behavior_mode: str) -> str:
@@ -675,6 +682,10 @@ class UserSimulator:
             return f"I might be misunderstanding this. {message}"
         if behavior_mode == "anxious":
             return f"I am really worried about this timeline. {message}"
+        if behavior_mode == "stressed":
+            return f"I am under a lot of pressure and need help quickly. {message}"
+        if behavior_mode == "toxic":
+            return f"This is unacceptable and I expect a direct answer. {message}"
         return message
 
     def _sanitize_opening_message(

@@ -7,6 +7,7 @@ Use this page to choose the shortest path for your task. Configuration details l
 - [Root quick start](../README.md#quick-start) — New users can install the project and complete the shortest validated dry-run.
 - [Simulation contracts](contracts.md) — Evaluation authors can define and validate personas, scenarios, targets, schedules, and outputs.
 - [CLI usage](cli_usage.md) — CLI users can find command syntax, flags, recovery options, and realtime controls.
+- [One-day time-profile verification](time_profile_verification.md) — Evaluators can validate the Agent Skills profile demo, inspect phase provenance, run monitoring, verify dashboard bands, and smoke-test resume protection in one laptop session.
 
 ## Run evaluations
 

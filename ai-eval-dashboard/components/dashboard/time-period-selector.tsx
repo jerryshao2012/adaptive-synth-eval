@@ -15,16 +15,19 @@ interface TimePeriodSelectorProps {
   value: TimePeriodPreset;
   onChange: (preset: TimePeriodPreset) => void;
   className?: string;
+  ariaLabel?: string;
 }
 
 export function TimePeriodSelector({
   value,
   onChange,
   className,
+  ariaLabel,
 }: TimePeriodSelectorProps) {
   return (
     <Select value={value} onValueChange={(v) => onChange(v as TimePeriodPreset)}>
       <SelectTrigger
+        aria-label={ariaLabel}
         className={cn(
           "h-7 w-32.5 border-border bg-background text-xs",
           className

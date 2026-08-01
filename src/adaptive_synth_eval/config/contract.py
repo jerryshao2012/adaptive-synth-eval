@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+from adaptive_synth_eval.artifacts.fingerprints import secret_safe_payload
 from adaptive_synth_eval.config.env import load_project_env, resolve_env_placeholders
 
 from adaptive_synth_eval.config.schemas import (
@@ -25,6 +27,12 @@ from adaptive_synth_eval.config.schemas import (
     TargetChatbot,
     TimeWindow,
     TrafficOrchestration,
+)
+from adaptive_synth_eval.config.time_profile import (
+    TimeProfileError,
+    parse_time_profile,
+    time_profile_to_dict,
+    validate_time_profile,
 )
 
 
@@ -67,6 +75,16 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
     personas = [_parse_persona(item) for item in payload["persona_pool"]]
     scenarios = [_parse_scenario(item, warnings) for item in payload["scenario_catalog"]]
     traffic = _parse_traffic(payload["traffic_orchestration"])
+    try:
+        time_profile = parse_time_profile(payload.get("time_profile"))
+        validate_time_profile(
+            time_profile,
+            recipes=traffic.mix,
+            total_conversations=traffic.total_conversations,
+            num_synthetic_days=window.num_synthetic_days,
+        )
+    except TimeProfileError as exc:
+        raise ContractError(str(exc)) from exc
     _validate_references(personas, scenarios, traffic)
     _validate_turns(traffic.conversation_turns)
     output_payload = payload.get("output", {})
@@ -83,17 +101,22 @@ def parse_contract(payload: dict[str, Any], *, base_path: Path | None = None) ->
         scenario_catalog=scenarios,
         traffic=traffic,
         output=output,
+        time_profile=time_profile,
         warnings=warnings,
     )
 
 
 def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
     target_data = contract.target.__dict__.copy()
+    if isinstance(target_data.get("auth"), dict):
+        target_data["auth"] = secret_safe_payload(
+            {"auth": target_data["auth"]}
+        )["auth"]
     if contract.target.browser is not None:
         target_data["browser"] = contract.target.browser.__dict__
     if contract.target.agentcore is not None:
         target_data["agentcore"] = contract.target.agentcore.__dict__
-    return {
+    payload = {
         "simulation_suite": contract.simulation_suite.__dict__,
         "target": target_data,
         "llm": {
@@ -131,7 +154,7 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
         "traffic_orchestration": {
             "total_conversations": contract.traffic.total_conversations,
             "conversation_turns": contract.traffic.conversation_turns.__dict__,
-            "mix": [item.__dict__ for item in contract.traffic.mix],
+            "mix": [_mix_item_to_dict(item) for item in contract.traffic.mix],
             "burst_patterns": [item.__dict__ for item in contract.traffic.burst_patterns],
             "synthetic_day_distribution": contract.traffic.synthetic_day_distribution,
             "random_seed": contract.traffic.random_seed,
@@ -142,6 +165,9 @@ def contract_to_dict(contract: SimulationContract) -> dict[str, Any]:
         "output": {"base_dir": str(contract.output.base_dir), "run_id": contract.output.run_id},
         "warnings": contract.warnings,
     }
+    if contract.time_profile is not None:
+        payload["time_profile"] = time_profile_to_dict(contract.time_profile)
+    return payload
 
 
 def _load_payload(path: Path) -> dict[str, Any]:
@@ -319,7 +345,15 @@ def _parse_traffic(payload: dict[str, Any]) -> TrafficOrchestration:
     return TrafficOrchestration(
         total_conversations=int(payload["total_conversations"]),
         conversation_turns=ConversationTurns(min=int(turns["min"]), max=int(turns["max"])),
-        mix=[MixItem(**item) for item in payload["mix"]],
+        mix=[
+            MixItem(
+                **{
+                    **item,
+                    "recipe_id": _parse_recipe_id(item, label="traffic mix item"),
+                }
+            )
+            for item in payload["mix"]
+        ],
         burst_patterns=[BurstPattern(**item) for item in payload.get("burst_patterns", [])],
         synthetic_day_distribution=cast(dict[str, float], payload.get("synthetic_day_distribution", {})),
         random_seed=payload.get("random_seed"),
@@ -348,3 +382,24 @@ def _require_keys(payload: dict[str, Any], keys: list[str], label: str) -> None:
     missing = [key for key in keys if key not in payload]
     if missing:
         raise ContractError(f"Missing required {label} field(s): {', '.join(missing)}")
+
+
+def _parse_recipe_id(payload: dict[str, Any], *, label: str) -> str | None:
+    if "recipe_id" not in payload or payload["recipe_id"] is None:
+        return None
+    recipe_id = payload["recipe_id"]
+    if not isinstance(recipe_id, str) or not recipe_id.strip():
+        raise ContractError(f"{label}.recipe_id must be a non-empty string")
+    return recipe_id.strip()
+
+
+def _mix_item_to_dict(item: MixItem) -> dict[str, Any]:
+    payload = {
+        "persona_id": item.persona_id,
+        "scenario_id": item.scenario_id,
+        "weight": item.weight,
+    }
+    recipe_id = _parse_recipe_id(item.__dict__, label="traffic mix item")
+    if recipe_id is not None:
+        payload["recipe_id"] = recipe_id
+    return payload

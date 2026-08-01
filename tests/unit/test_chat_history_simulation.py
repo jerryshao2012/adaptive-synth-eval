@@ -1,11 +1,14 @@
 import asyncio
+import csv
 import json
 from copy import deepcopy
+from datetime import datetime
 
 import pytest
 
 from adaptive_synth_eval.clients.chatbot import ChatbotResponse
-from adaptive_synth_eval.config.contract import load_contract
+from adaptive_synth_eval.clients.llm import LLMResult
+from adaptive_synth_eval.config.contract import ContractError, load_contract
 from adaptive_synth_eval.engines.chat_history_simulation import (
     _bounded_results,
     _effective_max_concurrency,
@@ -164,6 +167,732 @@ def test_run_simulation_async_dry_run_writes_expected_artifacts(
     assert (
         tmp_path / "outputs" / "runs" / "run_async" / "generation_report.md"
     ).exists()
+
+
+def test_profiled_synth_run_propagates_timestamps_provenance_and_behavior(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    payload = build_synth_contract_payload(
+        run_id="profiled_synth",
+        total_conversations=4,
+        turn_min=3,
+        turn_max=3,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+            {
+                "recipe_id": "r2",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 3,
+                "conversation_mode": "support",
+                "behavior_mode": "stressed",
+                "recipe_weights": {"r1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "conversation_mode": "support",
+                "behavior_mode": "toxic",
+                "recipe_weights": {"r2": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profiled_synth.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    target_metadata = []
+
+    class Target:
+        async def send_async(self, **kwargs):
+            target_metadata.append(kwargs["metadata"])
+            return ChatbotResponse.from_payload(
+                {"response": "Here is a grounded answer."},
+                latency_ms=1.0,
+                status_code=200,
+            )
+
+        async def close_async(self):
+            return None
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.create_chatbot_client",
+        lambda *args, **kwargs: Target(),
+    )
+    monkeypatch.setattr(
+        "adaptive_synth_eval.generation.turns.LLMClient.complete",
+        lambda *args, **kwargs: LLMResult(
+            content="", raw={"mock": True}, error="llm_disabled"
+        ),
+    )
+
+    summary = run_simulation(contract, dry_run=False)
+    run_dir = tmp_path / "outputs" / "runs" / "profiled_synth"
+    plan = json.loads((run_dir / "run_plan.json").read_text())
+    chat = [
+        json.loads(line)
+        for line in (run_dir / "chat_history.jsonl").read_text().splitlines()
+    ]
+    conversations = [
+        json.loads(line)
+        for line in (run_dir / "conversations.jsonl").read_text().splitlines()
+    ]
+    scores = [
+        json.loads(line) for line in (run_dir / "scores.jsonl").read_text().splitlines()
+    ]
+
+    assert [row["sequence"] for row in plan] == [1, 2, 3, 4]
+    assert [row["conversation_id"] for row in conversations] == [
+        "conv_000001",
+        "conv_000002",
+        "conv_000003",
+        "conv_000004",
+    ]
+    provenance = {
+        "sequence",
+        "recipe_id",
+        "synthetic_timestamp",
+        "synthetic_slot",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "profile_period_start",
+        "profile_period_end",
+        "conversation_mode",
+        "behavior_mode",
+        "traffic_weight",
+        "recipe_weights",
+    }
+    assert all(provenance <= row.keys() for row in plan)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in chat)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in conversations)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in scores)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in target_metadata)
+    for conversation_id in {row["conversation_id"] for row in chat}:
+        timestamps = [
+            datetime.fromisoformat(row["timestamp"])
+            for row in chat
+            if row["conversation_id"] == conversation_id
+        ]
+        assert timestamps == sorted(timestamps)
+        assert len(set(timestamps)) == 3
+        period_end = datetime.fromisoformat(
+            next(
+                row["profile_period_end"]
+                for row in chat
+                if row["conversation_id"] == conversation_id
+            )
+        )
+        assert timestamps[-1] <= period_end
+    assert {row["generation_metadata"]["behavior_mode"] for row in chat} == {
+        "stressed",
+        "toxic",
+    }
+    assert summary["profile_counts"]["by_period"] == {"afternoon": 1, "morning": 3}
+    with (run_dir / "chat_history.csv").open(newline="") as handle:
+        csv_rows = list(csv.DictReader(handle))
+    assert {"sequence", "timestamp", "profile_period_id"} <= set(csv_rows[0])
+    assert csv_rows[0]["profile_period_id"] == "morning"
+
+
+def test_profiled_synth_run_state_fingerprints_allow_same_plan_resume(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    payload = build_synth_contract_payload(
+        run_id="profile_resume_same",
+        total_conversations=2,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            }
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profile_resume_same.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.build_profiled_run_plan",
+        lambda contract, persona_id=None: [],
+    )
+
+    run_simulation(contract, dry_run=True)
+    run_dir = tmp_path / "outputs" / "runs" / "profile_resume_same"
+    first_state = json.loads((run_dir / "run_state.json").read_text())
+    conversations_before = (run_dir / "conversations.jsonl").read_bytes()
+
+    run_simulation(contract, dry_run=True, resume_incomplete=True)
+
+    resumed_state = json.loads((run_dir / "run_state.json").read_text())
+    assert first_state["version"] == resumed_state["version"] == 2
+    assert len(resumed_state["contract_fingerprint"]) == 64
+    assert len(resumed_state["plan_fingerprint"]) == 64
+    assert resumed_state["contract_fingerprint"] == first_state["contract_fingerprint"]
+    assert resumed_state["plan_fingerprint"] == first_state["plan_fingerprint"]
+    assert (run_dir / "conversations.jsonl").read_bytes() == conversations_before
+
+
+def test_profiled_synth_resume_without_checkpoint_creates_no_run_or_capture_dir(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    payload = build_synth_contract_payload(
+        run_id="profile_resume_missing",
+        total_conversations=2,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            }
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profile_resume_missing.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    run_dir = tmp_path / "outputs" / "runs" / "profile_resume_missing"
+    monkeypatch.setenv("ASE_CAPTURE_ENABLED", "true")
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.build_profiled_run_plan",
+        lambda contract, persona_id=None: [],
+    )
+
+    with pytest.raises(ContractError, match="without a run-state checkpoint"):
+        run_simulation(contract, dry_run=True, resume_incomplete=True)
+
+    assert not run_dir.exists()
+    assert not (run_dir / "capture").exists()
+
+
+@pytest.mark.parametrize("change", ["seed", "profile", "recipe"])
+def test_profiled_synth_resume_rejects_changed_contract_before_artifact_mutation(
+    tmp_path, monkeypatch, build_synth_contract_payload, change
+):
+    payload = build_synth_contract_payload(
+        run_id=f"profile_resume_changed_{change}",
+        total_conversations=2,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            }
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+        ]
+    }
+    initial_path = tmp_path / f"profile_resume_changed_{change}.json"
+    initial_path.write_text(json.dumps(payload))
+    initial = load_contract(initial_path)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.build_profiled_run_plan",
+        lambda contract, persona_id=None: [],
+    )
+    run_simulation(initial, dry_run=True)
+
+    run_dir = tmp_path / "outputs" / "runs" / payload["output"]["run_id"]
+    watched = {
+        name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns)
+        for name in (
+            "run_state.json",
+            "contract.normalized.json",
+            "run_plan.json",
+            "conversations.jsonl",
+        )
+    }
+    changed = deepcopy(payload)
+    if change == "seed":
+        changed["traffic_orchestration"]["random_seed"] += 1
+    elif change == "profile":
+        changed["time_profile"]["windows"][0]["traffic_weight"] = 2
+    else:
+        changed["traffic_orchestration"]["mix"][0]["weight"] = 2
+    changed_path = tmp_path / f"profile_resume_changed_{change}_new.json"
+    changed_path.write_text(json.dumps(changed))
+    monkeypatch.setenv("ASE_CAPTURE_ENABLED", "true")
+
+    with pytest.raises(ContractError, match="effective contract differs"):
+        run_simulation(
+            load_contract(changed_path), dry_run=True, resume_incomplete=True
+        )
+
+    assert {
+        name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns)
+        for name in watched
+    } == watched
+    assert not (run_dir / "capture").exists()
+
+
+def test_profiled_synth_resume_rejects_changed_full_plan_before_artifact_mutation(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    payload = build_synth_contract_payload(
+        run_id="profile_resume_changed_plan",
+        total_conversations=2,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            }
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profile_resume_changed_plan.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    from adaptive_synth_eval.generation.traffic import build_profiled_run_plan
+
+    changed_plan = build_profiled_run_plan(contract)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.build_profiled_run_plan",
+        lambda contract, persona_id=None: [],
+    )
+    run_simulation(contract, dry_run=True)
+
+    run_dir = tmp_path / "outputs" / "runs" / "profile_resume_changed_plan"
+    watched = {
+        name: (run_dir / name).read_bytes()
+        for name in (
+            "run_state.json",
+            "contract.normalized.json",
+            "run_plan.json",
+            "conversations.jsonl",
+        )
+    }
+    monkeypatch.setattr(
+        "adaptive_synth_eval.engines.chat_history_simulation.build_profiled_run_plan",
+        lambda contract, persona_id=None: changed_plan,
+    )
+
+    with pytest.raises(ContractError, match="full profiled run plan differs"):
+        run_simulation(contract, dry_run=True, resume_incomplete=True)
+
+    assert {name: (run_dir / name).read_bytes() for name in watched} == watched
+
+
+def test_profiled_synth_resume_fingerprints_full_plan_before_completed_filtering(
+    tmp_path, build_synth_contract_payload
+):
+    from adaptive_synth_eval.artifacts.fingerprints import fingerprint_payload
+    from adaptive_synth_eval.artifacts.run_state import write_run_state
+    from adaptive_synth_eval.config.contract import contract_to_dict
+    from adaptive_synth_eval.engines.chat_history_simulation import (
+        _serialize_synth_plan,
+    )
+    from adaptive_synth_eval.generation.traffic import build_profiled_run_plan
+
+    personas = [
+        {
+            "persona_id": persona_id,
+            "role": "employee",
+            "location": "Canada",
+            "seniority": "junior",
+            "communication_style": "polite",
+            "hr_familiarity": "low",
+            "privacy_sensitivity": "medium",
+        }
+        for persona_id in ("P001", "P002")
+    ]
+    payload = build_synth_contract_payload(
+        run_id="profile_resume_completed",
+        total_conversations=4,
+        persona_pool=personas,
+        mix=[
+            {
+                "recipe_id": "r1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+            {
+                "recipe_id": "r2",
+                "persona_id": "P002",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1, "r2": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"r1": 1, "r2": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profile_resume_completed.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    full_plan = build_profiled_run_plan(contract)
+    serialized_plan = _serialize_synth_plan(full_plan)
+    normalized_contract = contract_to_dict(contract)
+    run_dir = tmp_path / "outputs" / "runs" / "profile_resume_completed"
+    write_run_state(
+        run_dir,
+        {
+            "version": 2,
+            "mode": "synth",
+            "status": "in_progress",
+            "run_id": "profile_resume_completed",
+            "completed_conversation_ids": [item.conversation_id for item in full_plan],
+            "metrics": {},
+            "contract_fingerprint": fingerprint_payload(normalized_contract),
+            "plan_fingerprint": fingerprint_payload(serialized_plan),
+        },
+    )
+
+    summary = run_simulation(contract, dry_run=True, resume_incomplete=True)
+
+    assert summary["total_conversations"] == 4
+    watched = {
+        name: (run_dir / name).read_bytes()
+        for name in (
+            "run_state.json",
+            "contract.normalized.json",
+            "run_plan.json",
+            "conversations.jsonl",
+        )
+    }
+    with pytest.raises(ContractError, match="full profiled run plan differs"):
+        run_simulation(
+            contract,
+            dry_run=True,
+            resume_incomplete=True,
+            persona_filter="P001",
+        )
+    assert {name: (run_dir / name).read_bytes() for name in watched} == watched
+
+
+def test_legacy_synth_artifacts_do_not_sprout_profile_fields(
+    tmp_path, monkeypatch, write_synth_contract_json
+):
+    path, _ = write_synth_contract_json(
+        run_id="legacy_no_profile", total_conversations=1, turn_min=3, turn_max=3
+    )
+    contract = load_contract(path)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.generation.turns.LLMClient.complete",
+        lambda *args, **kwargs: LLMResult(
+            content="", raw={"mock": True}, error="llm_disabled"
+        ),
+    )
+
+    run_simulation(contract, dry_run=True)
+    run_dir = tmp_path / "outputs" / "runs" / "legacy_no_profile"
+    artifact_names = (
+        "run_plan.json",
+        "chat_history.jsonl",
+        "conversations.jsonl",
+        "turns.jsonl",
+        "scores.jsonl",
+    )
+    forbidden = {
+        "timestamp",
+        "recipe_id",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "behavior_mode",
+    }
+    for name in artifact_names:
+        text = (run_dir / name).read_text()
+        rows = (
+            json.loads(text)
+            if name.endswith(".json")
+            else [json.loads(line) for line in text.splitlines()]
+        )
+        assert all(not (forbidden & row.keys()) for row in rows)
+
+    with (run_dir / "chat_history.csv").open(newline="") as handle:
+        assert next(csv.reader(handle)) == [
+            "conversation_id",
+            "session_id",
+            "synthetic_day",
+            "persona_id",
+            "scenario_id",
+            "turn_id",
+            "user_message",
+            "bot_response",
+            "expected_retrieval_topics",
+            "planned_failure_modes",
+            "applied_failure_modes",
+            "groundedness_score",
+            "relevance_score",
+            "safety_score",
+            "clarification_score",
+            "failure_mode",
+            "latency_ms",
+            "status_code",
+            "error",
+            "synthetic_flag",
+            "retrieved_policy_ids",
+            "generation_metadata",
+        ]
+    run_state = json.loads((run_dir / "run_state.json").read_text())
+    assert run_state["version"] == 1
+    assert "contract_fingerprint" not in run_state
+    assert "plan_fingerprint" not in run_state
+
+
+def test_profiled_synth_persona_filter_applies_before_recipe_selection(
+    tmp_path, monkeypatch, build_synth_contract_payload
+):
+    personas = [
+        {
+            "persona_id": "P001",
+            "role": "employee",
+            "location": "Canada",
+            "seniority": "junior",
+            "communication_style": "polite",
+            "hr_familiarity": "low",
+            "privacy_sensitivity": "medium",
+        },
+        {
+            "persona_id": "P002",
+            "role": "manager",
+            "location": "Canada",
+            "seniority": "senior",
+            "communication_style": "direct",
+            "hr_familiarity": "high",
+            "privacy_sensitivity": "medium",
+        },
+    ]
+    payload = build_synth_contract_payload(
+        run_id="profile_persona_filter",
+        total_conversations=4,
+        turn_min=3,
+        turn_max=3,
+        persona_pool=personas,
+        mix=[
+            {
+                "recipe_id": "p1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+            {
+                "recipe_id": "p2",
+                "persona_id": "P002",
+                "scenario_id": "S001",
+                "weight": 99,
+            },
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"p1": 1, "p2": 1000},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"p1": 1, "p2": 1000},
+            },
+        ]
+    }
+    path = tmp_path / "profile_persona_filter.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+    monkeypatch.setattr(
+        "adaptive_synth_eval.generation.turns.LLMClient.complete",
+        lambda *args, **kwargs: LLMResult(content="", raw={}, error="llm_disabled"),
+    )
+
+    run_simulation(contract, dry_run=True, persona_filter="p001")
+
+    plan_path = (
+        tmp_path / "outputs" / "runs" / "profile_persona_filter" / "run_plan.json"
+    )
+    plan = json.loads(plan_path.read_text())
+    assert len(plan) == 4
+    assert {row["persona_id"] for row in plan} == {"P001"}
+    assert {row["recipe_id"] for row in plan} == {"p1"}
+    assert {row["profile_period_id"] for row in plan} == {
+        "morning",
+        "afternoon",
+    }
+
+
+def test_profiled_synth_persona_filter_rejects_window_without_eligible_recipe(
+    tmp_path, build_synth_contract_payload
+):
+    payload = build_synth_contract_payload(
+        total_conversations=4,
+        num_synthetic_days=1,
+        persona_pool=[
+            {
+                "persona_id": "P001",
+                "role": "employee",
+                "location": "Canada",
+                "seniority": "junior",
+                "communication_style": "polite",
+                "hr_familiarity": "low",
+                "privacy_sensitivity": "medium",
+            },
+            {
+                "persona_id": "P002",
+                "role": "manager",
+                "location": "Canada",
+                "seniority": "senior",
+                "communication_style": "direct",
+                "hr_familiarity": "high",
+                "privacy_sensitivity": "medium",
+            },
+        ],
+        mix=[
+            {
+                "recipe_id": "p1",
+                "persona_id": "P001",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+            {
+                "recipe_id": "p2",
+                "persona_id": "P002",
+                "scenario_id": "S001",
+                "weight": 1,
+            },
+        ],
+    )
+    payload["time_profile"] = {
+        "windows": [
+            {
+                "period_id": "morning",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"p1": 1},
+            },
+            {
+                "period_id": "afternoon",
+                "start_time": "13:00",
+                "end_time": "15:00",
+                "traffic_weight": 1,
+                "recipe_weights": {"p2": 1},
+            },
+        ]
+    }
+    path = tmp_path / "profile_missing_persona.json"
+    path.write_text(json.dumps(payload))
+    contract = load_contract(path)
+
+    with pytest.raises(ContractError, match="afternoon.*eligible recipe.*P001"):
+        run_simulation(contract, dry_run=True, persona_filter="P001")
+
+
+def test_profile_and_legacy_csv_schemas_cannot_be_mixed_on_resume(tmp_path):
+    from adaptive_synth_eval.artifacts.exporters import ArtifactWriter
+
+    legacy = ArtifactWriter(tmp_path, run_id="schema", profile_enabled=False)
+    legacy.append_chat_history_rows([], overwrite=True)
+    profiled = ArtifactWriter(tmp_path, run_id="schema", profile_enabled=True)
+
+    with pytest.raises(RuntimeError, match="CSV schema"):
+        profiled.append_chat_history_rows([], overwrite=False)
 
 
 def test_run_simulation_with_output_conversations(tmp_path, write_synth_contract_json):

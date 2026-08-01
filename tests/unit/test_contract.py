@@ -37,6 +37,31 @@ def test_load_contract_normalizes_defaults_and_warns_for_legacy_tools(
     assert any("tool_expectations" in warning for warning in contract.warnings)
 
 
+def test_normalized_synth_contract_preserves_auth_config_and_redacts_credentials(
+    tmp_path, build_synth_contract_payload
+):
+    payload = _base_contract(tmp_path, build_synth_contract_payload)
+    payload["target"]["auth"] = {
+        "type": "bearer",
+        "env_var": "CHATBOT_API_TOKEN",
+        "header_name": "Authorization",
+        "scheme": "Bearer",
+        "value": "literal-synth-secret",
+    }
+    path = tmp_path / "auth_contract.json"
+    path.write_text(json.dumps(payload))
+
+    normalized = contract_to_dict(load_contract(path))
+    serialized = json.dumps(normalized)
+
+    assert normalized["target"]["auth"]["type"] == "bearer"
+    assert normalized["target"]["auth"]["env_var"] == "CHATBOT_API_TOKEN"
+    assert normalized["target"]["auth"]["header_name"] == "Authorization"
+    assert normalized["target"]["auth"]["scheme"] == "Bearer"
+    assert normalized["target"]["auth"]["value"] == "<redacted>"
+    assert "literal-synth-secret" not in serialized
+
+
 def test_load_contract_parses_optional_scenario_reference_answer(
     tmp_path, build_synth_contract_payload
 ):

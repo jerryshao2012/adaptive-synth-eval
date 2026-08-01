@@ -4,8 +4,10 @@ to the adversarial planner.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from adaptive_synth_eval.adversarial_response_engine.skills.executor import (
 )
 from adaptive_synth_eval.config.contract import ContractError
 from adaptive_synth_eval.config.schemas import ConversationTurns
+from adaptive_synth_eval.config.schemas import TimeProfile, TimeProfileWindow
 from adaptive_synth_eval.unified_eval.config.contract import load_unified_contract
 from adaptive_synth_eval.unified_eval.config.schemas import AttackSkillsConfig, Schedule
 from adaptive_synth_eval.unified_eval.orchestrator.runner import run_unified
@@ -144,8 +147,233 @@ def test_dry_run_produces_mixed_turns_and_artifacts(tmp_path: Path):
 
     normalized = json.loads((run_dir / "contract.normalized.json").read_text())
     run_plan = json.loads((run_dir / "run_plan.json").read_text())
-    assert normalized["schema_version"] == 2
+    assert normalized["schema_version"] == 3
     assert all("schedule" in row for row in run_plan)
+
+
+def test_profiled_unified_run_propagates_plan_and_turn_provenance(
+    tmp_path: Path, monkeypatch
+):
+    from adaptive_synth_eval.clients.chatbot import ChatbotResponse
+
+    base = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
+    entries = [
+        replace(
+            base.eval_plan.entries[0],
+            recipe_id="r1",
+            max_turns=2,
+            schedule=Schedule(mode="phased", warmup_turns=1),
+        ),
+        replace(
+            base.eval_plan.entries[1],
+            recipe_id="r2",
+            max_turns=2,
+            schedule=Schedule(mode="phased", warmup_turns=1),
+        ),
+    ]
+    contract = replace(
+        base,
+        time_window=replace(base.time_window, num_synthetic_days=1),
+        time_profile=TimeProfile(
+            windows=(
+                TimeProfileWindow(
+                    period_id="morning",
+                    start_time="08:00",
+                    end_time="10:00",
+                    traffic_weight=3,
+                    conversation_mode="mixed",
+                    behavior_mode="stressed",
+                    recipe_weights={"r1": 1},
+                ),
+                TimeProfileWindow(
+                    period_id="afternoon",
+                    start_time="13:00",
+                    end_time="15:00",
+                    traffic_weight=1,
+                    conversation_mode="mixed",
+                    behavior_mode="toxic",
+                    recipe_weights={"r2": 1},
+                ),
+            )
+        ),
+        eval_plan=replace(
+            base.eval_plan,
+            total_conversations=4,
+            conversation_turns=ConversationTurns(min=2, max=2),
+            entries=entries,
+        ),
+    )
+    target_metadata = []
+
+    class Target:
+        async def send_async(self, **kwargs):
+            target_metadata.append(kwargs["metadata"])
+            return ChatbotResponse.from_payload(
+                {"response": "Safe mock response."},
+                latency_ms=1.0,
+                status_code=200,
+            )
+
+        async def close_async(self):
+            return None
+
+    monkeypatch.setattr(
+        "adaptive_synth_eval.unified_eval.orchestrator.runner.create_chatbot_client",
+        lambda *args, **kwargs: Target(),
+    )
+
+    summary = run_unified(
+        contract,
+        dry_run=True,
+        run_id_override="profiled_unified",
+        realtime_chat=True,
+        persona_filter="DEMO_P1",
+    )
+    run_dir = tmp_path / "runs" / "profiled_unified"
+    plan = json.loads((run_dir / "run_plan.json").read_text())
+    chat = [json.loads(line) for line in (run_dir / "chat_history.jsonl").read_text().splitlines()]
+    conversations = [json.loads(line) for line in (run_dir / "conversations.jsonl").read_text().splitlines()]
+    scores = [json.loads(line) for line in (run_dir / "scores.jsonl").read_text().splitlines()]
+
+    provenance = {
+        "sequence",
+        "recipe_id",
+        "synthetic_timestamp",
+        "synthetic_slot",
+        "profile_period_id",
+        "profile_period_instance_id",
+        "profile_period_start",
+        "profile_period_end",
+        "conversation_mode",
+        "behavior_mode",
+        "traffic_weight",
+        "recipe_weights",
+    }
+    assert all(provenance | {"sequence", "synthetic_day"} <= row.keys() for row in plan)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in chat)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in conversations)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in scores)
+    assert all(provenance | {"timestamp"} <= row.keys() for row in target_metadata)
+    assert {row["synthetic_day"] for row in conversations} == {
+        contract.time_window.start_day.isoformat()
+    }
+    assert {row["generation_metadata"]["strategy"]["generation_metadata"]["behavior_mode"] for row in chat if row["generation_metadata"]["turn_type"] == "synth"} == {"stressed", "toxic"}
+    assert summary["profile_counts"]["by_period"] == {"afternoon": 1, "morning": 3}
+
+
+@pytest.mark.asyncio
+async def test_profiled_unified_memory_commit_failure_does_not_strand_artifact_order(
+    tmp_path: Path, monkeypatch, caplog
+):
+    from adaptive_synth_eval.unified_eval.orchestrator import runner
+    from adaptive_synth_eval.unified_eval.orchestrator.persona_memory_actor import (
+        PersonaMemoryActor,
+    )
+
+    base = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
+    entry = replace(
+        base.eval_plan.entries[0], recipe_id="r1", max_turns=1, weight=1.0
+    )
+    contract = replace(
+        base,
+        run=replace(base.run, max_concurrency=2),
+        time_window=replace(base.time_window, num_synthetic_days=1),
+        eval_plan=replace(
+            base.eval_plan,
+            total_conversations=4,
+            conversation_turns=ConversationTurns(min=1, max=1),
+            entries=[entry],
+        ),
+        time_profile=TimeProfile(
+            windows=(
+                TimeProfileWindow(
+                    period_id="morning",
+                    start_time="08:00",
+                    end_time="10:00",
+                    traffic_weight=3,
+                    recipe_weights={entry.recipe_id: 1},
+                ),
+                TimeProfileWindow(
+                    period_id="afternoon",
+                    start_time="13:00",
+                    end_time="15:00",
+                    traffic_weight=1,
+                    recipe_weights={entry.recipe_id: 1},
+                ),
+            )
+        ),
+    )
+    original_commit = PersonaMemoryActor.commit
+
+    async def fail_first_commit(self, conversation_id, sequence, delta):
+        if sequence == 1:
+            raise OSError("memory disk full")
+        await original_commit(self, conversation_id, sequence, delta)
+
+    monkeypatch.setattr(PersonaMemoryActor, "commit", fail_first_commit)
+
+    summary = await asyncio.wait_for(
+        runner.run_unified_async(
+            contract,
+            dry_run=True,
+            run_id_override="memory_commit_failure",
+        ),
+        timeout=3,
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / "runs" / "memory_commit_failure" / "conversations.jsonl"
+        )
+        .read_text()
+        .splitlines()
+        if line
+    ]
+    assert [row["conversation_id"] for row in rows] == [
+        "conv_000001",
+        "conv_000002",
+        "conv_000003",
+        "conv_000004",
+    ]
+    assert rows[0]["persona_memory_error"] == "OSError: memory disk full"
+    assert summary["errors"] == 1
+    assert "Persona memory commit failed" in caplog.text
+
+
+def test_profile_failed_conversation_row_keeps_timestamp_and_provenance():
+    from adaptive_synth_eval.unified_eval.orchestrator.runner import (
+        _failed_conversation_result,
+    )
+
+    planned = {
+        "sequence": 1,
+        "conversation_id": "conv_000001",
+        "persona_id": "P1",
+        "synth_scenario_id": "S1",
+        "adversarial_scenario_id": "A1",
+        "synthetic_day": date(2026, 6, 1),
+        "synthetic_timestamp": datetime(2026, 6, 1, 8, 30),
+        "synthetic_slot": 1,
+        "profile_period_id": "morning",
+        "profile_period_instance_id": "2026-06-01/morning",
+        "profile_period_start": datetime(2026, 6, 1, 8),
+        "profile_period_end": datetime(2026, 6, 1, 10),
+        "recipe_id": "r1",
+        "conversation_mode": "mixed",
+        "behavior_mode": "stressed",
+        "traffic_weight": 3,
+        "recipe_weights": {"r1": 1},
+    }
+
+    result = _failed_conversation_result(
+        planned=planned, error="RuntimeError: boom", elapsed_seconds=0.1
+    )
+
+    assert result.conversation_row["timestamp"] == "2026-06-01T08:30:00"
+    assert result.conversation_row["profile_period_id"] == "morning"
+    assert result.turn_rows[0]["timestamp"] == "2026-06-01T08:30:00"
+    assert result.turn_rows[0]["recipe_id"] == "r1"
 
 
 def test_skill_enabled_dry_run_records_skill_provenance_and_catalog(tmp_path: Path):
@@ -521,6 +749,73 @@ def test_v2_resume_restores_usage_memory_and_skips_completed_conversations(
     )
     assert after_rows == before_rows
     assert len(after_memory["entries"]) == len(before_memory["entries"])
+
+
+def test_v2_resume_rejects_changed_reserve_tokens(tmp_path: Path):
+    contract = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
+    run_unified(contract, dry_run=True, run_id_override="resume_reserve_tokens")
+    changed = replace(
+        contract,
+        run=replace(
+            contract.run,
+            reserve_tokens=contract.run.reserve_tokens + 1,
+        ),
+    )
+
+    with pytest.raises(ContractError, match="effective contract differs"):
+        run_unified(
+            changed,
+            dry_run=True,
+            run_id_override="resume_reserve_tokens",
+            resume_incomplete=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("type", "api_key"),
+        ("env_var", "OTHER_CHATBOT_TOKEN"),
+        ("header_name", "x-api-key"),
+    ],
+)
+def test_v2_resume_rejects_changed_safe_auth_config(
+    tmp_path: Path, field: str, changed_value: str
+):
+    base = _with_output_dir(load_unified_contract(EXAMPLE), tmp_path)
+    auth = {
+        "type": "bearer",
+        "env_var": "CHATBOT_API_TOKEN",
+        "header_name": "Authorization",
+        "scheme": "Bearer",
+        "value": "literal-first",
+    }
+    contract = replace(base, target=replace(base.target, auth=auth))
+    run_id = f"resume_auth_{field}"
+    run_unified(contract, dry_run=True, run_id_override=run_id)
+    normalized = json.loads(
+        (tmp_path / "runs" / run_id / "contract.normalized.json").read_text()
+    )
+    assert normalized["target"]["auth"]["type"] == "bearer"
+    assert normalized["target"]["auth"]["env_var"] == "CHATBOT_API_TOKEN"
+    assert normalized["target"]["auth"]["header_name"] == "Authorization"
+    assert normalized["target"]["auth"]["value"] == "<redacted>"
+    assert "literal-first" not in json.dumps(normalized)
+    changed = replace(
+        contract,
+        target=replace(
+            contract.target,
+            auth={**auth, field: changed_value},
+        ),
+    )
+
+    with pytest.raises(ContractError, match="effective contract differs"):
+        run_unified(
+            changed,
+            dry_run=True,
+            run_id_override=run_id,
+            resume_incomplete=True,
+        )
 
 
 def test_enabled_trajectory_with_empty_target_trace_skips_summarizer_call(

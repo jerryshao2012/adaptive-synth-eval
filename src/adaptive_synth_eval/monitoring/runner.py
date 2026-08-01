@@ -48,6 +48,21 @@ _MONITORING_SCORES_FILE = "monitoring_scores.jsonl"
 _CHAT_HISTORY_FILE = "chat_history.jsonl"
 _PROGRESS_MARKDOWN_FILE = "eval_progress.md"
 
+_CHAT_PROVENANCE_FIELDS = (
+    "recipe_id",
+    "profile_period_id",
+    "profile_period_instance_id",
+    "profile_period_start",
+    "profile_period_end",
+    "conversation_mode",
+    "behavior_mode",
+    "synthetic_slot",
+    "synthetic_day",
+    "scenario_id",
+    "adversarial_scenario_id",
+    "persona_id",
+)
+
 _JUDGE_PROTOCOL_VERSION = evaluator_core.JUDGE_PROTOCOL_VERSION
 _JUDGE_SETTINGS = evaluator_core.JUDGE_SETTINGS
 
@@ -57,6 +72,22 @@ def _fingerprint_payload(payload: Any) -> str:
         payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _refresh_chat_provenance(
+    monitoring_row: dict[str, Any],
+    chat_row: dict[str, Any],
+    source_line_index: int,
+) -> dict[str, Any]:
+    """Copy current chat provenance without affecting monitoring window identity."""
+    for field in _CHAT_PROVENANCE_FIELDS:
+        value = chat_row.get(field)
+        if value is None:
+            monitoring_row.pop(field, None)
+        else:
+            monitoring_row[field] = value
+    monitoring_row["timestamp"] = _monitoring_timestamp(chat_row, source_line_index)
+    return monitoring_row
 
 
 def _judge_identity(llm: LLMClient, *, dry_run: bool) -> dict[str, str]:
@@ -298,6 +329,18 @@ def _get_row_timestamp(row: dict[str, Any], index: int) -> datetime:
                 pass
     # Fallback: Simulated timestamp starting at 2026-01-01T00:00:00 (1 second per row)
     return datetime(2026, 1, 1) + timedelta(seconds=index)
+
+
+def _monitoring_timestamp(row: dict[str, Any], index: int) -> str:
+    source_timestamp = row.get("timestamp")
+    if isinstance(source_timestamp, str) and source_timestamp:
+        try:
+            datetime.fromisoformat(source_timestamp)
+        except ValueError:
+            pass
+        else:
+            return source_timestamp
+    return _get_row_timestamp(row, index).isoformat()
 
 
 def _read_time_window_rows(
@@ -757,6 +800,7 @@ def run_monitoring(
             turn_key = _turn_key(chat_row)
             provenance = selection_provenance.get(line_idx, [])
             if turn_key in existing_scores:
+                _refresh_chat_provenance(existing_scores[turn_key], chat_row, line_idx)
                 existing_scores[turn_key]["selected_for_monitoring"] = True
                 existing_scores[turn_key]["selection_provenance"] = provenance
                 existing_scores[turn_key]["source_line_index"] = line_idx
@@ -1054,7 +1098,7 @@ def _evaluate_chat_row(
     # Use the chat history row's original timestamp for the primary timestamp
     # so charts reflect the actual conversation timeline, not the evaluation time.
     chat_timestamp = _get_row_timestamp(chat_row, source_line_index)
-    chat_timestamp_iso = chat_timestamp.isoformat(timespec="seconds")
+    chat_timestamp_iso = chat_timestamp.isoformat()
 
     evaluator = MetricEvaluator(
         metrics_config=metrics_config,
@@ -1092,11 +1136,10 @@ def _evaluate_chat_row(
 
     system_reliability = _observed_reliability(chat_row)
 
-    return {
+    evaluation = {
         "timestamp": chat_timestamp_iso,
         "conversation_id": str(chat_row.get("conversation_id") or ""),
         "turn_id": str(chat_row.get("turn_id") or ""),
-        "persona_id": str(chat_row.get("persona_id") or ""),
         "variant": "raw",
         "user_text": user_text,
         "response_text": response_text,
@@ -1138,6 +1181,7 @@ def _evaluate_chat_row(
         "sample_window_id": sample_window_id,
         "source_line_index": source_line_index,
     }
+    return _refresh_chat_provenance(evaluation, chat_row, source_line_index)
 
 
 def _clean_reference(value: Any) -> str | None:

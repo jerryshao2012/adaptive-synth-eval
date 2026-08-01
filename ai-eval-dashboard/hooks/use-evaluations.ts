@@ -28,13 +28,13 @@ const API_BASE = process.env.NEXT_PUBLIC_EVAL_API_URL || "/api/evaluations";
 async function fetchEvaluations(
   period: TimePeriodPreset,
   runId?: string
-): Promise<EvaluationRecord[]> {
-  const { from, to } = getTimePeriod(period);
-  const params = new URLSearchParams({
-    from: formatIntervalParam(from),
-    to: formatIntervalParam(to),
-    limit: "2000",
-  });
+): Promise<EvaluationsResponse> {
+  const interval = getTimePeriod(period);
+  const params = new URLSearchParams({ limit: runId ? "all" : "2000" });
+  if (interval) {
+    params.set("from", formatIntervalParam(interval.from));
+    params.set("to", formatIntervalParam(interval.to));
+  }
   if (runId) {
     params.set("runId", runId);
   }
@@ -44,7 +44,13 @@ async function fetchEvaluations(
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
   const data: EvaluationsResponse = await res.json();
-  return data.evaluations;
+  return {
+    ...data,
+    evaluations: Array.isArray(data.evaluations) ? data.evaluations : [],
+    profilePeriods: Array.isArray(data.profilePeriods)
+      ? data.profilePeriods
+      : [],
+  };
 }
 
 export function useEvaluations(
@@ -52,12 +58,17 @@ export function useEvaluations(
   runId?: string,
   enabled = true
 ) {
-  return useQuery({
+  const query = useQuery({
     queryKey: ["evaluations", period, runId ?? "all"],
     queryFn: () => fetchEvaluations(period, runId),
-    select: (data) => data,
     enabled,
   });
+
+  return {
+    ...query,
+    data: query.data?.evaluations,
+    profilePeriods: query.data?.profilePeriods ?? [],
+  };
 }
 
 // Fetch previous period for trend comparison
@@ -66,18 +77,21 @@ export function usePreviousPeriodEvaluations(
   runId?: string,
   enabled = true
 ) {
-  const { from, to } = getTimePeriod(period);
-  const durationMs = to.getTime() - from.getTime();
-  const prevTo = new Date(from.getTime() - 1); // 1ms before current period start
+  const interval = getTimePeriod(period);
+  const from = interval?.from;
+  const to = interval?.to;
+  const durationMs = from && to ? to.getTime() - from.getTime() : 0;
+  const prevTo = new Date((from?.getTime() ?? 0) - 1); // 1ms before current period start
   const prevFrom = new Date(prevTo.getTime() - durationMs);
 
   return useQuery({
     queryKey: ["evaluations", "previous", period, runId ?? "all"],
     queryFn: async () => {
+      if (!interval) return [] as EvaluationRecord[];
       const params = new URLSearchParams({
         from: formatIntervalParam(prevFrom),
         to: formatIntervalParam(prevTo),
-        limit: "2000",
+        limit: runId ? "all" : "2000",
       });
       if (runId) {
         params.set("runId", runId);
@@ -87,7 +101,7 @@ export function usePreviousPeriodEvaluations(
       const data: EvaluationsResponse = await res.json();
       return data.evaluations;
     },
-    enabled,
+    enabled: enabled && interval !== null,
   });
 }
 

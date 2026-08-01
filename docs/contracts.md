@@ -23,7 +23,7 @@ Synth contracts generate persona-driven conversations without adversarial turns.
 | `scenario_catalog` | Benign tasks and optional failure injection |
 | `traffic_orchestration` | Conversation count, turn range, weighted mix, bursts, and concurrency |
 
-`output` is optional and defaults to `outputs`; `llm` is optional and configures the user simulator. If no simulator provider is configured or detected, synth mode uses deterministic templates.
+`output` is optional and defaults to `outputs`; `llm` is optional and configures the user simulator; `time_profile` is optional and configures recurring within-run windows. If no simulator provider is configured or detected, synth mode uses deterministic templates.
 
 ```yaml
 simulation_suite:
@@ -78,10 +78,10 @@ Unified contracts interleave synth and adversarial turns within one conversation
 | `scenario_catalog` | Synth scenarios; may also contain inline adversarial scenarios |
 | `eval_plan` | Turn range, weighted conversation recipes, schedules, and attack-memory mode |
 
-Optional blocks are `schema_version`, `run`, `components`, `adversarial_scenario_catalog`, `attack_skills`, `scoring`, `trajectory`, and `output`. Unified source contracts may omit `schema_version`; the normalized artifact is always canonical schema version 2. Versions 1 and 2 are accepted, and future versions are rejected.
+Optional blocks are `schema_version`, `run`, `components`, `adversarial_scenario_catalog`, `attack_skills`, `scoring`, `trajectory`, `time_profile`, and `output`. Unified source contracts may omit `schema_version`; the normalized artifact is always canonical schema version 3. Source versions 1, 2, and 3 are accepted, and future versions are rejected.
 
 ```yaml
-schema_version: 2
+schema_version: 3
 suite:
   suite_id: example_unified
   target_application: example_bot
@@ -174,7 +174,8 @@ interchangeable with every synth/legacy simulator alias: for example, unified us
 > Ollama-backed adversarial evaluation, and its adversarial scores must not be interpreted
 > as such.
 
-Canonical schema-v2 provider settings are nested. For Azure OpenAI:
+Canonical schema-v3 provider settings are nested. Schema-v2 contracts use the same
+nested provider layout. For Azure OpenAI:
 
 ```yaml
 llm:
@@ -269,6 +270,88 @@ target:
     api_key_env: ANTHROPIC_API_KEY
 ```
 
+## Time profiles
+
+Both synth and unified contracts may add a top-level `time_profile` to repeat
+named, same-day windows across every synthetic day. The exact schema is:
+
+```yaml
+time_profile:
+  windows:
+    - period_id: regular_hours       # required, unique, non-empty string
+      start_time: "09:00"           # required same-day 24-hour HH:MM
+      end_time: "12:00"             # required; later than start_time
+      traffic_weight: 1.0           # required finite number greater than zero
+      conversation_mode: support    # optional non-empty label; default: default
+      behavior_mode: default        # optional; default: default
+      recipe_weights:               # required non-empty recipe_id -> weight map
+        regular_help: 1.0
+    - period_id: afternoon_rush
+      start_time: "14:00"
+      end_time: "17:00"
+      traffic_weight: 2.0
+      conversation_mode: escalation
+      behavior_mode: stressed
+      recipe_weights:
+        rush_escalation: 1.0
+```
+
+`behavior_mode` accepts `default`, `aggressive`, `polite`, `concise`,
+`confused`, `anxious`, `stressed`, or `toxic`. It changes the simulated user's
+message style for conversations assigned to that window; an explicit live
+realtime-chat override takes precedence. `conversation_mode` is a domain label
+carried into the plan and artifacts for grouping and comparison. It does not
+replace unified turn scheduling or independently switch synth/adversarial turn
+types.
+
+Every selectable recipe must have a non-empty, unique `recipe_id`:
+
+- In synth mode, put `recipe_id` on each `traffic_orchestration.mix[]` item. A
+  recipe selects that item's persona and scenario.
+- In unified mode, put `recipe_id` on each `eval_plan.entries[]` item. A recipe
+  selects that entry's persona, synth scenario, adversarial scenario, and
+  per-conversation schedule.
+
+Each `recipe_weights` key must name one of those recipes. Weights must be finite
+and non-negative, and each window must contain at least one positive recipe
+weight. Zero may be used to leave a known recipe inactive in a window.
+
+### Recurrence, allocation, and limits
+
+Windows are listed in strict clock order, may have gaps, and must not overlap.
+Cross-midnight windows are not supported. `time_window.num_synthetic_days` must
+be positive, and each configured window recurs once on each synthetic day. A
+period instance is identified as `<YYYY-MM-DD>/<period_id>`.
+
+Profiled runs must be finite. Synth requires
+`traffic_orchestration.total_conversations`; unified requires
+`eval_plan.total_conversations` and rejects `run.until_budget_exhausted: true`.
+The total must be at least:
+
+```text
+num_synthetic_days * number_of_windows
+```
+
+Allocation first reserves one conversation for every daily window instance.
+The remaining conversations are apportioned by `traffic_weight` using largest
+remainders with contract order as the deterministic tie-breaker. Within an
+instance, positive `recipe_weights` select recipes by seeded weighted choice.
+Conversation timestamps are distributed deterministically inside the window,
+and execution preserves daily period ordering while still allowing configured
+concurrency within a period.
+
+Validation also rejects fewer than two windows, duplicate or empty period IDs,
+malformed `HH:MM` values, `start_time >= end_time`, unordered/overlapping
+windows, non-positive traffic weights, empty recipe maps, unknown recipe IDs,
+and missing/duplicate recipe IDs on selectable recipes.
+
+Omitting `time_profile` preserves legacy behavior: the existing whole-run mix,
+synthetic-day selection, concurrency behavior, and legacy artifact/CSV shape
+remain unchanged. A time profile schedules conversations inside one run. It is
+different from a unified entry's `schedule`, which selects synth versus
+adversarial turns inside one conversation, and from `ase loop`, which schedules
+and safeguards recurring whole evaluation runs.
+
 ## Unified schedules
 
 Each `eval_plan.entries[]` selects a persona, synth scenario, adversarial scenario, weight, optional `max_turns`, and schedule:
@@ -315,6 +398,14 @@ The target response may place its structured activity trace at `trace_field`. Em
 The current examples are under `contracts/examples/`:
 
 - `chatbot_test_contract.yaml` and `ten_k_conversations.yaml`: synth contracts.
+- `time_profile_synth_demo.yaml` and `time_profile_unified_demo.yaml`: minimal
+  two-window profile examples; the unified example uses canonical schema v3 and
+  an adversarial-heavy toxicity phase.
+- `unified_agent_skills_time_profile_demo.yaml`: a schema-v3, one-day Agent
+  Skills profile with regular morning, busy/stressed midday, and
+  adversarial-heavy toxic afternoon phases. Follow the
+  [one-day verification guide](time_profile_verification.md) for an end-to-end
+  dry-run, artifact, monitoring, dashboard, and resume check.
 - `unified_evaluation_demo.yaml` and `unified_agent_skills_demo.yaml`: controlled baseline/Attack Skills pair with equivalent inputs and explicit `enabled: false`/`enabled: true` policies.
 - `unified_evaluation_demo_local.yaml`, `tfsa_assistant.yaml`, `tfsa_one_week_traffic.yaml`, and `tfsa_testing.yaml`: general unified examples.
 - `tfsa_aws_unified_evaluation_no_reasoning.yaml`, `tfsa_aws_unified_evaluation_reasoning.yaml`, and `wealth_advisory.yaml`: unified AgentCore/model examples.
@@ -328,4 +419,27 @@ uv run ase validate-contract contracts/examples/unified_evaluation_demo.yaml
 uv run ase validate-contract contracts/examples/unified_agent_skills_demo.yaml
 uv run ase run --contract contracts/examples/unified_evaluation_demo.yaml --dry-run
 uv run ase run --contract contracts/examples/unified_agent_skills_demo.yaml --dry-run
+```
+
+Validate and dry-run the time-profile examples with:
+
+```bash
+uv run ase validate-contract contracts/examples/time_profile_synth_demo.yaml
+uv run ase validate-contract contracts/examples/time_profile_unified_demo.yaml
+uv run ase validate-contract contracts/examples/unified_agent_skills_time_profile_demo.yaml
+uv run ase run --contract contracts/examples/time_profile_unified_demo.yaml --dry-run
+uv run ase run --contract contracts/examples/unified_agent_skills_time_profile_demo.yaml --dry-run
+```
+
+Unified dry-run forces its harness providers to `mock`. Synth dry-run disables
+the target but intentionally retains provider auto-detection for the simulated
+user. There is no explicit synth `mock`/disabled provider in the current
+contract schema. To force the synth example's offline template fallback even
+when provider variables exist in the shell or `.env`, run:
+
+```bash
+env AZURE_OPENAI_ENDPOINT= AZURE_OPENAI_DEPLOYMENT= ANTHROPIC_API_KEY= \
+  OPENAI_API_KEY= OLLAMA_BASE_URL= OLLAMA_API_BASE= \
+  AWS_BEARER_TOKEN_BEDROCK= \
+  uv run ase run --contract contracts/examples/time_profile_synth_demo.yaml --dry-run
 ```

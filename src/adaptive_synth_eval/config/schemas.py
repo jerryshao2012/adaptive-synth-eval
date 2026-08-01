@@ -4,7 +4,8 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,30 @@ class TimeWindow:
     start_day: date
     num_synthetic_days: int
     compressed_runtime_minutes: int
+
+
+@dataclass(frozen=True)
+class TimeProfileWindow:
+    period_id: str
+    start_time: str
+    end_time: str
+    traffic_weight: float
+    conversation_mode: str = "default"
+    behavior_mode: str = "default"
+    recipe_weights: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "recipe_weights", MappingProxyType(dict(self.recipe_weights))
+        )
+
+
+@dataclass(frozen=True)
+class TimeProfile:
+    windows: tuple[TimeProfileWindow, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "windows", tuple(self.windows))
 
 
 @dataclass(frozen=True)
@@ -144,6 +169,7 @@ class MixItem:
     persona_id: str
     scenario_id: str
     weight: float
+    recipe_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +225,7 @@ class SimulationContract:
     output: OutputConfig
     llm: SimulatedLLMConfig = field(default_factory=SimulatedLLMConfig)
     warnings: list[str] = field(default_factory=list)
+    time_profile: TimeProfile | None = None
 
     @property
     def synthetic_flag(self) -> bool:

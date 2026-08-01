@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from typing import Mapping
 
-from adaptive_synth_eval.config.schemas import TimeWindow, TrafficOrchestration
+from adaptive_synth_eval.config.schemas import (
+    SimulationContract,
+    TimeProfile,
+    TimeWindow,
+    TrafficOrchestration,
+)
+from adaptive_synth_eval.generation.time_profile import build_time_profile_plan
 
 
 @dataclass(frozen=True)
@@ -17,14 +24,38 @@ class PlannedConversation:
     turn_count: int
 
 
-def build_run_plan(traffic: TrafficOrchestration, window: TimeWindow) -> list[PlannedConversation]:
+@dataclass(frozen=True)
+class ProfiledPlannedConversation(PlannedConversation):
+    sequence: int
+    recipe_id: str
+    synthetic_timestamp: datetime
+    synthetic_slot: int
+    profile_period_id: str
+    profile_period_instance_id: str
+    profile_period_start: datetime
+    profile_period_end: datetime
+    conversation_mode: str
+    behavior_mode: str
+    traffic_weight: float
+    recipe_weights: Mapping[str, float]
+
+
+def build_run_plan(
+    traffic: TrafficOrchestration, window: TimeWindow
+) -> list[PlannedConversation]:
     rng = random.Random(traffic.random_seed)
     day_weights = _day_weights(traffic, window)
     plan = []
     for index in range(traffic.total_conversations):
-        mix_item = _weighted_choice(traffic.mix, [max(item.weight, 0.0) for item in traffic.mix], rng)
-        day_offset = _weighted_choice(list(range(window.num_synthetic_days)), day_weights, rng)
-        turn_count = rng.randint(traffic.conversation_turns.min, traffic.conversation_turns.max)
+        mix_item = _weighted_choice(
+            traffic.mix, [max(item.weight, 0.0) for item in traffic.mix], rng
+        )
+        day_offset = _weighted_choice(
+            list(range(window.num_synthetic_days)), day_weights, rng
+        )
+        turn_count = rng.randint(
+            traffic.conversation_turns.min, traffic.conversation_turns.max
+        )
         conversation_id = f"conv_{index + 1:06d}"
         plan.append(
             PlannedConversation(
@@ -37,6 +68,75 @@ def build_run_plan(traffic: TrafficOrchestration, window: TimeWindow) -> list[Pl
             )
         )
     return plan
+
+
+def build_profiled_run_plan(
+    contract: SimulationContract,
+    *,
+    persona_id: str | None = None,
+) -> list[ProfiledPlannedConversation]:
+    """Adapt the shared time-profile allocation into synth runner rows."""
+
+    if contract.time_profile is None:
+        raise ValueError("build_profiled_run_plan requires contract.time_profile")
+    recipes = [
+        recipe
+        for recipe in contract.traffic.mix
+        if persona_id is None or recipe.persona_id == persona_id
+    ]
+    eligible_recipe_ids = {recipe.recipe_id for recipe in recipes}
+    windows = []
+    for window in contract.time_profile.windows:
+        recipe_weights = {
+            recipe_id: weight
+            for recipe_id, weight in window.recipe_weights.items()
+            if recipe_id in eligible_recipe_ids and weight > 0
+        }
+        if not recipe_weights:
+            qualifier = f" for persona {persona_id}" if persona_id else ""
+            raise ValueError(
+                f"time_profile period {window.period_id!r} has no eligible recipe"
+                f"{qualifier}"
+            )
+        windows.append(replace(window, recipe_weights=recipe_weights))
+    profile = TimeProfile(windows=tuple(windows))
+    profiled = build_time_profile_plan(
+        profile=profile,
+        time_window=contract.time_window,
+        total_conversations=contract.traffic.total_conversations,
+        recipes=recipes,
+        random_seed=contract.traffic.random_seed,
+    )
+    seed = 0 if contract.traffic.random_seed is None else contract.traffic.random_seed
+    turn_rng = random.Random(seed)
+    rows: list[ProfiledPlannedConversation] = []
+    for sequence, item in enumerate(profiled, start=1):
+        rows.append(
+            ProfiledPlannedConversation(
+                conversation_id=f"conv_{sequence:06d}",
+                session_id=f"sess_{sequence:06d}",
+                persona_id=item.recipe.persona_id,
+                scenario_id=item.recipe.scenario_id,
+                synthetic_day=item.synthetic_timestamp.date(),
+                turn_count=turn_rng.randint(
+                    contract.traffic.conversation_turns.min,
+                    contract.traffic.conversation_turns.max,
+                ),
+                sequence=sequence,
+                recipe_id=item.recipe_id,
+                synthetic_timestamp=item.synthetic_timestamp,
+                synthetic_slot=item.synthetic_slot,
+                profile_period_id=item.profile_period_id,
+                profile_period_instance_id=item.instance_id,
+                profile_period_start=item.start,
+                profile_period_end=item.end,
+                conversation_mode=item.conversation_mode,
+                behavior_mode=item.behavior_mode,
+                traffic_weight=item.traffic_weight,
+                recipe_weights=item.recipe_weights,
+            )
+        )
+    return rows
 
 
 def _day_weights(traffic: TrafficOrchestration, window: TimeWindow) -> list[float]:
