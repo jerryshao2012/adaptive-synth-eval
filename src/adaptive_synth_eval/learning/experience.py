@@ -4,12 +4,12 @@ import hashlib
 import json
 import os
 import re
-import fcntl
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from adaptive_synth_eval.file_lock import file_lock
 
 def _secret_safe_payload(value: Any, *, redact: bool = False) -> Any:
     if redact:
@@ -96,12 +96,8 @@ class ExperienceBuilder:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        with self.lock_path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            yield
 
     def read_records(self) -> list[dict[str, Any]]:
         if not self.ledger_path.exists():

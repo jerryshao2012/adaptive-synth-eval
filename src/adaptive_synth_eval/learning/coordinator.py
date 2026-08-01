@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 from contextlib import contextmanager
 from dataclasses import replace
@@ -13,6 +12,7 @@ from adaptive_synth_eval.config.env import (
     load_project_env,
     resolve_env_placeholders,
 )
+from adaptive_synth_eval.file_lock import file_lock
 from adaptive_synth_eval.adversarial_response_engine.engine.taxonomy import (
     ANGLE_NAMES,
 )
@@ -344,12 +344,8 @@ class LearningCoordinator:
     @staticmethod
     @contextmanager
     def _coordinator_lock(path: Path) -> Iterator[None]:
-        with path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with file_lock(path):
+            yield
 
     def show(self, candidate_id: str) -> dict[str, Any]:
         candidate = self.registry.get_candidate(candidate_id)

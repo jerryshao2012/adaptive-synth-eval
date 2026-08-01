@@ -2,24 +2,15 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
 import tempfile
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-_LOCKS_GUARD = threading.Lock()
-_PATH_LOCKS: dict[str, threading.RLock] = {}
-
-
-def _path_lock(path: Path) -> threading.RLock:
-    key = str(path.resolve())
-    with _LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(key, threading.RLock())
+from adaptive_synth_eval.file_lock import file_lock
 
 
 def _payload(record: Any) -> dict[str, Any]:
@@ -78,31 +69,26 @@ class _AppendJournal:
     def append(self, record: dict[str, Any]) -> bool:
         record_id = str(record[self.id_field])
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _path_lock(self.lock_path):
-            with self.lock_path.open("a+b") as lock_file:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                try:
-                    self._refresh_seen()
-                    if record_id in self._seen:
-                        return False
-                    fd = os.open(
-                        self.path,
-                        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-                        0o600,
-                    )
-                    try:
-                        line = _json_line(record)
-                        written = 0
-                        while written < len(line):
-                            written += os.write(fd, line[written:])
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
-                    self._seen.add(record_id)
-                    self._offset = self.path.stat().st_size
-                    return True
-                finally:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            self._refresh_seen()
+            if record_id in self._seen:
+                return False
+            fd = os.open(
+                self.path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o600,
+            )
+            try:
+                line = _json_line(record)
+                written = 0
+                while written < len(line):
+                    written += os.write(fd, line[written:])
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            self._seen.add(record_id)
+            self._offset = self.path.stat().st_size
+            return True
 
     def _refresh_seen(self) -> None:
         if not self.path.exists():
@@ -164,23 +150,18 @@ class JSONLCaptureSink:
         if not self.skeleton_path.exists():
             return None
         match: str | None = None
-        with _path_lock(self._journals["skeleton"].lock_path):
-            with self._journals["skeleton"].lock_path.open("a+b") as lock_file:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
-                try:
-                    with self.skeleton_path.open("r", encoding="utf-8") as source:
-                        for line in source:
-                            if not line.strip():
-                                continue
-                            try:
-                                row = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            if str(row.get("skeleton_id")) == skeleton_id:
-                                locator = row.get("buffer_locator")
-                                match = str(locator) if locator else None
-                finally:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(self._journals["skeleton"].lock_path, shared=True):
+            with self.skeleton_path.open("r", encoding="utf-8") as source:
+                for line in source:
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(row.get("skeleton_id")) == skeleton_id:
+                        locator = row.get("buffer_locator")
+                        match = str(locator) if locator else None
         return match
 
     def close(self) -> None:
@@ -239,21 +220,7 @@ class JSONLLocalCaptureBuffer:
             self._rewrite_unlocked([])
 
     def _exclusive_lock(self):
-        buffer = self
-
-        class _Lock:
-            def __enter__(self) -> None:
-                self.thread_lock = _path_lock(buffer.lock_path)
-                self.thread_lock.acquire()
-                self.handle = buffer.lock_path.open("a+b")
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
-
-            def __exit__(self, exc_type, exc, traceback) -> None:
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-                self.handle.close()
-                self.thread_lock.release()
-
-        return _Lock()
+        return file_lock(self.lock_path)
 
     def _read_rows_unlocked(self) -> list[dict[str, Any]]:
         if not self.path.exists():

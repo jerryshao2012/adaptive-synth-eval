@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -8,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from adaptive_synth_eval.file_lock import file_lock
 from adaptive_synth_eval.learning.models import LearningBundle, utc_now
 
 
@@ -33,12 +33,8 @@ class LearningRegistry:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         self.root.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            yield
 
     def create_candidate(self, bundle: LearningBundle) -> dict[str, Any]:
         if bundle.profile_id != self.profile_id:
