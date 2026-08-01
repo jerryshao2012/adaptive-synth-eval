@@ -3,6 +3,11 @@
 # Validate and run without provider credentials:
 #   uv run ase validate-contract contracts/examples/time_profile_unified_demo.yaml
 #   uv run ase run --contract contracts/examples/time_profile_unified_demo.yaml --dry-run
+#
+#   uv run ase validate-contract .\contracts\examples\time_profile_unified_demo.yaml
+#   uv run ase run --contract .\contracts\examples\time_profile_unified_demo.yaml
+#   uv run ase monitor run --run-folder .\outputs\runs\time_profile_unified_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
+
 
 schema_version: 3
 
@@ -16,14 +21,33 @@ run:
   random_seed: 42
   max_concurrency: 2
 
+# Dry-run forces these harness components to mock, so validation and structural
+# verification do not need Azure credentials. A live run uses the referenced env vars.
+# llm:
+#  provider: mock
+#  model: deterministic-demo
 llm:
-  provider: mock
-  model: deterministic-demo
+  provider: azure-openai
+  deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+  max_tokens: 1024
+  temperature: 0.7
+  azure:
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+    api_key: "${AZURE_OPENAI_API_KEY}"
+    api_version: "${AZURE_OPENAI_API_VERSION}"
 
 target:
   enabled: true
-  mode: api
-  endpoint: ""
+  endpoint: "${CHATBOT_ENDPOINT:-}"
+  auth:
+    type: bearer
+    env_var: CHATBOT_API_TOKEN
+  timeout_seconds: 60.0
+  # Target chatbot LLM parameters — forwarded in the request payload.
+  # Override via env vars: CHATBOT_MODEL, CHATBOT_TEMPERATURE, CHATBOT_SOURCE_DOCUMENT_REFERENCE.
+  chatbot_model: "${CHATBOT_MODEL:-}"
+  chatbot_temperature: "${CHATBOT_TEMPERATURE:-}"
+  source_doc_ref: "${CHATBOT_SOURCE_DOCUMENT_REFERENCE:-}"
 
 time_window:
   start_day: "2026-08-03"
