@@ -9,15 +9,34 @@ from adaptive_synth_eval.evaluation.modes import get_mode
 from adaptive_synth_eval.unified_eval.config.contract import contract_to_dict
 
 
-EXAMPLES = Path(__file__).resolve().parents[2] / "contracts" / "examples"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = REPOSITORY_ROOT / "contracts" / "examples"
 SYNTH_EXAMPLE = EXAMPLES / "time_profile_synth_demo.yaml"
 UNIFIED_EXAMPLE = EXAMPLES / "time_profile_unified_demo.yaml"
 AGENT_SKILLS_EXAMPLE = EXAMPLES / "unified_agent_skills_time_profile_demo.yaml"
+VERIFICATION_GUIDE = REPOSITORY_ROOT / "docs" / "time_profile_verification.md"
 
 
 def _load_through_public_detection(path: Path):
     mode_name = detect_mode_from_file(str(path))
     return mode_name, get_mode(mode_name).load_contract(path)
+
+
+def test_example_command_paths_use_cross_shell_forward_slashes():
+    for path in (SYNTH_EXAMPLE, UNIFIED_EXAMPLE, AGENT_SKILLS_EXAMPLE):
+        text = path.read_text(encoding="utf-8")
+        assert ".\\" not in text
+        assert "contracts/examples/" in text
+
+
+def test_verification_guide_covers_powershell_and_posix_paths():
+    text = VERIFICATION_GUIDE.read_text(encoding="utf-8")
+
+    assert "```powershell" in text
+    assert "## Windows PowerShell" in text
+    assert "## macOS/Linux" in text
+    assert r"contracts\examples" not in text
+    assert "contracts/examples/unified_agent_skills_time_profile_demo.yaml" in text
 
 
 def test_synth_time_profile_example_loads_with_ordered_distinct_recipes():

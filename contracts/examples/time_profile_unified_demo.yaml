@@ -1,12 +1,10 @@
 # Minimal two-window unified profile with an observable toxicity phase.
 #
-# Validate and run without provider credentials:
+# Forward-slash paths work in Windows PowerShell, macOS, and Linux when run
+# from the repository root. Validate and run without provider credentials:
 #   uv run ase validate-contract contracts/examples/time_profile_unified_demo.yaml
 #   uv run ase run --contract contracts/examples/time_profile_unified_demo.yaml --dry-run
-#
-#   uv run ase validate-contract .\contracts\examples\time_profile_unified_demo.yaml
-#   uv run ase run --contract .\contracts\examples\time_profile_unified_demo.yaml
-#   uv run ase monitor run --run-folder .\outputs\runs\time_profile_unified_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
+#   uv run ase monitor run --run-folder outputs/runs/time_profile_unified_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
 
 
 schema_version: 3

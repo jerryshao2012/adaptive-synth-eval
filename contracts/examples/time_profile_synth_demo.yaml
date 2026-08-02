@@ -1,15 +1,10 @@
 # Minimal two-window synth profile.
 #
-# Validate and run without provider credentials:
+# Forward-slash paths work in Windows PowerShell, macOS, and Linux when run
+# from the repository root. Validate and dry-run without provider credentials:
 #   uv run ase validate-contract contracts/examples/time_profile_synth_demo.yaml
-#   env AZURE_OPENAI_ENDPOINT= AZURE_OPENAI_DEPLOYMENT= ANTHROPIC_API_KEY= \
-#     OPENAI_API_KEY= OLLAMA_BASE_URL= OLLAMA_API_BASE= \
-#     AWS_BEARER_TOKEN_BEDROCK= \
-#     uv run ase run --contract contracts/examples/time_profile_synth_demo.yaml --dry-run
-#
-#   uv run ase validate-contract .\contracts\examples\time_profile_synth_demo.yaml
-#   uv run ase run --contract .\contracts\examples\time_profile_synth_demo.yaml
-#   uv run ase monitor run --run-folder .\outputs\runs\time_profile_synth_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
+#   uv run ase run --contract contracts/examples/time_profile_synth_demo.yaml --dry-run
+#   uv run ase monitor run --run-folder outputs/runs/time_profile_synth_demo --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
 
 
 simulation_suite:

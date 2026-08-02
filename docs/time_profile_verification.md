@@ -4,6 +4,10 @@ This guide verifies the schema-v3 Agent Skills profile example from contract
 loading through monitoring and the dashboard. Run every command from the
 repository root unless a step explicitly changes directories.
 
+Repository-relative command paths use `/`. PowerShell, Windows Python,
+macOS, and Linux all accept this separator. Generated absolute paths use each
+shell's native path-join operation rather than concatenating `\\` or `/`.
+
 The contract models three windows on one synthetic workday:
 
 1. `morning_regular` — default behavior and context-building recipes.
@@ -16,6 +20,124 @@ three phases and executes them in the same command; it does not wait until
 09:00, noon, or 15:00, and it does not sleep for
 `compressed_runtime_minutes`. The complete structural check fits comfortably
 within one company-laptop session.
+
+## Windows PowerShell
+
+Run this section in PowerShell from the repository root. It covers contract
+validation, the complete one-day dry-run, artifact path checks, monitoring, and
+dashboard startup without relying on Bash, `jq`, `find`, or `/tmp`.
+
+Install dependencies and create `src/.env` only when it is missing:
+
+```powershell
+uv sync
+if (-not (Test-Path -LiteralPath "src/.env")) {
+    Copy-Item -LiteralPath "src/.env.example" -Destination "src/.env"
+}
+```
+
+Create the run paths with `Join-Path`. The contract path deliberately uses
+forward slashes because the same literal also works on macOS and Linux:
+
+```powershell
+$Contract = "contracts/examples/unified_agent_skills_time_profile_demo.yaml"
+$OutputDir = Join-Path -Path (Get-Location).Path -ChildPath "outputs"
+$env:ASE_TIME_PROFILE_OUTPUT_DIR = $OutputDir
+$RunId = "agent-skills-profile-{0}" -f (Get-Date -Format "yyyyMMdd-HHmmss")
+$RunsDir = Join-Path -Path $OutputDir -ChildPath "runs"
+$RunDir = Join-Path -Path $RunsDir -ChildPath $RunId
+```
+
+Validate and execute all three synthetic phases immediately:
+
+```powershell
+uv run ase validate-contract "$Contract"
+uv run ase run --contract "$Contract" --dry-run --run-id "$RunId"
+```
+
+Confirm the expected directory and artifacts:
+
+```powershell
+Write-Host "Run ID: $RunId"
+Write-Host "Run directory: $RunDir"
+Get-ChildItem -LiteralPath $RunDir -File | Sort-Object Name | Select-Object Name, FullName
+
+$RequiredArtifacts = @(
+    "contract.normalized.json",
+    "run_plan.json",
+    "run_state.json",
+    "run_summary.json",
+    "chat_history.jsonl",
+    "turns.jsonl",
+    "scores.jsonl"
+)
+foreach ($Name in $RequiredArtifacts) {
+    $ArtifactPath = Join-Path -Path $RunDir -ChildPath $Name
+    if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
+        throw "Missing artifact: $ArtifactPath"
+    }
+}
+```
+
+Check the ordered one-day plan and show the traffic allocation by phase:
+
+```powershell
+$PlanPath = Join-Path -Path $RunDir -ChildPath "run_plan.json"
+$Plan = @(Get-Content -LiteralPath $PlanPath -Raw | ConvertFrom-Json)
+if ($Plan.Count -ne 12) { throw "Expected 12 conversations; found $($Plan.Count)" }
+
+$ExpectedPeriods = @("morning_regular", "midday_busy", "afternoon_toxicity_drill")
+$ActualPeriods = @($Plan | Select-Object -ExpandProperty profile_period_id -Unique)
+if (($ActualPeriods -join "|") -ne ($ExpectedPeriods -join "|")) {
+    throw "Unexpected profile periods: $($ActualPeriods -join ', ')"
+}
+
+$Plan |
+    Group-Object profile_period_id |
+    Select-Object Name, Count |
+    Format-Table -AutoSize
+```
+
+Run monitoring and verify every score retains a simulation-period identifier:
+
+```powershell
+uv run ase monitor run --run-folder "$RunDir" --dry-run --sampling-strategy all --interval-minutes 60 --incomplete-run-action restart
+
+$ScoresPath = Join-Path -Path $RunDir -ChildPath "monitoring_scores.jsonl"
+$Scores = @(
+    Get-Content -LiteralPath $ScoresPath |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_ | ConvertFrom-Json }
+)
+if ($Scores.Count -eq 0) { throw "No monitoring scores found at $ScoresPath" }
+$MissingPeriod = @($Scores | Where-Object { -not $_.profile_period_id })
+if ($MissingPeriod.Count -gt 0) {
+    throw "$($MissingPeriod.Count) monitoring rows lack profile_period_id"
+}
+
+$Scores |
+    Group-Object profile_period_id |
+    Select-Object Name, Count |
+    Format-Table -AutoSize
+```
+
+In a second PowerShell terminal, start the dashboard:
+
+```powershell
+Set-Location -LiteralPath "ai-eval-dashboard"
+yarn install
+yarn dev
+```
+
+Open [http://localhost:3000/monitor](http://localhost:3000/monitor), select the
+value printed in `$RunId`, and confirm all three phase bands and comparison rows
+are present.
+
+## macOS/Linux
+
+The remaining detailed workflow uses Bash or zsh. It performs the same core
+run and monitoring checks plus deeper `jq` inspection and an optional isolated
+resume/fingerprint smoke test.
 
 ## 1. Prepare the repository
 

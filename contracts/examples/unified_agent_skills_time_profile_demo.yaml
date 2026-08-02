@@ -9,7 +9,8 @@
 # Clock labels are synthetic timestamps. Dry-run executes immediately and does not
 # wait for 09:00, 12:00, or 15:00, nor for compressed_runtime_minutes to elapse.
 #
-# Usage from the repository root:
+# Forward-slash paths work in Windows PowerShell, macOS, and Linux. Usage from
+# the repository root:
 #   uv run ase validate-contract contracts/examples/unified_agent_skills_time_profile_demo.yaml
 #   uv run ase run --contract contracts/examples/unified_agent_skills_time_profile_demo.yaml --dry-run
 
