@@ -32,6 +32,28 @@ uv run ase loop pause --profile <profile_id>
 uv run ase loop resume --profile <profile_id>
 uv run ase loop audit --profile <profile_id>
 
+# Monitoring (evaluate chat history artifacts)
+uv run ase monitor run --run-folder outputs/runs/<run_id> --dry-run
+uv run ase monitor run --run-folder outputs/runs/<run_id> --sample-size 500
+# --metric-version and --threshold-version have been removed.
+# Versioning is now automatic via SHA-256 fingerprints of the evaluation config.
+
+# Continuous monitoring (run on a schedule — cron, systemd timer, etc.)
+# Safe to repeat: only new chat rows since last run are evaluated.
+# When no new rows exist, exits instantly with zero LLM cost.
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sample-size 1000 \
+    --interval-minutes 30 \
+    --incomplete-run-action resume
+
+# Spot-check: evaluate only N randomly-sampled rows from the first window
+uv run ase monitor run \
+    --run-folder outputs/runs/<run_id> \
+    --sampling-strategy random \
+    --sample-size 100 \
+    --max-windows 1
+
 # Tests
 uv run pytest                          # All tests
 uv run pytest tests/unit/              # Unit tests only
@@ -81,6 +103,16 @@ Continuous evaluation at L0-L3 readiness levels:
 
 The loop subsystem (`loop/`) uses AI-driven discovery to find evaluation targets, a scheduler for recurring runs, a policy engine enforcing safety guardrails, a verifier checking outputs, and a persistent state store (`outputs/loops/`).
 
+### Monitoring (`monitoring/`)
+
+Post-hoc evaluation of chat history artifacts. The runner (`monitoring/runner.py`) reads `chat_history.jsonl` in sampling windows, scores each turn via LLM evaluation (10 metrics: 4 safety + 6 performance), and writes `monitoring_scores.jsonl`.
+
+- **Automatic versioning**: No manual version fields. Each per-metric YAML file is hashed into a **metric content fingerprint** (prompt template, thresholds, heuristic, scoring logic). The **composite evaluation fingerprint** combines all per-metric content fingerprints + model identity. Changing any metric's content or switching models produces a new composite fingerprint → triggers LLM re-evaluation.
+- **Three-tier fingerprints**: `metric_content_fingerprint` (per-metric: prompt + thresholds + heuristic) detects what changed. `evaluation_fingerprint` (composite of all metric content FPs + model identity) triggers LLM re-evaluation. `policy_fingerprint` (per-metric: thresholds only) triggers status recalculation — no LLM calls.
+- **Atomic writes**: `monitoring_scores.jsonl` is atomically replaced after each window (temp file + fsync + os.replace). Exactly one row per (conversation_id, turn_id).
+- **Config-driven**: Each of the 10 metrics has its own YAML file under `monitoring/metrics/` (checked-in source of truth). The `MetricRegistry` auto-discovers and validates them. A legacy monolithic `metrics.yaml` path is still supported via `--metrics-config`.
+- **Continuous monitoring**: The runner is designed for cron/scheduler-based recurring execution. Each invocation uses `--incomplete-run-action resume` to pick up only new rows appended to `chat_history.jsonl` since the last run. When no new rows exist, it exits immediately (zero LLM cost). The dashboard refreshes automatically. This is the pattern for 24/7 chat applications where evaluation keeps pace with live traffic.
+
 ### Contract Formats
 
 Two contract schemas exist side-by-side and share some parsed types (`Persona`, `Scenario`, `TargetChatbot`, `TimeWindow`):
@@ -101,6 +133,7 @@ Two contract schemas exist side-by-side and share some parsed types (`Persona`, 
 - Many tests define contracts as inline JSON strings written to temp files rather than loading from `contracts/examples/`.
 
 ### Environment Variables
+
 Configured via `src/.env` (copy from `src/.env.example`). Key variables include provider-specific API keys/endpoints, retry settings, proxy config, and base URLs for each LLM backend.
 
 ## graphify
